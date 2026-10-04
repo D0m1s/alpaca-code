@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="alpaca-dark" _name="alpaca dark" version="1.0">
+  <style name="text"         foreground="#c0caf5" background="#0d1017"/>
+  <style name="line-numbers" foreground="#3a4150" background="#0d1017"/>
+  <style name="current-line" background="#161b26"/>
+  <style name="selection"    background="#1b3560"/>
+  <style name="comment"      foreground="#565f89" italic="true"/>
+  <style name="keyword"      foreground="#7aa2f7"/>
+  <style name="string"       foreground="#9ece6a"/>
+  <style name="number"       foreground="#ff9e64"/>
+  <style name="boolean"      foreground="#ff9e64"/>
+  <style name="null-value"   foreground="#ff9e64"/>
+  <style name="escaped-char" foreground="#e0af68"/>
+  <style name="markup"       foreground="#e0af68"/>
+  <style name="heading"      foreground="#2ac3de"/>
+  <style name="symbol"       foreground="#2ac3de"/>
+  <style name="function"     foreground="#7aa2f7"/>
+  <style name="def:name"     foreground="#bb9af7"/>
+  <style name="error"        foreground="#ef4444"/>
+</style-scheme>
