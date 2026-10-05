@@ -111,19 +111,28 @@ class ChangesView(Gtk.Box):
         self.refresh(keep_selection=False)         # a new repo = fresh selection
 
     def refresh(self, keep_selection: bool = True) -> None:
-        """Rebuild from changes(). Fresh view selects all (spec §2); a refresh
-        INTERSECTS the surviving selection with the new file set (deviation 1) —
-        after a commit the committed paths vanish and the rest stay selected.
-        An active filter re-applies (focus/commit refresh cycles keep the view
-        the user is looking at)."""
+        """Sync entry (set_root, commit-done): the git calls run HERE; landing
+        is apply(). Fresh view selects all (spec §2); a refresh INTERSECTS the
+        surviving selection with the new file set (deviation 1) — after a commit
+        the committed paths vanish and the rest stay selected. An active filter
+        re-applies."""
         raw = gitstatus.changes(self.root)
-        rows = raw or []
-        self._ahead = gitstatus.ahead(self.root) if raw is not None else 0   # cached: no git per toggle
-        self._rows = rows
-        files = {r[2] for r in gitstatus.group_tree(rows) if r[0] == "f"}   # r[2] = rel (group_tree: kind,name,rel,letter,depth)
+        self.apply(raw, gitstatus.ahead(self.root) if raw is not None else 0,
+                   keep_selection)
+
+    def apply(self, raw: list | None, ahead: int = 0, keep_selection: bool = True) -> None:
+        """Landing pad for fresh git data — the sync refresh above, or the live
+        probe's worker thread via idle_add (filetree._git_landed). Rebuilds rows,
+        intersects the selection with the surviving file set, re-applies any
+        active filter. None (no repo / timeout) is a clean no-op."""
+        if raw is None:
+            return
+        self._ahead = ahead                      # cached: no git per toggle
+        self._rows = raw
+        files = {r[2] for r in gitstatus.group_tree(raw) if r[0] == "f"}   # r[2] = rel (group_tree: kind,name,rel,letter,depth)
         self._files = set(files)                 # BEFORE _fill: _sync_row needs it
         self._checked = (self._checked & files) if keep_selection else set(files)
-        self._fill(self._filtered(rows))
+        self._fill(self._filtered(raw))
 
     def filter(self, needle: str) -> None:
         """Search-route: re-render by name/rel substring over the remembered

@@ -7,6 +7,7 @@
 # Open state lives in _open (signal transitions are truthful; view row_expanded()
 # readback is not — deprecated+stale after mutations).
 import os
+import threading
 import alpaca_code.gi_env as ge
 ge.require("Gtk", ("4.0",))
 ge.require("Gdk", ("4.0",))
@@ -73,6 +74,14 @@ class FileBrowser(Gtk.Box):
         self._saved_tree: tuple[str, set[str], float] | None = None
         self._git_busy = False               # a commit/push flight owns the status row
         self._pulse_id = 0
+        self._probe_busy = False             # a live-probe git call is in flight
+        # Live git probe (2026-10-05 spec): every 2s the porcelain status runs in a
+        # worker thread and lands on the UI thread (`timeout_add`, never
+        # `timeout_add_seconds` — never fires on this build). Covers agent edits
+        # anywhere in the tree — dir monitors only see dirs we've opened. Skipped
+        # while a flight owns the row or a probe/commit is busy.
+        self.on_git_changed = lambda rows: None   # window → live diff-tab renewal
+        GLib.timeout_add(2000, self._git_tick)
         # ^ (root, open abs paths, scroll) — the real tree's sheet lives here while
         #   search results displace it; restored on clear, NOT persisted to disk
 
@@ -266,17 +275,15 @@ class FileBrowser(Gtk.Box):
             self.changes.filter(self.entry.get_text())  # entry text outranks a stale needle (tree-mode search wrote it)
 
     def refresh_git(self) -> None:
-        """Window-focus hook (window's notify::is-active): re-sync the statusbar
-        and, when the changes view is open, the changes list."""
+        """Window-focus hook (window's notify::is-active): re-sync everything git."""
         self._refresh_status()
-        if self._mode == "changes":
-            self.changes.refresh()
 
-    def _refresh_status(self) -> None:
+    def _paint_status(self, branch: str | None, dirty: int | None) -> None:
+        """Statusbar rendering only — git data comes in from callers (the sync
+        path below or the live probe's worker thread). The commit/push flight
+        owns the row while busy; `git status` runs OFF-THREAD in both paths."""
         if self._git_busy:
             return                           # commit/push flight owns the row (pulse re-syncs)
-        from . import gitstatus
-        branch = gitstatus.branch_of(self.root) if self.root else None
         is_git = branch is not None
         for w in (self.branch_icon, self.branch_label, self.dot, self.spin, self.git_label):
             w.set_visible(is_git)
@@ -288,9 +295,8 @@ class FileBrowser(Gtk.Box):
             return
         self.branch_label.set_text(branch)
         self.git_label.set_tooltip_text("")   # a past err's tooltip must not outlive the row's re-sync
-        # ponytail: git status runs on set_root/refresh only — not per file event
-        # (git can take seconds on big trees); status bar re-syncs on workspace switch
-        dirty = gitstatus.status(self.root)
+        # count = porcelain rows (untracked listed per-file, -z -uall) — same
+        # number the changes view shows; one git call feeds both.
         if dirty is None:
             self.git_label.set_text("")
             self.dot.set_visible(False)
@@ -302,6 +308,45 @@ class FileBrowser(Gtk.Box):
             self.git_label.set_text(f"{dirty} changed")
             self.dot.set_css_classes(["alpaca-status-dot", "warn"])
             self.dot.set_visible(True)
+
+    def _refresh_status(self) -> None:
+        """Sync path (set_root, focus hook, HEAD monitor, pulse): one git call,
+        paints via _paint_status and feeds the diff-tab hook + open changes view."""
+        from . import gitstatus
+        branch = gitstatus.branch_of(self.root) if self.root else None
+        raw = gitstatus.changes(self.root) if branch else None
+        self._paint_status(branch, len(raw) if raw is not None else None)
+        if raw is not None:
+            self.on_git_changed(raw)
+            if self._mode == "changes":
+                self.changes.apply(raw, gitstatus.ahead(self.root))
+
+    # ---- live git probe (2026-10-05 spec) --------------------------------------
+    def _git_tick(self) -> bool:
+        if self.root and not self._probe_busy and not self._git_busy and not self.changes._busy:
+            root = self.root                      # snapshot: a workspace switch mid-flight drops it
+            self._probe_busy = True
+            threading.Thread(target=self._git_probe, args=(root,),
+                             daemon=True, name="alpaca-git").start()
+        return True
+
+    def _git_probe(self, root: str) -> None:
+        from . import gitstatus
+        raw = gitstatus.changes(root)
+        ahead = gitstatus.ahead(root) if raw is not None else 0
+        GLib.idle_add(self._git_landed, root, raw, ahead)
+
+    def _git_landed(self, root: str, raw: list, ahead: int) -> bool:
+        self._probe_busy = False
+        if root != self.root or self._git_busy or self.changes._busy:
+            return False
+        from . import gitstatus
+        self._paint_status(gitstatus.branch_of(root), len(raw) if raw is not None else None)
+        if raw is not None:
+            self.on_git_changed(raw)
+            if self._mode == "changes":
+                self.changes.apply(raw, ahead)
+        return False
 
     def _row_vals(self, name: str, path: str, is_dir: bool) -> list:
         """Cairo badge/folder pixbuf when badge art is available, else the symbolic icon cell."""

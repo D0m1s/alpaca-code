@@ -927,6 +927,154 @@ def test_gitstatus_unmerged_letter_c():
         text, binary = gitstatus.diff_for(t, "c.py", is_untracked=(files["c.py"] == "U"))
         assert not binary and text.strip(), repr(text[:200])
 
+# --- live file changes (2026-10-05 spec): _fs_settled decision table --------------
+@register
+def test_editor_fs_settle_matrix():
+    """Debounced disk checks (real GtkSource buffers + fakeries): our-save echo,
+    clean external edit → seamless reload, dirty buffer → amber conflict dot and
+    untouched text, vanished clean file → italic tombstone note, clean Ctrl+S can
+    never resurrect the file, dirty tombstone keeps the text and save recreates."""
+    import tempfile
+    from types import SimpleNamespace
+    from alpaca_code import editor, main
+    import alpaca_code.gi_env as ge
+    ge.require("Gtk", ("4.0",))
+    ge.require("GtkSource", ("5",))
+    from gi.repository import Gtk, GtkSource
+
+    assert ".alpaca-dirty.conflict" in main.CSS and ".alpaca-tabname.alpaca-deleted" in main.CSS
+
+    class _Kid:
+        def __init__(self, classes=()):
+            self._classes = list(classes)
+            self.visible = None
+            self.dot_classes = None
+            self.added, self.removed = [], []
+            self._next = None
+        def get_css_classes(self):
+            return self._classes
+        def get_first_child(self):
+            return None
+        def get_next_sibling(self):
+            return self._next
+        def set_visible(self, v):
+            self.visible = v
+        def set_css_classes(self, c):
+            self.dot_classes = list(c)
+        def add_css_class(self, c):
+            self.added.append(c)
+        def remove_css_class(self, c):
+            self.removed.append(c)
+
+    class _Head:
+        def __init__(self, kids):
+            self.kids = kids
+        def get_first_child(self):
+            return self.kids[0]
+
+    class _FakeNB:
+        def __init__(self, pages):
+            self.pages = pages; self.cur = 0
+        def get_n_pages(self):
+            return len(self.pages)
+        def get_nth_page(self, i):
+            return self.pages[i] if 0 <= i < len(self.pages) else None
+        def get_current_page(self):
+            return self.cur
+        def get_tab_label(self, page):
+            return page.tab_head
+
+    def make_page(t, fname, content, *, fs=None):
+        fp = os.path.join(t, fname)
+        with open(fp, "w") as f:
+            f.write(content)
+        buf = GtkSource.Buffer(text=content)
+        buf.set_modified(False)
+        view = GtkSource.View()
+        scroll = {"v": 0.0, "u": 0.0}
+        sw = SimpleNamespace(get_vadjustment=lambda: SimpleNamespace(
+            get_value=(lambda: scroll["v"]), get_upper=(lambda: scroll["u"])))
+        dot, name = _Kid(), _Kid(classes=["alpaca-tabname"])
+        dot._next = name
+        page = SimpleNamespace(path=fp, buf=buf, view=view,
+                               sw=sw,
+                               diff_of=None, tab_head=_Head([dot, name]),
+                               _fs=fs, _conflict=False, _load_mtime=None)
+        return page, fp, dot, name
+
+    def fake_editor(page):
+        e = editor.Editor.__new__(editor.Editor)     # no widget construction in tests
+        e.root = os.path.dirname(page.path)
+        e.nb = _FakeNB([page])
+        e.on_state_changed = lambda: None
+        e._pending = {}
+        return e
+
+    with tempfile.TemporaryDirectory() as t:
+        page, fp, dot, name = make_page(t, "a.py", "v1\n")
+        e = fake_editor(page)
+
+        # our-own-open/save echo: same mtime → no work, no state churn
+        page._load_mtime = os.stat(fp).st_mtime_ns
+        assert editor.Editor._fs_settled(e, fp) is False
+        assert page.buf.props.text == "v1\n" and page._fs is None
+
+        # clean external edit → seamless reload, style carried, buffer clean
+        open(fp, "w").write("v2\n" * 30)
+        assert editor.Editor._fs_settled(e, fp) is False
+        assert page.buf.props.text.splitlines()[0] == "v2"
+        assert page._fs is None and page._conflict is False and page._load_mtime == os.stat(fp).st_mtime_ns
+        assert page.buf.get_modified() is False
+        assert page.view.get_buffer() is page.buf
+
+        # external edit on a DIRTY buffer → conflict: text untouched, amber dot
+        page.buf.set_modified(True)
+        open(fp, "w").write("v3\n")
+        assert editor.Editor._fs_settled(e, fp) is False
+        assert page.buf.props.text == "v2\n" * 30 and page._conflict is True
+        assert dot.dot_classes == ["alpaca-dirty", "conflict"]
+        assert dot.visible is True and page._load_mtime != os.stat(fp).st_mtime_ns
+
+        # Ctrl+S from the conflict: text wins, conflict clears, echo latched
+        editor.Editor._write_page(e, page)
+        assert open(fp).read() == "v2\n" * 30 and page._conflict is False
+        assert editor.Editor._fs_settled(e, fp) is False    # our save's echo → no reload
+        assert page._conflict is False
+
+        # vanished clean file → tombstone: muted note, italic tab, never resurrected
+        page.buf.set_modified(False)
+        os.remove(fp)
+        assert editor.Editor._fs_settled(e, fp) is False
+        assert page._fs == "deleted" and page.buf.props.text == editor.GONE_NOTE
+        assert "alpaca-deleted" in name.added
+        editor.Editor.save_active(e)                        # clean buffer + missing file
+        assert not os.path.exists(fp)                       # the note can't recreate the file
+
+        # file re-created → tombstone lifts: reload, italic removed
+        open(fp, "w").write("v4\n")
+        assert editor.Editor._fs_settled(e, fp) is False
+        assert page._fs is None and page.buf.props.text == "v4\n"
+        assert "alpaca-deleted" in name.removed
+
+        # vanished DIRTY file → text keeps living (Ctrl+S recreates)
+        page.buf.set_modified(True)
+        os.remove(fp)
+        assert editor.Editor._fs_settled(e, fp) is False
+        assert page._fs == "deleted" and page.buf.props.text == "v4\n"   # user text kept
+        editor.Editor._write_page(e, page)
+        assert open(fp).read() == "v4\n"                    # explicit save = file recreated
+
+        # unreadable disk content on a clean tab → frozen note, still save-proof
+        page.buf.set_modified(False)
+        page._fs = None
+        open(fp, "wb").write(b"\x00\x01\xff")
+        page._load_mtime = None
+        assert editor.Editor._fs_settled(e, fp) is False
+        assert page._fs == "binary" and page.buf.props.text == editor.BINARY_NOTE
+        editor.Editor.save_active(e)
+        with open(fp, "rb") as f:
+            assert f.read() == b"\x00\x01\xff"              # binary content untouched
+
 if __name__ == "__main__":
     sys.exit(main())
 

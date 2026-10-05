@@ -168,6 +168,11 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
                 border: none; border-radius: 4px; }
 .alpaca-close:hover { background: #1c2230; }
 .alpaca-dirty { color: #ef4444; font-size: 8px; }
+/* live-file spec (2026-10-05): the amber dot = local edits on a file ALSO changed
+   on disk (conflict: next save wins); the deleted-file tab goes italic, dimmed */
+.alpaca-dirty.conflict { color: #f2c94c; }
+tab .alpaca-tabname.alpaca-deleted, tab:checked .alpaca-tabname.alpaca-deleted {
+    font-style: italic; color: #5a6375; }
 /* --- side-by-side diff pages (spec §3) --- */
 .alpaca-diffsep { min-width: 1px; background: #1c2230; }
 .alpaca-diffchipm,.alpaca-diffchipa,.alpaca-diffchipu,.alpaca-diffchipd,.alpaca-diffchipr {

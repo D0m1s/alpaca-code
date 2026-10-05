@@ -134,6 +134,9 @@ class Window:
         self.tree.changes.before_commit = lambda rels: self.editor.save_open(
             [os.path.join(self.root, r) for r in rels])   # flush dirty buffers for exactly the checked files
         self.tree.changes.on_status = self.tree.show_git_status   # commit/push flight → status row (ok pulse re-syncs it)
+        # Live git data (2026-10-05 spec): the browser's probe/refresh lands rows
+        # here; the window renews open diff tabs (the editor stays git-free).
+        self.tree.on_git_changed = self._on_git_changed
         self.hpane = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL, wide_handle=True)
         self.hpane.set_start_child(self.vpane)
         self.hpane.set_end_child(self.tree)
@@ -216,6 +219,22 @@ class Window:
             self.editor._error(f"No diff: {rel}", "git produced no diff hunks for this path.")
             return
         self.editor.open_diff(rel, sides, letter)
+
+    def _on_git_changed(self, rows: list) -> None:
+        """Fresh git data (live probe / focus refresh) → refetch sides for every
+        open diff tab still present in the change set; resolved tabs stay as-is."""
+        from . import gitstatus
+        letters = dict(rows)
+        for rel, letter in self.editor.diff_pages():
+            fresh = letters.get(rel)
+            if fresh is None:
+                continue
+            text, binary = gitstatus.diff_for(self.root, rel, is_untracked=(fresh == "U"))
+            if binary:
+                continue
+            sides = gitstatus.build_sides(gitstatus.parse_unified(text))
+            if sides:
+                self.editor.refresh_diff(rel, sides, fresh)
 
     # --- run wiring ---
     def _on_run(self, btn) -> None:
