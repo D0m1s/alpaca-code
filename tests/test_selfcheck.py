@@ -865,6 +865,7 @@ def test_badges_letter_pixbuf():
     assert p is not None and p.get_width() == 16 and p.get_height() == 16
     assert badges.letter_pixbuf("M", "#f2c94c") is p     # cached, same spec
     assert badges.letter_pixbuf("Q", "#ef4444") is not None
+    assert badges.letter_pixbuf("M", "#f2c94c") != badges.letter_pixbuf("M", "#ef4444")  # tile bg differs
 
 def main():
     failed = 0

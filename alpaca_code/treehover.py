@@ -21,10 +21,17 @@ class HoverTree(Gtk.TreeView):
         super().__init__(**kw)
         self._hover_xy = (-1.0, -1.0)   # last pointer pos in view coords; y<0 = outside
         self._hover_row = None          # Gtk.TreeRowReference | None
-        motion = Gtk.EventControllerMotion()
+        self._press_xy = (-1.0, -1.0)   # last button-press pos: consumers route
+        motion = Gtk.EventControllerMotion()   # row-activated vs toggle hits by x
         motion.connect("motion", self._on_motion)
         motion.connect("leave", self._on_leave)
         self.add_controller(motion)
+        # capture-phase press probe: runs before the treeview's own handling, so
+        # by activation it knows exactly where the click landed
+        press = Gtk.GestureClick()
+        press.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        press.connect("pressed", self._on_pressed)
+        self.add_controller(press)
         # defer past the treeview's own scroll sync (it connects after this one,
         # so a synchronous refresh here would read pre-scroll geometry). The
         # hook attaches to whatever adjustment is live at the moment — the tree's
@@ -41,6 +48,9 @@ class HoverTree(Gtk.TreeView):
         self._scroll_adj = adj
         adj.connect("value-changed",
                     lambda a: GLib.idle_add(self._refresh_hover))
+
+    def _on_pressed(self, ctrl, n_press: int, x: float, y: float) -> None:
+        self._press_xy = (x, y)
 
     def _on_motion(self, ctrl, x, y):
         self._hover_xy = (x, y)

@@ -107,13 +107,21 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
 /* workspace/changes mode buttons (spec §1): text-only section-label type —
    no frame fill; hover brightens, the selected mode's `alpaca-on` stays
    bright. min-height/padding sweep keeps Breeze's 32px button floor off a
-   13px-ink label (app css is USER priority — wins). */
+   13px-ink label (app css is USER priority — wins).
+   Ref's blue underline: every tab reserves a static 2px transparent
+   border-bottom (toggling the class moves zero geometry), the active one
+   paints it #2f80ed; the strip-wide 1px hairline is the tabs box's own
+   border-bottom, so the underline sits flush on it. Button min-height
+   grows by the reserved 2px: CSS min-height is the border box — the ink
+   room above must not shrink with the class toggle. */
+.alpaca-modetabs { padding: 0 12px; border-bottom: 1px solid #1c2230; }
 .alpaca-tabbtn { color: #8a93a6; font-size: 11px; font-weight: 500;
-                 letter-spacing: 1px; min-height: 16px; padding: 0;
-                 background: transparent; border: none; box-shadow: none;
-                 outline: none; }
+                 letter-spacing: 1px; min-height: 18px; padding: 0;
+                 background: transparent; border: none;
+                 border-bottom: 2px solid transparent; border-radius: 0;
+                 box-shadow: none; outline: none; }
 .alpaca-tabbtn:hover { color: #e6e8ee; }
-.alpaca-tabbtn.alpaca-on { color: #e6e8ee; }
+.alpaca-tabbtn.alpaca-on { color: #e6e8ee; border-bottom-color: #2f80ed; }
 /* backdrop: the tab color is inherited from the button — Breeze's direct
    label:backdrop rule (#fcfcfc) beat it at any provider priority, brightening
    BOTH tabs in an unfocused window (read as "both selected"). Restate per

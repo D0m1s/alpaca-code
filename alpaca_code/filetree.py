@@ -107,8 +107,12 @@ class FileBrowser(Gtk.Box):
 
         # WORKSPACE / CHANGES mode tabs (spec §1): text-only section-label type.
         # has_frame(False) + the transparent .alpaca-tabbtn rule keep them bare
-        # text; _set_mode moves the `alpaca-on` class as the selection.
-        btns = Gtk.Box(spacing=10, margin_start=12, margin_top=6, margin_bottom=2)
+        # text; _set_mode moves the `alpaca-on` class as the selection. Full
+        # width: the ref's hairline under this strip is the box's own
+        # border-bottom — margins sit OUTSIDE the border box (measured
+        # breadcrumb gotcha), so the inset is padding and margin_top only.
+        btns = Gtk.Box(spacing=10, margin_top=6, hexpand=True)
+        btns.set_css_classes(["alpaca-modetabs"])
         self.ws_btn = Gtk.Button(label="WORKSPACE")
         self.ch_btn = Gtk.Button(label="CHANGES")
         for b in (self.ws_btn, self.ch_btn):
@@ -349,7 +353,8 @@ class FileBrowser(Gtk.Box):
         return False
 
     def _row_vals(self, name: str, path: str, is_dir: bool) -> list:
-        """Cairo badge/folder pixbuf when badge art is available, else the symbolic icon cell."""
+        """Cairo badge/folder pixbuf when badge art is available, else the symbolic
+        icon cell."""
         pix = badges.pixbuf_for(name, is_dir)
         chev = badges.chevron_pixbuf(False) if is_dir else badges.blank_pixbuf()
         return [name, path, is_dir, icon_of(name, is_dir),
@@ -433,9 +438,7 @@ class FileBrowser(Gtk.Box):
         self._monitored = set()
         for rel in scan_project(self.root, text):
             p = os.path.join(self.root, rel)
-            pix = badges.pixbuf_for(rel, False)
-            self.store.append(None, [rel, p, False, icon_of(rel, False), badges.blank_pixbuf(),
-                                     pix, pix is not None, pix is None])
+            self.store.append(None, self._row_vals(rel, p, False))
 
     # ---- load children + monitors ---------------------------------------------
     def _load_children(self, parent_iter, d: str) -> None:

@@ -39,48 +39,49 @@ class ChangesView(Gtk.Box):
         self.store = Gtk.TreeStore(str, str, str, str,            # name, rel, kind, letter
                                    GdkPixbuf.Pixbuf, GdkPixbuf.Pixbuf, GdkPixbuf.Pixbuf,  # chev, badge, chip
                                    bool, bool, bool, bool, bool)          # checked, inconsist, chev, letter, toggle
+        # (letters bind the VALUE: blank pixbuf when absent — slots must not free.)
         self.view = HoverTree(model=self.store, headers_visible=False)
         self.view.set_activate_on_single_click(True)
         self.view.set_property("show-expanders", False)
         self.view.set_level_indentation(16)
         self.view.set_tooltip_column(1)
 
-        # cell props at insert-time; text cell packed LAST with expand=True so
-        # chevron/badge stay pinned left (filetree measured packing rule)
+        # ONE column: [chev|checkbox|letter|badge+name] — all visual cells pack
+        # into the tree column so level indentation shifts the whole strip
+        # together (probe_gtvc: only col-0 cell areas indent); store cols
+        # untouched so every toggle/sync lens above keeps its index.
         cell_name = Gtk.CellRendererText(); cell_name.set_property("ypad", 2)
         cell_name.set_property("ellipsize", Pango.EllipsizeMode.MIDDLE)
-        chev = Gtk.CellRendererPixbuf(); chev.set_property("ypad", 2)
+        chev = Gtk.CellRendererPixbuf();  chev.set_property("ypad", 2)
+        chev.set_property("xpad", 2)             # 12px art + 2px pad = 16: the toggle slot starts after it
         bad = Gtk.CellRendererPixbuf();  bad.set_property("ypad", 2)
         let = Gtk.CellRendererPixbuf();  let.set_property("ypad", 2)
-        tog = Gtk.CellRendererToggle(); tog.set_property("activatable", True)
-        col_main = Gtk.TreeViewColumn()          # kwargs form raises on this build
-        col_main.pack_start(chev, False); col_main.add_attribute(chev, "pixbuf", 4)
-        col_main.add_attribute(chev, "visible", 9)
-        col_main.pack_start(bad, False); col_main.add_attribute(bad, "pixbuf", 5)
-        col_main.pack_start(cell_name, True)
-        col_main.add_attribute(cell_name, "text", 0)
-        col_main.set_expand(True)   # spec §29: name column absorbs the spare width —
+        tog = Gtk.CellRendererToggle(); tog.set_property("activatable", False)
+        col = Gtk.TreeViewColumn()               # kwargs form raises on this build
+        col.pack_start(chev, False)
+        col.add_attribute(chev, "pixbuf", 4)
+        col.pack_start(tog, False)
+        col.add_attribute(tog, "active", 7)
+        col.add_attribute(tog, "inconsistent", 8)
+        col.add_attribute(tog, "visible", 11)
+        col.pack_start(let, False)
+        col.add_attribute(let, "pixbuf", 6)
+        col.pack_start(bad, False)
+        col.add_attribute(bad, "pixbuf", 5)
+        col.pack_start(cell_name, True)
+        col.add_attribute(cell_name, "text", 0)
+        col.set_expand(True)   # spec §29: name column absorbs the spare width —
         # an ellipsized cell's natural is its MINIMUM (col0 negotiation measured
         # 54px + the toggle column swallowing ~346px of slack), so without this
-        # the letter chip rides mid-panel next to 4-glyph names with ~110px of
-        # dead space right of the checkbox
-        col_let = Gtk.TreeViewColumn()
-        col_let.pack_start(let, False); col_let.add_attribute(let, "pixbuf", 6)
-        col_let.add_attribute(let, "visible", 10)
-        col_tog = Gtk.TreeViewColumn()
-        col_tog.pack_start(tog, False)
-        col_tog.add_attribute(tog, "active", 7)
-        col_tog.add_attribute(tog, "inconsistent", 8)
-        col_tog.add_attribute(tog, "visible", 11)
-        self.view.append_column(col_main)
-        self.view.append_column(col_let)
-        self.view.append_column(col_tog)
-        self._toggle_col = col_tog
+        # letter chips could ride mid-panel next to 4-glyph names
+        self._col = col
+        self._tog = tog
+        self._tog_w = None                       # toggle slot width, measured lazily
+        self.view.append_column(col)
         self.view.set_css_classes(["alpaca-tree"])
         self.view.connect("row-expanded", self._on_expand_toggle, True)
         self.view.connect("row-collapsed", self._on_expand_toggle, False)
-        self.view.connect("row-activated", self._on_activated)
-        tog.connect("toggled", self._on_toggled)
+        self.view.connect("row-activated", self._on_activated)   # toggle clicks route here too
         for sig in ("row-inserted", "row-deleted"):   # keep the band on the row under a stationary pointer
             self.store.connect(sig, lambda *a: self.view._refresh_hover())
 
@@ -155,17 +156,19 @@ class ChangesView(Gtk.Box):
         self._visible = {r[2] for r in gitstatus.group_tree(rows) if r[0] == "f"}
         if not rows:
             self.store.append(None, ["No changes", "", "e", "", badges.blank_pixbuf(),
-                                     badges.blank_pixbuf(), None, False, False, False, False, False])
+                                     badges.blank_pixbuf(), badges.blank_pixbuf(), False, False,
+                                     False, False, False])
             self._sync()
             return
         self.store.append(None, ["Select all", "", "s", "", badges.blank_pixbuf(),
-                                 badges.blank_pixbuf(), None, False, False, False, False, True])
+                                 badges.blank_pixbuf(), badges.blank_pixbuf(), False, False,
+                                 False, False, True])
         iters: dict[str, object] = {}
         for kind, name, rel, letter, _d in gitstatus.group_tree(rows):
             is_dir = kind == "d"
             badge = badges.folder_pixbuf() if is_dir else badges.pixbuf_for(name)
             lpix = (badges.letter_pixbuf(letter, LETTER_COLOR.get(letter, LETTER_DEFAULT))
-                    if letter else None)
+                    if letter else badges.blank_pixbuf())
             parent = iters.get(rel.rsplit("/", 1)[0]) if "/" in rel else None
             it = self.store.append(parent, [
                 name, rel, kind, letter,
@@ -250,7 +253,7 @@ class ChangesView(Gtk.Box):
         rel = self.store[it][1]
         if rel:
             (self._closed.discard if expanded else self._closed.add)(rel)
-            self.store[it][4] = badges.chevron_pixbuf(expanded)
+            self.store[it][4] = badges.chevron_pixbuf(expanded)   # dir chevron state
             if expanded:                         # hidden dirs don't expand (expand_row is
                 cin = self.store.iter_children(it)   # no-op under a collapsed ancestor) — catch them up
                 while cin is not None:
@@ -260,8 +263,9 @@ class ChangesView(Gtk.Box):
 
     # ---- activation (spec §2: file click opens the diff) ------------------------
     def _on_activated(self, view, tpath, col) -> None:
-        if col is self._toggle_col:
-            return                                   # checkbox clicks never open a diff (Review Focus #1)
+        if self._toggle_hit(tpath):              # checkbox clicks toggle only (Review Focus #1)
+            self._on_toggled(self._tog, tpath.to_string())
+            return
         row = self.store[tpath]
         if row[2] == "d" and row[1]:
             if row[1] in self._closed:
@@ -270,6 +274,23 @@ class ChangesView(Gtk.Box):
                 view.collapse_row(tpath)
         elif row[2] == "f":
             self.on_open(row[1], row[3])         # (rel, letter) — chip needs the letter
+
+    def _toggle_hit(self, tpath) -> bool:
+        """Press inside the toggle's own slot? With one merged column, the
+        checkbox is found by press geometry: [chevron slot end, + toggle nat)."""
+        px, _py = self.view._press_xy
+        if px < 0:
+            return False
+        if self._tog_w is None:                  # measured once (24 with xpad 3)
+            try:
+                self._tog_w = self._tog.get_preferred_width(self.view)[1]
+            except Exception:
+                self._tog_w = 24
+        ca = self.view.get_cell_area(tpath, self._col)
+        if ca is None:
+            return False
+        x0 = ca.x + 16                           # chevron slot: 12px art + 2px pad (measured)
+        return x0 <= px < x0 + self._tog_w
 
     # ---- commit+push (spec §4: workers are daemon threads; GTK via idle_add) ----
     def commit_clicked(self) -> None:
@@ -302,6 +323,7 @@ class ChangesView(Gtk.Box):
     def _done(self, cok, ctext, pok, ptext) -> bool:
         self._set_busy(False)
         if cok:
+            self.msg.set_text("")        # user ruling: the message dies with a landed commit
             self.refresh()               # keep_selection=True: committed paths vanish, rest kept
         if not cok:
             self.on_status("err", ctext)

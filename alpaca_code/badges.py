@@ -81,9 +81,16 @@ def blank_pixbuf() -> GdkPixbuf.Pixbuf | None:
     return pix
 
 def letter_pixbuf(letter: str, hexcol: str) -> GdkPixbuf.Pixbuf | None:
-    """Status-letter chip for gitview's tree cells (bare colored glyph, no chip
-    background) — same _render (label, color, None) shape as EXT_BADGE."""
-    return _render((letter, hexcol, None))
+    """Status-letter tile for gitview's tree cells (spec: indicators on the
+    left, ref-chip look): the colored glyph on a tile of its own hue washed
+    ~12% toward the card background — same _render chip slot as EXT_BADGE."""
+    return _render((letter, hexcol, _tile_bg(hexcol)))
+
+_CARD_BG = "#0d1017"     # .alpaca-card fill (main.py) — tiles must read ON it
+
+def _tile_bg(hexcol: str) -> str:
+    f, b = _rgb(hexcol), _rgb(_CARD_BG)
+    return "#%02x%02x%02x" % tuple(round((b[i] * 0.88 + f[i] * 0.12) * 255) for i in range(3))
 
 _PCS: dict[tuple, GdkPixbuf.Pixbuf | None] = {}
 
