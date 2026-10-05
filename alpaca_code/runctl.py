@@ -3,7 +3,7 @@ import glob, json, os
 
 # Claude's ambient session markers, exported by any claude session to its children.
 # When the app itself was launched from inside a claude session, pane children would
-# inherit them: the Agent Console's claude then sees the nested marker and disables
+# inherit them: the Agent pane's claude then sees the nested marker and disables
 # transcript saving (unresumable sessions), besides leaking stale ids/sockets.
 # Pane children are top-level, not nested — claude there runs like a fresh invocation.
 _CLAUDE_SESSION_MARKERS = (

@@ -222,18 +222,20 @@ tab:checked .alpaca-tabname { color: #e6e8ee; }
    Breeze's tab-hover today — this restores a hover under USER priority. */
 notebook > header > tabs > tab:hover { background: @alpaca-hover; }
 
-/* --- pane notebook ("Agent Console"): 28px pill fills the 28px header flush;
-     uniform 6px pill insets on the head box (label-side padding left the icon
-     flush with the pill edge — measured) --- */
+/* --- pane notebook ("Agent"): 28px pill fills the 28px header flush;
+     uniform 12px pill insets on the head box (label-side padding left the icon
+     flush with the pill edge — measured; 2026-10-05 user ruling: pills get
+     WIDER, not gapped — the inset is the text↔pill-side room) --- */
 notebook.alpaca-panes > header { padding: 0; min-height: 28px; }
-/* margin: 0 shadows Breeze's :checked -3px state margins (see editor rule) */
+/* margin: 0 shadows Breeze's :checked -3px state margins (see editor rule);
+   pills touch here too, matching the editor strip */
 notebook.alpaca-panes > header > tabs > tab { min-height: 26px; margin: 0;
                                               border-radius: 4px 4px 0 0; }
 notebook.alpaca-panes > header > tabs > tab:checked { min-height: 28px; }
-.alpaca-panetab { padding: 0 6px; }
-/* same ink-centering pad as .alpaca-tabname — replaces the old symmetric 2px 0
-   (which grew the box without moving the ink, measured) */
-.alpaca-panetabname { font-size: 13px; font-weight: 500; color: #8a93a6; padding: 0 0 3px 0; }
+.alpaca-panetab { padding: 0 12px; }
+/* ink-centering pad (glyph ink hangs low inside the line box); 2px here (editor
+   keeps 3px) drops the pane pill's ink the extra ~1px the user read as centered */
+.alpaca-panetabname { font-size: 13px; font-weight: 500; color: #8a93a6; padding: 0 0 2px 0; }
 tab:checked .alpaca-panetabname { color: #e6e8ee; }
 """
 

@@ -1,4 +1,4 @@
-# Bottom notebook: Agent Console (raw claude TUI), Output (run cmd), Terminal ($SHELL).
+# Bottom notebook: Agent (raw claude TUI), Terminal ($SHELL), Output (run cmd).
 # VTE owns the pty: spawn via spawn_async; children are session leaders → killpg terminates trees.
 import os, signal, time
 import alpaca_code.gi_env as ge
@@ -88,20 +88,27 @@ class Panes(Gtk.Box):
         # scrollable: same min-width ruling as the editor notebook
         self.nb = Gtk.Notebook(vexpand=True, scrollable=True)
         self.nb.add_css_class("alpaca-panes")   # pane strip geometry differs from the editor's (40px pill)
-        self.nb.append_page(Gtk.ScrolledWindow(child=self.agent), self._pane_tab("Agent Console", badges.icon("bot.svg")))
-        self.nb.append_page(Gtk.ScrolledWindow(child=self.out), self._pane_tab("Output", badges.icon("terminal.svg")))
+        # page order is load-bearing: 0=agent, 1=term, 2=out (_ensure_current, launch_run)
+        self.nb.append_page(Gtk.ScrolledWindow(child=self.agent), self._pane_tab("Agent", badges.icon("bot.svg")))
         self.nb.append_page(Gtk.ScrolledWindow(child=self.term), self._pane_tab("Terminal", badges.icon("prompt.svg")))
+        self.nb.append_page(Gtk.ScrolledWindow(child=self.out), self._pane_tab("Output", badges.icon("terminal.svg")))
         self.nb.connect("switch-page", self._on_switch)
         self.append(self.nb)
 
     @staticmethod
     def _pane_tab(title: str, ipy) -> Gtk.Box:
-        # `alpaca-panetab` carries the pill's 6px side insets — NOT the label:
+        # `alpaca-panetab` carries the pill's 12px side insets — NOT the label:
         # label-side padding left the leading icon flush with the pill edge (measured).
+        # spacing 6: tight icon-to-text (ink gap ≈7 measured); the 12px edge pads
+        # give the pill its breathing room (user ruling 2026-10-05: wide pill,
+        # tight icon-text pair)
         head = Gtk.Box(spacing=6, css_classes=["alpaca-panetab"])
         head.set_valign(Gtk.Align.CENTER)
         if ipy is not None:
-            head.append(Gtk.Image.new_from_paintable(ipy))
+            # default FILL drops the icon to the row top when the label is taller
+            img = Gtk.Image.new_from_paintable(ipy)
+            img.set_valign(Gtk.Align.CENTER)
+            head.append(img)
         head.append(Gtk.Label(label=title, css_classes=["alpaca-panetabname"]))
         return head
 
@@ -144,7 +151,7 @@ class Panes(Gtk.Box):
             self._spawned.add("agent")
             self._respawns.pop("agent", None)   # deliberate re-entry re-arms the exit budget
             self._spawn_pane("agent")
-        elif i == 2 and "term" not in self._spawned:
+        elif i == 1 and "term" not in self._spawned:
             self._spawned.add("term")
             self._respawns.pop("term", None)
             self._spawn_pane("term")
@@ -175,7 +182,7 @@ class Panes(Gtk.Box):
             self._respawns[key] = 0
         if self._respawns.get(key, 0) >= 3:
             self._spawned.discard(key)          # returning to the tab offers a fresh attempt
-            self._set_status(f"{'Agent Console' if key == 'agent' else 'Terminal'} exited", "err")
+            self._set_status(f"{'Agent' if key == 'agent' else 'Terminal'} exited", "err")
             return
         self._respawns[key] = self._respawns.get(key, 0) + 1
         self._spawn_pane(key)
@@ -189,7 +196,7 @@ class Panes(Gtk.Box):
             return False
         self._run_starting = True
         self._run_stop_pending = False
-        self.nb.set_current_page(1)
+        self.nb.set_current_page(2)   # Output is page 2 now
         self.out.reset(True, True)
         def landed(t, pid, error):
             self._run_starting = False

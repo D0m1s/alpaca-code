@@ -181,8 +181,9 @@ def test_main_css_palette_tokens():
                    "#1b3560",         # selected tree row
                    "#2b3448",         # hairline borders
                    "border-radius: 4px",   # cards match the WM window radius (~4px measured)
-                   ".alpaca-panetab { padding: 0 6px",   # pane-tab pill: uniform insets (icon
-                                          # flush with pill edge bug, measured 0 vs 6)
+                   ".alpaca-panetab { padding: 0 12px",   # pane-tab pill: uniform insets (icon
+                                          # flush with pill edge bug, measured 0 vs 6; widened
+                                          # to 12px 2026-10-05 — text↔pill-side room)
                    "min-height: 28px"):    # run pill ~28px
         assert needle in css, needle
 
@@ -351,7 +352,7 @@ def test_panels_env_and_kill():
     finally:
         os.environ["PATH"] = saved
 
-    # claude nesting markers must never matter in pane children (Agent Console claude
+    # claude nesting markers must never matter in pane children (Agent claude
     # turns off transcript saving over an inherited CLAUDE_CODE_CHILD_SESSION).
     # VTE spawn_async MERGES envv onto the child's inherited environ, so omission in
     # envv does NOT scrub the child — override to EMPTY (claude's check is truthiness).
@@ -440,7 +441,7 @@ def test_run_pid_landing_and_races():
         # launch: spawns in out's cwd, switches to Output tab, marks "starting" immediately
         f, rec, cap = build()
         assert f.launch_run(["npm", "run", "dev"], "npm run dev") is True
-        assert cap.get("page") == 1 and cap.get("reset") is True
+        assert cap.get("page") == 2 and cap.get("reset") is True   # Output = page 2
         assert landed["cwd"] == "/tmp/x"
         assert f.has_running_run() is True          # guard covers the starting window
         assert f.launch_run(["x"], "x") is False    # double-launch refused
@@ -509,7 +510,7 @@ def test_pane_respawn_capped():
     assert resp == ["agent"] * 3, resp
     f._pane_child_exited(None, 0, "agent")
     assert resp == ["agent"] * 3, resp                       # 4th death: no revive
-    assert status and status[-1] == ("Agent Console exited", "err"), status
+    assert status and status[-1] == ("Agent exited", "err"), status
 
     # a long-lived cycle re-arms the budget (lived ≥60s)
     f2, resp2, _ = fake("term", {"term": 3}, 120)

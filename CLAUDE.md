@@ -1,8 +1,8 @@
 # CLAUDE.md — alpaca-code
 
 GTK4 desktop app (PyGObject, Python 3.14) wrapping the raw `claude` CLI: tabbed
-GtkSourceView editor + file browser + three VTE panes (Agent Console = raw claude
-TUI, Output = npm/dotnet run, Terminal = `$SHELL`), Run/Stop buttons, File menu.
+GtkSourceView editor + file browser + three VTE panes (Agent = raw claude
+TUI, Terminal = `$SHELL`, Output = npm/dotnet run), Run/Stop buttons, File menu.
 
 ## Run / test
 
@@ -213,7 +213,7 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`
   `display:none` selectors (`arrow`, `icon.down`, `button > box > icon`) don't match it
   either — fix = walk toggle → child box → css class `down`, `set_visible(False)`
   (stable across set_popover/set_label). Icon-mode buttons hide the arrow themselves.
-- Uniform pill insets belong on the tab's head Box (`.alpaca-panetab { padding: 0 9px }`),
+- Uniform pill insets belong on the tab's head Box (`.alpaca-panetab { padding: 0 12px }`,
   never on the label: label-side padding leaves the leading icon flush with the pill
   edge (0px) while the text keeps ~9px — the "icon cramped, text floating" look.
 - A raised box around a tab's ✕ in a screenshot is just `.alpaca-close:hover` — check
