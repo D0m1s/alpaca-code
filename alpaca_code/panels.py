@@ -2,12 +2,37 @@
 # VTE owns the pty: spawn via spawn_async; children are session leaders → killpg terminates trees.
 import os, signal, time
 import alpaca_code.gi_env as ge
+ge.require("Gdk", ("4.0",))
 ge.require("Gtk", ("4.0",))
 ge.require("Vte", ("4", "4.0", "3.91"))   # ledger ruling: this box's vte4 ships Vte-3.91
-from gi.repository import GLib, Gtk, Vte
+ge.require("Pango", ("1.0",))
+from gi.repository import Gdk, GLib, Gtk, Pango, Vte
+
+from . import badges
+
+# Mockup (Agentic App – Dark IDE) VTE colors: card-bg terminals, ANSI slots mapped to
+# the same hues as the editor scheme so claude/npm output reads like highlighted code.
+VTE_FG, VTE_BG = "#e6e8ee", "#0d1017"
+_ANSI = ["#3a4152", "#ef4444", "#22c55e", "#f2c94c", "#5aa9f8", "#c3a6f7", "#9cdcfe", "#e6e8ee",
+         "#5a6375", "#f16a6a", "#4ee08a", "#f6d97e", "#6db5ff", "#cf97f4", "#aee0ff", "#f7f9fc"]
+
+def vte_palette() -> tuple[str, str, list[str]]:
+    """(foreground, background, 16 ANSI slots) as hex strings."""
+    return (VTE_FG, VTE_BG, list(_ANSI))
+
+# Claude's ambient session markers, exported by any claude session to its children.
+# When the app itself was launched from inside a claude session, get_env() would hand
+# these to pane children: the Agent Console's claude then sees the nested marker and
+# disables transcript saving (unresumable sessions), besides leaking stale ids/sockets.
+# Pane children are top-level, not nested — claude there runs like a fresh invocation.
+_CLAUDE_SESSION_MARKERS = (
+    "CLAUDECODE", "CLAUDE_PID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SSE_PORT",
+)
 
 def get_env() -> list[str]:
-    env = dict(os.environ)
+    env = {k: v for k, v in os.environ.items() if k not in _CLAUDE_SESSION_MARKERS}
     p = os.path.expanduser("~/.local/bin")
     if os.path.isdir(p) and p not in env.get("PATH", "").split(os.pathsep):
         env["PATH"] = env.get("PATH", "") + os.pathsep + p
@@ -40,6 +65,8 @@ def spawn(term: Vte.Terminal, cwd: str, argv: list[str], on_ready=None) -> None:
 class Panes(Gtk.Box):
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.set_css_classes(["alpaca-card"])
+        self.set_overflow(Gtk.Overflow.HIDDEN)   # clip children to the card's rounded corners
         self.root = None
         self.on_status = lambda text, cls: None
         self._pids: dict[str, int | None] = {"output": None}
@@ -50,39 +77,48 @@ class Panes(Gtk.Box):
         self._kills_pending: dict[str, int] = {}
         self._respawns: dict[str, int] = {}
 
-        strip = Gtk.Box(spacing=8, margin_start=12, margin_end=12,
-                        margin_top=8, margin_bottom=8)
-        strip.add_css_class("alpaca-status-row")
-        self.dot = Gtk.Box(css_classes=["alpaca-status-dot"])
-        self.status_label = Gtk.Label(label="Ready")
-        self.status_label.add_css_class("alpaca-muted")
-        self.trash = Gtk.Button(icon_name="edit-clear-all-symbolic")
-        self.trash.add_css_class("alpaca-close")
-        self.trash.connect("clicked", self._clear_active)
-        strip.append(self.dot); strip.append(self.status_label)
-        strip.append(Gtk.Box(hexpand=True))       # spacer
-        strip.append(self.trash)
-        self.append(strip)
-
         self.agent = Vte.Terminal(); self.out = Vte.Terminal(); self.term = Vte.Terminal()
+        fg, bg = Gdk.RGBA(), Gdk.RGBA()
+        fg.parse(VTE_FG); bg.parse(VTE_BG)
+        pal = []
+        for hexstr in _ANSI:
+            col = Gdk.RGBA(); col.parse(hexstr)
+            pal.append(col)
+        # Mockup console: mono 13px, line pitch ~20 — px-matched to the editor (set_absolute
+        # size, points would scale differently); height scale lifts VTE's tight default cell.
+        font = Pango.FontDescription.from_string("Noto Sans Mono")
+        font.set_absolute_size(13 * Pango.SCALE)
         for t in (self.agent, self.out, self.term):
             t.set_scrollback_lines(10000)
+            t.set_font(font)
+            if hasattr(t, "set_cell_height_scale"):
+                t.set_cell_height_scale(1.08)
+            t.set_colors(fg, bg, pal)          # unthemed VTE default is otherwise light — mockup cards are dark
         self.out.connect("child-exited", self._run_child_exited)
         self.agent.connect("child-exited", self._pane_child_exited, "agent")
         self.term.connect("child-exited", self._pane_child_exited, "term")
-        self.nb = Gtk.Notebook(vexpand=True)
-        for title, t in (("Agent Console", self.agent), ("Output", self.out), ("Terminal", self.term)):
-            self.nb.append_page(Gtk.ScrolledWindow(child=t), Gtk.Label(label=title))
+        # scrollable: same min-width ruling as the editor notebook
+        self.nb = Gtk.Notebook(vexpand=True, scrollable=True)
+        self.nb.add_css_class("alpaca-panes")   # pane strip geometry differs from the editor's (40px pill)
+        self.nb.append_page(Gtk.ScrolledWindow(child=self.agent), self._pane_tab("Agent Console", badges.icon("bot.svg")))
+        self.nb.append_page(Gtk.ScrolledWindow(child=self.out), self._pane_tab("Output", badges.icon("terminal.svg")))
+        self.nb.append_page(Gtk.ScrolledWindow(child=self.term), self._pane_tab("Terminal", badges.icon("prompt.svg")))
         self.nb.connect("switch-page", self._on_switch)
         self.append(self.nb)
 
-    # ---- status -------------------------------------------------------------
+    @staticmethod
+    def _pane_tab(title: str, ipy) -> Gtk.Box:
+        # `alpaca-panetab` carries the pill's 6px side insets — NOT the label:
+        # label-side padding left the leading icon flush with the pill edge (measured).
+        head = Gtk.Box(spacing=6, css_classes=["alpaca-panetab"])
+        head.set_valign(Gtk.Align.CENTER)
+        if ipy is not None:
+            head.append(Gtk.Image.new_from_paintable(ipy))
+        head.append(Gtk.Label(label=title, css_classes=["alpaca-panetabname"]))
+        return head
+
+    # ---- status: run/stop state sync for the window ---------------------------
     def _set_status(self, text: str, cls: str = "") -> None:
-        self.status_label.set_text(text)
-        for c in ("ok", "err"):
-            self.dot.remove_css_class(c)
-        if cls:
-            self.dot.add_css_class(cls)
         self.on_status(text, cls)
 
     # ---- workspace ------------------------------------------------------------
@@ -214,14 +250,6 @@ class Panes(Gtk.Box):
             code = status
         self._set_status(f"Exit {code}", "err" if code else "ok")
 
-    # ---- misc -----------------------------------------------------------------
-    def clear_active(self) -> None:   # trash button
-        self._clear_active(None)
-
-    def _clear_active(self, *_a) -> None:
-        t = (self.agent, self.out, self.term)[max(self.nb.get_current_page(), 0)]
-        t.reset(True, True)
-
     # ---- kills --------------------------------------------------------------------
     def _live_agent_term_pids(self) -> list[int]:
         return [t.pid_holder for t in (self.agent, self.term)
@@ -240,4 +268,4 @@ class Panes(Gtk.Box):
             except (ProcessLookupError, PermissionError):
                 pass
             return GLib.SOURCE_REMOVE
-        GLib.timeout_add_seconds(2, finish)
+        GLib.timeout_add(2000, finish)   # timeout_add_seconds never fires under app.run() on this box (measured)

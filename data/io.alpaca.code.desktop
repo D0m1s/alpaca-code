@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=alpaca-code
+Comment=GTK4 desktop wrapper for the claude CLI
+Exec=/home/dominykasm/FunProjects/misiuscode/bin/alpaca-code %f
+Path=/home/dominykasm/FunProjects/misiuscode
+Icon=io.alpaca.code
+Categories=Development;IDE;
+Terminal=false
