@@ -25,13 +25,9 @@ window, window:backdrop { background: #07090d; padding: 0 6px 6px; }
 .alpaca-card { background: #0d1017; border: 1px solid #1c2230; border-radius: 4px; }
 
 paned > separator { background: transparent; min-width: 6px; min-height: 6px; }
-/* editor↔console junction reads flush (user: the 6px gutter there read as a
-   gap regression): cards touch, their facing 1px borders stack into a 2px
-   hairline. Cost: a 0px handle has no grab area — the editor/console split
-   isn't drag-resizable (positions are set in window.py, never persisted).
-   Knob back: min-height 2px → 4px total junction, thin drag line.
-   The H split keeps the 6px gutter (mockup keeps its horizontal gap). */
-paned.vertical > separator { min-height: 0; }
+/* both gutters stay the shared 6px air (2026-10-05, user reversed the flush
+   editor↔console junction): the vertical separator needs no override, and the
+   drag knob is grabbable again — positions (window.py) remain the defaults. */
 
 /* --- header: menus row, flush top, no rules --- (2026-10-04, user's circled
    artifacts): Breeze paints headerbar { border-top: 1px solid

@@ -63,7 +63,13 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`
 - This box's vte4 is Vte-3.91: `ge.require("Vte", ("4", "4.0", "3.91"))`.
  `spawn_async` accepts only the keyword form.
 - Spawn flags must be `SEARCH_PATH | SEARCH_PATH_FROM_ENVP`, never `DEFAULT` (plain execv →
- bare `claude` dies ENOENT). Env: full environ with `~/.local/bin` appended to PATH.
+ bare `claude` dies ENOENT). Env: full environ with `~/.local/bin` appended to PATH — and
+ VTE `spawn_async(envv=…)` MERGES envv onto the child's INHERITED environ, it never
+ replaces it (measured: child kept the whole parent env). Omitting a key in `envv`
+ scrubs NOTHING; to kill an inherited var (claude's ambient session markers turn the
+ Agent pane's claude into a no-transcript child session — empty values satisfy its
+ truthiness checks) OVERRIDE it to `""` in envv. Env build is pure `runctl.pane_environ()`
+ (panels.get_env wraps it).
 - VTE children are session leaders — kill trees with `killpg(getpgid(pid), SIGHUP)` +
  2s SIGKILL escalation (`panels.Panes._kill_tree`). `/proc/<pid>` existing is not proof of
  life (zombies); judge by exit status.
@@ -159,13 +165,13 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`
   header 32(+2 border) in the real Window replica. Icons px14 via
   `_img(ipy, 14)` (VecIcon repaints sharp); play.svg re-drawn so glyph-ink
   center = box center (was +1.5 right; mockup icons are centered).
-- Card junctions (2026-10-05): the editor→console V seam is FLUSH by user choice —
-  `paned.vertical > separator { min-height: 0 }` (the shared `paned > separator`
-  6px rule still gives the H split its 6px gutter). Cards touch: their facing 1px
-  `#1c2230` borders stack into a 2px hairline (pixel-verified: one 2-row long-border
-  group, zero window-bg rows near the seam). Cost: 0px handle = no drag area, the
-  editor/console split isn't resize-grabbable (positions set in window.py, never
-  persisted; knob back = min-height 2px). Probe note: FULLSCREENING the probe window
+- Card junctions (2026-10-05, revised same day): the V gutter between editor and
+  console cards is BACK by user reversal — the override
+  `paned.vertical > separator { min-height: 0 }` is deleted; BOTH splits take the
+  shared `paned > separator` 6px transparent-gutter rule, and the drag knob is
+  resize-grabbable again (positions stay set in window.py, never persisted; the
+  6px comes out of the panes' area — position 592 = start-child height, so the
+  editor card keeps ~593 and the seam's y is unchanged). Probe note: FULLSCREENING the probe window
   collapses the headerbar to a 12×0 alloc (GTK/KWin interplay on this build) — verify
   header stuff on a WINDOWED replica; header child allocs read 0 on this build even
   when painted (locate by pixel pattern, the struct dump is unreliable there).

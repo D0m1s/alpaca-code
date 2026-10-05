@@ -229,6 +229,29 @@ def test_runctl_detect():
         open(t + "/dnet/src/App.csproj", "w").close()
         assert runctl.detect(t + "/dnet")["argv"] == ["dotnet", "run", "--project", "other"]
 
+@register
+def test_runctl_pane_environ_overrides_claude_markers():
+    # VTE envv MERGES onto the child's inherited environ (measured probe) — an
+    # omitted marker would leak through whole. Ambient claude markers must be
+    # OVERRIDDEN to empty so the Agent pane's claude stops disabling transcript
+    # saving (its check is truthiness on CLAUDE_CODE_CHILD_SESSION).
+    from alpaca_code import runctl
+    saved = {k: os.environ.get(k) for k in runctl._CLAUDE_SESSION_MARKERS}
+    try:
+        leak = ("CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID")
+        for k, v in zip(leak, ("1", "aaaa-bbbb", "999")):
+            os.environ[k] = v
+        entry = dict(x.split("=", 1) for x in runctl.pane_environ())
+        for k, v in zip(leak, ("1", "aaaa-bbbb", "999")):
+            assert entry[k] == "", f"{k} leaked {v!r} to pane children"
+        assert "PATH=" in " ".join(runctl.pane_environ())      # sane environ still handed through
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
 # --- gitstatus (Task 4) ---------------------------------------------------------
 @register
 def test_gitstatus_branch():
@@ -314,7 +337,7 @@ def test_filetree_scan():
 @register
 def test_panels_env_and_kill():
     import signal, subprocess, time
-    from alpaca_code import panels
+    from alpaca_code import panels, runctl
     lb = os.path.expanduser("~/.local/bin")
 
     saved = os.environ.get("PATH")
@@ -328,16 +351,18 @@ def test_panels_env_and_kill():
     finally:
         os.environ["PATH"] = saved
 
-    # claude nesting markers must never reach pane children (Agent Console claude
-    # turns off transcript saving over an inherited CLAUDE_CODE_CHILD_SESSION)
-    saved_markers = {k: os.environ.get(k) for k in panels._CLAUDE_SESSION_MARKERS}
+    # claude nesting markers must never matter in pane children (Agent Console claude
+    # turns off transcript saving over an inherited CLAUDE_CODE_CHILD_SESSION).
+    # VTE spawn_async MERGES envv onto the child's inherited environ, so omission in
+    # envv does NOT scrub the child — override to EMPTY (claude's check is truthiness).
+    saved_markers = {k: os.environ.get(k) for k in runctl._CLAUDE_SESSION_MARKERS}
     try:
         for k, v in saved_markers.items():
             os.environ[k] = v or "1"
-        env3 = panels.get_env()
-        stray = [v.split("=", 1)[0] for v in env3 if v.split("=", 1)[0] in panels._CLAUDE_SESSION_MARKERS]
+        env3 = dict(x.split("=", 1) for x in panels.get_env())
+        stray = {k: v for k, v in env3.items() if k in runctl._CLAUDE_SESSION_MARKERS and v}
         assert not stray, stray
-        assert any(v.startswith("HOME=") for v in env3)          # scrub, not nuke
+        assert any(v.startswith("HOME=") for v in panels.get_env())  # scrub, not nuke
     finally:
         for k, v in saved_markers.items():
             os.environ.pop(k, None)

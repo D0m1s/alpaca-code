@@ -8,7 +8,7 @@ ge.require("Vte", ("4", "4.0", "3.91"))   # ledger ruling: this box's vte4 ships
 ge.require("Pango", ("1.0",))
 from gi.repository import Gdk, GLib, Gtk, Pango, Vte
 
-from . import badges
+from . import badges, runctl
 
 # Mockup (Agentic App – Dark IDE) VTE colors: card-bg terminals, ANSI slots mapped to
 # the same hues as the editor scheme so claude/npm output reads like highlighted code.
@@ -20,23 +20,11 @@ def vte_palette() -> tuple[str, str, list[str]]:
     """(foreground, background, 16 ANSI slots) as hex strings."""
     return (VTE_FG, VTE_BG, list(_ANSI))
 
-# Claude's ambient session markers, exported by any claude session to its children.
-# When the app itself was launched from inside a claude session, get_env() would hand
-# these to pane children: the Agent Console's claude then sees the nested marker and
-# disables transcript saving (unresumable sessions), besides leaking stale ids/sockets.
-# Pane children are top-level, not nested — claude there runs like a fresh invocation.
-_CLAUDE_SESSION_MARKERS = (
-    "CLAUDECODE", "CLAUDE_PID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED",
-    "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SSE_PORT",
-)
-
 def get_env() -> list[str]:
-    env = {k: v for k, v in os.environ.items() if k not in _CLAUDE_SESSION_MARKERS}
-    p = os.path.expanduser("~/.local/bin")
-    if os.path.isdir(p) and p not in env.get("PATH", "").split(os.pathsep):
-        env["PATH"] = env.get("PATH", "") + os.pathsep + p
-    return [f"{k}={v}" for k, v in env.items()]
+    # pure-logic env build lives in runctl (displayless-testable): VTE merges envv
+    # onto the child's INHERITED environ, so ambient markers are OVERRIDDEN to empty
+    # there, not merely omitted — see runctl.pane_environ.
+    return runctl.pane_environ()
 
 def spawn(term: Vte.Terminal, cwd: str, argv: list[str], on_ready=None) -> None:
     """Spawn argv on term's pty. The pid lands on `term.pid_holder` via the spawn callback.
