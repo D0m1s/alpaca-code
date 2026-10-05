@@ -9,7 +9,7 @@ ge.require("Gdk", ("4.0",))
 ge.require("Gtk", ("4.0",))
 ge.require("GdkPixbuf", ("2.0",))
 ge.require("Pango", ("1.0",))
-from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
+from gi.repository import GdkPixbuf, GLib, Gtk, Pango
 
 from . import badges, gitstatus
 from .treehover import HoverTree
@@ -86,35 +86,22 @@ class ChangesView(Gtk.Box):
 
         self.append(Gtk.ScrolledWindow(vexpand=True, child=self.view))
 
-        bar = Gtk.Box(spacing=6, margin_start=12, margin_end=12, margin_top=6, margin_bottom=6)
+        bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
+                      margin_start=12, margin_end=12, margin_top=6, margin_bottom=6)
         bar.set_css_classes(["alpaca-commitbar"])
-        # 2-line commit message: TextView in a fixed-height ScrolledWindow (GitHub
-        # style). TextView has no native placeholder — a pass-through overlay label
-        # hides once the buffer is non-empty.
-        self.msg = Gtk.TextView(css_classes=["alpaca-msg"])
-        self.msg.set_wrap_mode(Gtk.WrapMode.WORD)
-        self.msgbuf = self.msg.get_buffer()
-        self.msgbuf.connect("changed", lambda _b: self.ph.set_visible(not self._msg_text()))
-        msgsw = Gtk.ScrolledWindow(child=self.msg)
-        msgsw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        msgsw.set_size_request(-1, 48)
-        ov = Gtk.Overlay(child=msgsw)
-        ov.set_hexpand(True)                 # the BAR must expand it — msgsw's parent is the overlay, not the bar
-        self.ph = Gtk.Label(label="Commit message…", xalign=0.0, halign=Gtk.Align.START,
-                            css_classes=["alpaca-ph"])
-        self.ph.set_can_target(False)         # clicks/focus fall through to the TextView
-        ov.add_overlay(self.ph)
+        self.msg = Gtk.Entry()
+        self.msg.set_placeholder_text("Commit message…")
+        self.msg.set_css_classes(["alpaca-msg"])
+        self.msg.set_hexpand(True)
+        self.msg.set_size_request(-1, 30)
+        self.msg.connect("activate", lambda _e: self.commit_clicked())   # Enter = commit
         self.btn = Gtk.Button(label="Commit and Push")
         self.btn.set_css_classes(["alpaca-barbtn"])
-        self.btn.set_valign(Gtk.Align.CENTER)   # button keeps its 26px pill against the 48px field
+        self.btn.set_hexpand(True)           # full-width pill: same width as the field above
         self.btn.connect("clicked", lambda b: self.commit_clicked())
         self._ahead = 0                        # local-unpushed count, cached by refresh()
-        bar.append(ov); bar.append(self.btn)
+        bar.append(self.msg); bar.append(self.btn)
         self.append(bar)
-
-        kc = Gtk.EventControllerKey()          # Enter = newline; Ctrl+Enter = commit
-        self.msg.add_controller(kc)
-        kc.connect("key-pressed", self._on_msg_key)
 
     # ---- data ------------------------------------------------------------------
     def set_root(self, root: str | None) -> None:
@@ -283,7 +270,7 @@ class ChangesView(Gtk.Box):
         if not paths and self._ahead <= 0:
             self.on_status("err", "No files selected")
             return
-        msg = self._msg_text().strip()
+        msg = self.msg.get_text().strip()
         if paths and not msg:
             self.on_status("err", "Empty commit message")
             return
@@ -319,16 +306,6 @@ class ChangesView(Gtk.Box):
         self._busy = busy
         self._buttons()
         self.msg.set_sensitive(not busy)
-
-    def _msg_text(self) -> str:
-        s, e = self.msgbuf.get_bounds()
-        return self.msgbuf.get_text(s, e, False)
-
-    def _on_msg_key(self, _c, keyval, _code, state) -> bool:
-        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and state & Gdk.ModifierType.CONTROL_MASK:
-            self.commit_clicked()
-            return True
-        return False
 
     def has_files(self) -> bool:
         return len(self._files) > 0

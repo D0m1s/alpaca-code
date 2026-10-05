@@ -153,7 +153,7 @@ class FileBrowser(Gtk.Box):
         self._mode = "tree"
         self.append(self.stack)
 
-        bar = Gtk.Box(spacing=6, margin_start=12, margin_end=12, margin_top=0, margin_bottom=0)
+        bar = Gtk.Box(spacing=6, margin_start=14, margin_end=12, margin_top=0, margin_bottom=0)
         bar.set_css_classes(["alpaca-statusbar"])
         self.branch_icon = Gtk.Image()
         bpix = badges.icon("branch.svg")
@@ -168,8 +168,9 @@ class FileBrowser(Gtk.Box):
         self.spin.set_valign(Gtk.Align.CENTER); self.spin.set_visible(False)
         self.git_label = Gtk.Label(label="", ellipsize=Pango.EllipsizeMode.MIDDLE); self.git_label.set_visible(False)
         self.count_label = Gtk.Label(label="")
-        bar.append(self.branch_icon)
-        bar.append(self.branch_label)
+        pair = Gtk.Box(spacing=3)             # git logo ↔ branch name ride tight; bar spacing stays 6 for the rest
+        pair.append(self.branch_icon); pair.append(self.branch_label)
+        bar.append(pair)
         bar.append(self.dot)
         bar.append(self.spin)
         bar.append(self.git_label)

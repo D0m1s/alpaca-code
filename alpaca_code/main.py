@@ -132,20 +132,21 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
 .alpaca-tree:selected { background: #1b3560; color: #ffffff; }
 
 /* --- bottom status bar (browser): ~22px git row over a 1px rule --- */
-.alpaca-statusbar { min-height: 0; padding: 2px 10px; border-top: 1px solid #1c2230;
+/* horizontal padding 0: the bar's own 12px margins ARE the inset — matching the
+   commit bar's edge exactly (an extra 10px here read as the misaligned row) */
+.alpaca-statusbar { min-height: 0; padding: 2px 0; border-top: 1px solid #1c2230;
                     color: #8a93a6; font-size: 12px; }
 .alpaca-statusbar label { color: #8a93a6; font-size: 12px; }
 .alpaca-statusbar > label:last-child { color: #5a6375; }
 
 /* --- changes view: commit bar (spec §6) --- */
-.alpaca-commitbar { border-top: 1px solid #1c2230; }
-/* the class is on the TextView (inside a borderless ScrolledWindow): the node
-   paints bg/border itself, inner spacing lives on its text node */
+/* no border-top: the bar's 6px top margin air is the separator — a 1px rule
+   here paints a stray hairline directly above the message input */
 .alpaca-msg { background: #0a0d13; color: #e6e8ee; font-size: 13px;
-              border: 1px solid #2b3448; border-radius: 8px; }
+              border: 1px solid #2b3448; border-radius: 8px;
+              min-height: 10px; padding: 0 12px; }
 .alpaca-msg:focus { border-color: #2f80ed; }
-.alpaca-msg text { min-height: 14px; padding: 6px 11px; }
-.alpaca-ph { color: #5a6375; font-size: 13px; padding: 7px 12px; }
+.alpaca-msg text { min-height: 14px; padding: 0; }
 .alpaca-barbtn { background: #111723; color: #e6e8ee; border: 1px solid #2b3448;
                  border-radius: 8px; font-size: 12px; font-weight: 500;
                  padding: 0 12px; min-height: 26px; }
