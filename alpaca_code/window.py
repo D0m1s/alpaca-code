@@ -133,7 +133,7 @@ class Window:
         # ABS page paths — bind root NOW, per call, not per workspace setup.
         self.tree.changes.before_commit = lambda rels: self.editor.save_open(
             [os.path.join(self.root, r) for r in rels])   # flush dirty buffers for exactly the checked files
-        self.tree.changes.on_refresh = self.tree.refresh_branch   # statusbar re-syncs after commit/push
+        self.tree.changes.on_status = self.tree.show_git_status   # commit/push flight → status row (ok pulse re-syncs it)
         self.hpane = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL, wide_handle=True)
         self.hpane.set_start_child(self.vpane)
         self.hpane.set_end_child(self.tree)

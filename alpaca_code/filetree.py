@@ -71,6 +71,8 @@ class FileBrowser(Gtk.Box):
         self._monitored: set[str] = set()   # dirs with a live monitor (cap)
         self._open: set[str] = set()        # currently expanded abs paths
         self._saved_tree: tuple[str, set[str], float] | None = None
+        self._git_busy = False               # a commit/push flight owns the status row
+        self._pulse_id = 0
         # ^ (root, open abs paths, scroll) — the real tree's sheet lives here while
         #   search results displace it; restored on clear, NOT persisted to disk
 
@@ -144,7 +146,7 @@ class FileBrowser(Gtk.Box):
         # mode host (spec §1): zero-transition swap between the tree and the
         # changes view. vexpand on the Stack — GtkBox gives non-expanding
         # children only their minimum, and the card must fill below the tab row.
-        self.changes = ChangesView()   # window wires on_open/before_commit/on_refresh
+        self.changes = ChangesView()   # window wires on_open/before_commit/on_status
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.NONE, vexpand=True)
         self.stack.add_named(tree_page, "tree")
         self.stack.add_named(self.changes, "changes")
@@ -161,11 +163,15 @@ class FileBrowser(Gtk.Box):
         self.branch_label = Gtk.Label(label="", ellipsize=Pango.EllipsizeMode.MIDDLE)  # long branch names must not widen the bar
         self.dot = Gtk.Box(); self.dot.set_size_request(8, 8); self.dot.set_css_classes(["alpaca-status-dot"])
         self.dot.set_valign(Gtk.Align.CENTER); self.dot.set_visible(False)
+        self.spin = Gtk.Spinner(); self.spin.set_size_request(10, 10)
+        self.spin.set_css_classes(["alpaca-status-spin"])
+        self.spin.set_valign(Gtk.Align.CENTER); self.spin.set_visible(False)
         self.git_label = Gtk.Label(label="", ellipsize=Pango.EllipsizeMode.MIDDLE); self.git_label.set_visible(False)
         self.count_label = Gtk.Label(label="")
         bar.append(self.branch_icon)
         bar.append(self.branch_label)
         bar.append(self.dot)
+        bar.append(self.spin)
         bar.append(self.git_label)
         bar.append(Gtk.Box(hexpand=True))        # spacer pushes file count right
         bar.append(self.count_label)
@@ -194,6 +200,41 @@ class FileBrowser(Gtk.Box):
     def refresh_branch(self) -> None:
         """Public alias — window/git-change callers. Recomputes branch + dirty state."""
         self._refresh_status()
+
+    def show_git_status(self, kind: str, text: str) -> None:
+        """Commit/push flight status — changes-view reports land here (window
+        wiring). busy → spinner + phase text; ok → green dot pulse, the row
+        re-syncs itself after 2s; err → red dot + the error's first line, the
+        full git output as a tooltip. The busy guard keeps mid-flight refreshes
+        (focus hook, HEAD monitor, mode switches) from clobbering the spinner."""
+        if self._pulse_id:                       # a fresh state outranks a stale pulse
+            GLib.source_remove(self._pulse_id)
+            self._pulse_id = 0
+        self._git_busy = kind == "busy"
+        if kind == "busy":
+            self.spin.set_visible(True); self.spin.start()
+            self.dot.set_visible(False)
+            self.git_label.set_text(text); self.git_label.set_tooltip_text("")
+            return
+        self.spin.stop(); self.spin.set_visible(False)
+        self.dot.set_visible(True)
+        self.git_label.set_visible(True)
+        if kind == "ok":
+            self.dot.set_css_classes(["alpaca-status-dot", "ok"])
+            self.git_label.set_text(text)
+            self.git_label.set_tooltip_text("")
+            self._pulse_id = GLib.timeout_add(2000, self._pulse)
+        else:
+            self.dot.set_css_classes(["alpaca-status-dot", "err"])
+            self.git_label.set_text(text.splitlines()[0] if text else "Git error")
+            self.git_label.set_tooltip_text(text or None)
+
+    def _pulse(self) -> bool:
+        """End of the ok pulse: stop owning the row, re-sync to the real state
+        (replaces the old post-commit on_refresh wiring)."""
+        self._pulse_id = 0
+        self._refresh_status()
+        return False
 
     # ---- mode tabs (spec §1) --------------------------------------------------
     def _set_mode(self, mode: str) -> None:
@@ -231,17 +272,21 @@ class FileBrowser(Gtk.Box):
             self.changes.refresh()
 
     def _refresh_status(self) -> None:
+        if self._git_busy:
+            return                           # commit/push flight owns the row (pulse re-syncs)
         from . import gitstatus
         branch = gitstatus.branch_of(self.root) if self.root else None
         is_git = branch is not None
-        for w in (self.branch_icon, self.branch_label, self.dot, self.git_label):
+        for w in (self.branch_icon, self.branch_label, self.dot, self.spin, self.git_label):
             w.set_visible(is_git)
+        self.spin.set_visible(False)         # idle state: the dot, never the spinner
         self.ch_btn.set_visible(is_git)
         if not is_git and self._mode == "changes":
             self._set_mode("tree")    # repo vanished (HEAD deleted) while reading it
         if not is_git:
             return
         self.branch_label.set_text(branch)
+        self.git_label.set_tooltip_text("")   # a past err's tooltip must not outlive the row's re-sync
         # ponytail: git status runs on set_root/refresh only — not per file event
         # (git can take seconds on big trees); status bar re-syncs on workspace switch
         dirty = gitstatus.status(self.root)

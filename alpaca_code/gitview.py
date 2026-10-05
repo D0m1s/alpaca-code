@@ -25,7 +25,7 @@ class ChangesView(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.on_open = lambda rel, letter: None  # window → editor.open_diff
         self.before_commit = lambda paths: None  # window → editor.save_open
-        self.on_refresh = lambda: None           # window → browser statusbar refresh
+        self.on_status = lambda kind, text: None  # window → filetree.show_git_status
         self.root = None
         self._checked: set[str] = set()          # file rels only (subset of _files)
         self._files: set[str] = set()            # every file row in the changeset
@@ -88,21 +88,33 @@ class ChangesView(Gtk.Box):
 
         bar = Gtk.Box(spacing=6, margin_start=12, margin_end=12, margin_top=6, margin_bottom=6)
         bar.set_css_classes(["alpaca-commitbar"])
-        self.msg = Gtk.Entry(hexpand=True)
-        self.msg.set_placeholder_text("Commit message…")
-        self.msg.set_css_classes(["alpaca-msg"])
-        self.msg.set_size_request(-1, 26)    # height floor, like .alpaca-search's 30
-        self.msg.connect("activate", self._on_msg_enter)
-        self.commit_btn = Gtk.Button(label="Commit"); self.commit_btn.set_css_classes(["alpaca-barbtn"])
-        self.push_btn = Gtk.Button(label="Push");    self.push_btn.set_css_classes(["alpaca-barbtn"])
-        self.commit_btn.connect("clicked", lambda b: self.commit_clicked())
-        self.push_btn.connect("clicked", lambda b: self.push_clicked())
-        self.result = Gtk.Label(xalign=0.0, visible=False)
-        self.result.set_ellipsize(Pango.EllipsizeMode.END)   # 400-char git output must not widen the bar
-        self.result.set_css_classes(["alpaca-commitresult"])
-        bar.append(self.msg); bar.append(self.commit_btn); bar.append(self.push_btn)
+        # 2-line commit message: TextView in a fixed-height ScrolledWindow (GitHub
+        # style). TextView has no native placeholder — a pass-through overlay label
+        # hides once the buffer is non-empty.
+        self.msg = Gtk.TextView(css_classes=["alpaca-msg"])
+        self.msg.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.msgbuf = self.msg.get_buffer()
+        self.msgbuf.connect("changed", lambda _b: self.ph.set_visible(not self._msg_text()))
+        msgsw = Gtk.ScrolledWindow(child=self.msg)
+        msgsw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        msgsw.set_size_request(-1, 48)
+        ov = Gtk.Overlay(child=msgsw)
+        ov.set_hexpand(True)                 # the BAR must expand it — msgsw's parent is the overlay, not the bar
+        self.ph = Gtk.Label(label="Commit message…", xalign=0.0, halign=Gtk.Align.START,
+                            css_classes=["alpaca-ph"])
+        self.ph.set_can_target(False)         # clicks/focus fall through to the TextView
+        ov.add_overlay(self.ph)
+        self.btn = Gtk.Button(label="Commit and Push")
+        self.btn.set_css_classes(["alpaca-barbtn"])
+        self.btn.set_valign(Gtk.Align.CENTER)   # button keeps its 26px pill against the 48px field
+        self.btn.connect("clicked", lambda b: self.commit_clicked())
+        self._ahead = 0                        # local-unpushed count, cached by refresh()
+        bar.append(ov); bar.append(self.btn)
         self.append(bar)
-        self.append(self.result)
+
+        kc = Gtk.EventControllerKey()          # Enter = newline; Ctrl+Enter = commit
+        self.msg.add_controller(kc)
+        kc.connect("key-pressed", self._on_msg_key)
 
     # ---- data ------------------------------------------------------------------
     def set_root(self, root: str | None) -> None:
@@ -117,7 +129,9 @@ class ChangesView(Gtk.Box):
         after a commit the committed paths vanish and the rest stay selected.
         An active filter re-applies (focus/commit refresh cycles keep the view
         the user is looking at)."""
-        rows = gitstatus.changes(self.root) or []
+        raw = gitstatus.changes(self.root)
+        rows = raw or []
+        self._ahead = gitstatus.ahead(self.root) if raw is not None else 0   # cached: no git per toggle
         self._rows = rows
         files = {r[2] for r in gitstatus.group_tree(rows) if r[0] == "f"}   # r[2] = rel (group_tree: kind,name,rel,letter,depth)
         self._files = set(files)                 # BEFORE _fill: _sync_row needs it
@@ -209,8 +223,9 @@ class ChangesView(Gtk.Box):
             self.store[it][8] = not allc and somec
 
     def _buttons(self) -> None:
-        self.commit_btn.set_sensitive(not self._busy and bool(self._checked))
-        self.push_btn.set_sensitive(not self._busy and bool(self._files))
+        # one button: commit-with-push when files are checked, push-only when the
+        # branch is ahead (nothing checked); ahead comes from the refresh cache
+        self.btn.set_sensitive(not self._busy and (bool(self._checked) or self._ahead > 0))
 
     # ---- toggles ----------------------------------------------------------------
     def _on_toggled(self, render, path_str: str) -> None:
@@ -260,69 +275,60 @@ class ChangesView(Gtk.Box):
         elif row[2] == "f":
             self.on_open(row[1], row[3])         # (rel, letter) — chip needs the letter
 
-    # ---- commit / push (spec §4: workers are daemon threads; GTK via idle_add) --
+    # ---- commit+push (spec §4: workers are daemon threads; GTK via idle_add) ----
     def commit_clicked(self) -> None:
         if self._busy or not self.root:
             return
         paths = sorted(self._checked)
-        msg = self.msg.get_text().strip()
-        if not msg:
-            self._show_result(False, "Empty commit message")
+        if not paths and self._ahead <= 0:
+            self.on_status("err", "No files selected")
             return
-        if not paths:
-            self._show_result(False, "No files selected")
+        msg = self._msg_text().strip()
+        if paths and not msg:
+            self.on_status("err", "Empty commit message")
             return
-        self.before_commit(paths)        # window: flush dirty editor buffers for exactly these files
+        if paths:
+            self.before_commit(paths)    # window: flush dirty editor buffers for exactly these files
         root = self.root                 # snapshot: a set_root() during the flight must not reroute it (review I4)
         self._set_busy(True)
-        threading.Thread(target=self._do_commit, args=(root, paths, msg),
-                         daemon=True, name="alpaca-commit").start()
-
-    def _do_commit(self, root, paths, msg) -> None:
-        ok, text = gitstatus.commit(root, paths, msg)
-        GLib.idle_add(self._commit_done, ok, text)
-
-    def _commit_done(self, ok, text) -> bool:
-        self._set_busy(False)
-        self._show_result(ok, text)
-        if ok:
-            self.refresh()               # keep_selection=True: committed paths vanish, rest kept
-            self.on_refresh()            # window: browser statusbar branch/dirty refresh
-        return False                     # idle_add: run once
-
-    def push_clicked(self) -> None:
-        if self._busy or not self.root:
-            return
-        root = self.root                 # snapshot: same I4 law as commit
-        self._set_busy(True)
-        threading.Thread(target=self._do_push, args=(root,),
+        self.on_status("busy", "Committing…" if paths else "Pushing…")
+        threading.Thread(target=self._run_commit_push, args=(root, paths, msg),
                          daemon=True, name="alpaca-push").start()
 
-    def _do_push(self, root) -> None:
-        ok, text = gitstatus.push(root)
-        GLib.idle_add(self._push_done, ok, text)
+    def _run_commit_push(self, root, paths, msg) -> None:
+        cok, ctext, pok, ptext = gitstatus.commit_then_push(
+            root, paths, msg, self._phase if paths else None)
+        GLib.idle_add(self._done, cok, ctext, pok, ptext)
 
-    def _push_done(self, ok, text) -> bool:
+    def _phase(self, kind: str, text: str) -> None:
+        GLib.idle_add(self.on_status, kind, text)
+
+    def _done(self, cok, ctext, pok, ptext) -> bool:
         self._set_busy(False)
-        self._show_result(ok, text)
-        if ok:                       # spec §2: the list re-syncs after push too
-            self.refresh()
-            self.on_refresh()
-        return False
+        if cok:
+            self.refresh()               # keep_selection=True: committed paths vanish, rest kept
+        if not cok:
+            self.on_status("err", ctext)
+        elif not pok:                    # commit landed; list refreshed — the row re-syncs on
+            self.on_status("err", ptext)  # the next natural refresh (the red line explains the count)
+        else:
+            self.on_status("ok", "Pushed ✓")   # row pulse; filetree re-syncs itself after 2s
+        return False                     # idle_add: run once
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         self._buttons()
         self.msg.set_sensitive(not busy)
 
-    def _show_result(self, ok: bool, text: str) -> None:
-        self.result.set_text(text or "Done.")
-        self.result.set_css_classes(["alpaca-commitresult", "ok" if ok else "err"])
-        self.result.set_visible(True)
+    def _msg_text(self) -> str:
+        s, e = self.msgbuf.get_bounds()
+        return self.msgbuf.get_text(s, e, False)
 
-    def _on_msg_enter(self, entry) -> None:
-        if self.commit_btn.get_sensitive():
+    def _on_msg_key(self, _c, keyval, _code, state) -> bool:
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and state & Gdk.ModifierType.CONTROL_MASK:
             self.commit_clicked()
+            return True
+        return False
 
     def has_files(self) -> bool:
         return len(self._files) > 0

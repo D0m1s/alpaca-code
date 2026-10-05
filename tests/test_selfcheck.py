@@ -243,6 +243,39 @@ def test_gitstatus_branch():
         open(t + "/.git/HEAD", "w").write("gitdir: elsewhere\n")
         assert gitstatus.branch_of(t) is None          # worktree pointer → hidden
 
+@register
+def test_gitstatus_ahead_and_commit_then_push():
+    from alpaca_code import gitstatus
+    with tempfile.TemporaryDirectory() as t:
+        assert gitstatus.ahead(t) == 0                 # not a repo
+        g = _gitrepo(t)
+        assert gitstatus.ahead(t) == 0                 # repo, no upstream → 0
+        open(t + "/f.py", "w").write("a\n")
+        g("add", "."); g("commit", "-m", "one")
+        subprocess.run(["git", "init", "--bare", "-q", t + "origin.git"], check=True)
+        g("remote", "add", "origin", t + "origin.git")
+        assert gitstatus.ahead(t) == 0                 # upstream unset until first push
+        g("push", "-u", "origin", "HEAD")              # git supplies @{u} → in sync
+        assert gitstatus.ahead(t) == 0
+        # commit_then_push: with files → phase fires before the push, both steps land
+        open(t + "/f.py", "w").write("b\n")
+        phases = []
+        cok, ctext, pok, ptext = gitstatus.commit_then_push(
+            t, ["f.py"], "two", lambda kind, text: phases.append((kind, text)))
+        assert cok and pok, (ctext, ptext)
+        assert phases == [("busy", "Pushing…")]
+        assert gitstatus.ahead(t) == 0
+        # push-only (empty paths): commit skipped, no phase, push runs
+        open(t + "/f.py", "w").write("c\n")
+        g("add", "."); g("commit", "-m", "three")
+        assert gitstatus.ahead(t) == 1
+        cok, ctext, pok, ptext = gitstatus.commit_then_push(t, [], "", None)
+        assert cok and pok, (ptext,)
+        assert gitstatus.ahead(t) == 0
+        # failed commit: push never attempted
+        cok, ctext, pok, ptext = gitstatus.commit_then_push(t, ["missing.py"], "x", None)
+        assert not cok and not pok and ctext and ptext == ""
+
 # --- filetree (Task 5) -----------------------------------------------------------
 def _tree(tmp):
     os.makedirs(tmp + "/src/components")

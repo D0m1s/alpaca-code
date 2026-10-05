@@ -139,25 +139,26 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
 
 /* --- changes view: commit bar (spec §6) --- */
 .alpaca-commitbar { border-top: 1px solid #1c2230; }
+/* the class is on the TextView (inside a borderless ScrolledWindow): the node
+   paints bg/border itself, inner spacing lives on its text node */
 .alpaca-msg { background: #0a0d13; color: #e6e8ee; font-size: 13px;
-              border: 1px solid #2b3448; border-radius: 8px;
-              min-height: 10px; padding: 0 10px; }
+              border: 1px solid #2b3448; border-radius: 8px; }
 .alpaca-msg:focus { border-color: #2f80ed; }
-.alpaca-msg text { min-height: 14px; padding: 0; }
+.alpaca-msg text { min-height: 14px; padding: 6px 11px; }
+.alpaca-ph { color: #5a6375; font-size: 13px; padding: 7px 12px; }
 .alpaca-barbtn { background: #111723; color: #e6e8ee; border: 1px solid #2b3448;
                  border-radius: 8px; font-size: 12px; font-weight: 500;
                  padding: 0 12px; min-height: 26px; }
 .alpaca-barbtn:hover { background: #1c2431; }
 .alpaca-barbtn:disabled { color: #5a6375; background: #0a0d13; }
 .alpaca-barbtn label:backdrop { color: #e6e8ee; }   /* same label:backdrop leak as the tabs */
-.alpaca-commitresult { color: #8a93a6; font-size: 11px; padding: 0 12px 4px; }
-.alpaca-commitresult.ok { color: #22c55e; }
-.alpaca-commitresult.err { color: #ef4444; }
 
 /* --- statuses, labels --- */
 .alpaca-status-dot { min-width: 8px; min-height: 8px; border-radius: 4px; background: #5a6375; }
 .alpaca-status-dot.ok { background: #22c55e; }
 .alpaca-status-dot.warn { background: #f2c94c; }
+.alpaca-status-dot.err { background: #ef4444; }
+.alpaca-status-spin { min-width: 10px; min-height: 10px; }
 .alpaca-mono { font-family: "JetBrains Mono", monospace; font-size: 13px; }
 
 /* --- editor --- */

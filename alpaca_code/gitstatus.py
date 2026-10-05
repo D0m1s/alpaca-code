@@ -173,6 +173,38 @@ def commit(root: str, paths: list[str], msg: str) -> tuple[bool, str]:
     first = (r.stdout or "").strip().splitlines()
     return (True, (first[0] if first else "Committed.")[:400])
 
+def ahead(root: str) -> int:
+    """Local commits not on the upstream (`rev-list --count @{u}..HEAD`).
+    No upstream / not a repo / timeouts → 0 (push() handles the -u bootstrap).
+    Cheap (--count) and called from refresh() only, never per toggle-click."""
+    if not root or not os.path.isdir(os.path.join(root, ".git")):
+        return 0
+    try:
+        r = subprocess.run(["git", "-C", root, "rev-list", "--count", "@{upstream}..HEAD"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    try:
+        return int((r.stdout or "").strip()) if r.returncode == 0 else 0
+    except ValueError:
+        return 0
+
+def commit_then_push(root: str, paths: list[str], msg: str,
+                     phase=None) -> tuple[bool, str, bool, str]:
+    """Commit exactly `paths`, then — only when the commit landed — push.
+    Empty `paths` = push-only (the auto-detect button rule: a checked nothing
+    with unpushed commits). `phase(kind, text)` fires once mid-flight just
+    before the push (worker-thread context; the UI marshals to the mainloop).
+    Returns (commit_ok, commit_text, push_ok, push_text); push fields are
+    (False, "") when no push was attempted."""
+    cok, ctext = commit(root, paths, msg) if paths else (True, "")
+    if not cok:
+        return (False, ctext, False, "")
+    if paths and phase:
+        phase("busy", "Pushing…")
+    pok, ptext = push(root)
+    return (True, ctext, pok, ptext)
+
 def push(root: str) -> tuple[bool, str]:
     """`git push`; the no-upstream case retries `git push -u origin <branch>`.
     GIT_TERMINAL_PROMPT=0 + timeout — a credential prompt can never hang the UI.
