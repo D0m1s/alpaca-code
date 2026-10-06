@@ -193,6 +193,31 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`
   label (`.alpaca-tabname`/`.alpaca-panetabname`); symmetric padding does nothing (the
   centered box shifts with it) and GtkLabel ignores Pango rise attrs — measured: ink
   offsets +1.82/+1.33 → +0.32/−0.17.
+- Tree-icon vertical centering (file browser): pixbuf cells center on the line box while
+  glyph ink hangs ~1px below → every filetype icon (docs, chips, folders) read ~1px high
+  vs filenames at the 22px row. Fix = bottom-pin via `yalign` on the three pixbuf
+  renderers (filetree.py, set BEFORE inserts — cell props cache at insert, so post-set
+  no-ops: measured twice): chips/symbolic 1.0 (+1px, 2px slack), chevron 2/3 (+1px, stays
+  flush with folders). Shift law measured at slack 10: shift = slack·(yalign−0.5) exact on
+  both `pixbuf` and `icon-name` render paths. Post-fix modes −0.04/+0.12 (was −1.04/−0.88).
+  Re-measure if row height ever changes (slack = row − 2·ypad − 16).
+- THE centering law (recurring class, every complaint traces here): each render channel
+  centers a different BOX than the eye reads — the eye anchors on the dense-ink band
+  (x-height for lowercase, caps band for all-caps) plus the baseline (text baseline = row
+  top+15 exact in 22px tree rows). Channels: Pango labels/tabs (ink hangs — CSS
+  padding-bottom 3px, above), pixbuf cells (yalign, above), cairo chip letters (badges
+  `_render`: ink-box centering pulls LOWERCASE labels ~1.5px high because the descender-
+  tipped box drags the average — fix centers the bowl band instead, baseline canvas 11 =
+  row_top+15; caps labels are already exact since caps = the band; measured py −1.5→≤0.15).
+- CHANGES-panel gaps (2026-10-05, gitview.py): WORKSPACE sets xpad 2 on every tree cell —
+  4px art-to-art; CHANGES' chip/badge/name cells had none (0-2px gaps) and the blank
+  chevron/chip slots in dir/Select-all rows floated the checkbox ~20-35px. Fix = xpad 2
+  everywhere + chip/badge cells PER-ROW INVISIBLE on rows without chips (bind `visible`;
+  this GTK drops a hidden cell's width per row — probe: hidden row's text sat 20px left
+  of its twins). Measured after (column-run profile of replica shots): dir/file/Select-all
+  gaps read 8-10px with tile edges eaten ~2px per side by antialias thresholds = the same
+  4px WORKSPACE shows; py-badge→name parity 6 vs 6-9; chip bottom-pins −1px vs WORKSPACE.
+  Amber-chip edges drop below sat thresholds before blue tiles — color, not layout.
 - GtkSourceView style schemes: languages address styles through the `def:*` namespace
   (lang defs say `<style name="keyword" map-to="def:keyword"/>` and the render path calls
   `get_style("def:keyword")`) — defining only bare names (`keyword`) leaves ALL tokens in

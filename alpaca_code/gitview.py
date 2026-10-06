@@ -38,8 +38,9 @@ class ChangesView(Gtk.Box):
 
         self.store = Gtk.TreeStore(str, str, str, str,            # name, rel, kind, letter
                                    GdkPixbuf.Pixbuf, GdkPixbuf.Pixbuf, GdkPixbuf.Pixbuf,  # chev, badge, chip
-                                   bool, bool, bool, bool, bool)          # checked, inconsist, chev, letter, toggle
-        # (letters bind the VALUE: blank pixbuf when absent — slots must not free.)
+                                   bool, bool, bool, bool, bool)          # checked, inconsist, badge-vis, chip-vis, toggle-vis
+        # (letters bind the VALUE: blank pixbuf when absent — slots must not free.
+        #  badge-vis/chip-vis are the per-row VISIBILITY lenses above, set in _fill.)
         self.view = HoverTree(model=self.store, headers_visible=False)
         self.view.set_activate_on_single_click(True)
         self.view.set_property("show-expanders", False)
@@ -50,12 +51,27 @@ class ChangesView(Gtk.Box):
         # into the tree column so level indentation shifts the whole strip
         # together (probe_gtvc: only col-0 cell areas indent); store cols
         # untouched so every toggle/sync lens above keeps its index.
+        # Gap law (2026-10-05): WORKSPACE sets xpad 2 on every cell — 4px
+        # art-to-art; CHANGES' let/bad/name cells had none (gaps 0-2px) and the
+        # blank slots in dir/Select-all rows floated the checkbox ~20-35px.
+        # xpad 2 everywhere = the uniform 4px (user ruling), and let/bad go
+        # PER-ROW INVISIBLE on rows without chips — this GTK drops a hidden
+        # cell's width per row (probe: hidden row's text sat 20px left of its
+        # twins), so the checkbox hugs folder/label at the same 4px.
         cell_name = Gtk.CellRendererText(); cell_name.set_property("ypad", 2)
         cell_name.set_property("ellipsize", Pango.EllipsizeMode.MIDDLE)
+        cell_name.set_property("xpad", 2)    # WORKSPACE parity: ink at art+4
         chev = Gtk.CellRendererPixbuf();  chev.set_property("ypad", 2)
         chev.set_property("xpad", 2)             # 12px art + 2px pad = 16: the toggle slot starts after it
+        chev.set_property("yalign", 2.0 / 3.0)   # bottom-pin: same law as filetree's chevron
         bad = Gtk.CellRendererPixbuf();  bad.set_property("ypad", 2)
         let = Gtk.CellRendererPixbuf();  let.set_property("ypad", 2)
+        # pixbuf cells center glyphs ~1px high vs text ink (the filetree bug, now
+        # fixed there): bottom-pin chips +1px at the 22px row, before any insert.
+        bad.set_property("xpad", 2)
+        bad.set_property("yalign", 1.0)
+        let.set_property("xpad", 2)
+        let.set_property("yalign", 1.0)
         tog = Gtk.CellRendererToggle(); tog.set_property("activatable", False)
         col = Gtk.TreeViewColumn()               # kwargs form raises on this build
         col.pack_start(chev, False)
@@ -66,8 +82,10 @@ class ChangesView(Gtk.Box):
         col.add_attribute(tog, "visible", 11)
         col.pack_start(let, False)
         col.add_attribute(let, "pixbuf", 6)
+        col.add_attribute(let, "visible", 10)    # chip only on file rows (per-row collapse)
         col.pack_start(bad, False)
         col.add_attribute(bad, "pixbuf", 5)
+        col.add_attribute(bad, "visible", 9)     # folder/file badge; off on masthead rows
         col.pack_start(cell_name, True)
         col.add_attribute(cell_name, "text", 0)
         col.set_expand(True)   # spec §29: name column absorbs the spare width —
@@ -174,7 +192,7 @@ class ChangesView(Gtk.Box):
                 name, rel, kind, letter,
                 badges.chevron_pixbuf(False) if is_dir else badges.blank_pixbuf(),
                 badge or badges.blank_pixbuf(), lpix,
-                False, False, is_dir, bool(letter), True])
+                False, False, True, not is_dir, True])   # badge-vis (files+dirs), chip-vis (file rows: a letterless file keeps its slot)
             if is_dir:
                 iters[rel] = it
         self._sync()

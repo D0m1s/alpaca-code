@@ -136,6 +136,13 @@ class FileBrowser(Gtk.Box):
         pix_chev = Gtk.CellRendererPixbuf(); pix_chev.set_property("xpad", 2); pix_chev.set_property("ypad", 2)
         pix_badge = Gtk.CellRendererPixbuf(); pix_badge.set_property("xpad", 2); pix_badge.set_property("ypad", 2)
         pix_icon = Gtk.CellRendererPixbuf(); pix_icon.set_property("xpad", 2); pix_icon.set_property("ypad", 2)
+        # pixbuf cells center on the line box but glyph ink hangs ~1px below it
+        # (same law as the tab labels) — bottom-pin the icons +1px at the 22px
+        # row (slack 2 on 16px art): yalign set before inserts, props cache there.
+        # chevron rides 4/6 so dir rows stay flush with folders. Measured 2026-10-05.
+        pix_chev.set_property("yalign", 2.0 / 3.0)
+        pix_badge.set_property("yalign", 1.0)
+        pix_icon.set_property("yalign", 1.0)
         # rows measure cell props at insert and cache: text ypad 2 + 13px CSS font ≈ the 22px row (VS Code density)
         cell = Gtk.CellRendererText(); cell.set_property("xpad", 2); cell.set_property("ypad", 2)
         cell.set_property("ellipsize", Pango.EllipsizeMode.MIDDLE)  # before any insert — props cache at insert; tree min must not follow the longest name

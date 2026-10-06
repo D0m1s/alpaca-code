@@ -145,7 +145,15 @@ def _render(spec: tuple) -> GdkPixbuf.Pixbuf | None:
             c.set_font_size(size)
             ex = c.text_extents(label)
         tw, th = ex[2], ex[3]
-        c.move_to((S - tw) / 2 - ex[0], (S - th) / 2 - ex[1])   # ink-box centering
+        if label.islower():
+            # lowercase labels: center the BOWL BAND (x-height) at S/2 and let
+            # tails hang below — ink-box centering pulls bowls ~1.5px high
+            # (descender-tipped box), measured on py chips vs filenames.
+            xh = c.text_extents("x")[3]
+            base_y = round(S / 2 + xh / 2)   # 11 at SIZE 16 — the row's text baseline
+            c.move_to((S - tw) / 2 - ex[0], base_y)
+        else:
+            c.move_to((S - tw) / 2 - ex[0], (S - th) / 2 - ex[1])   # ink-box centering (caps letters = the band exactly)
         c.show_text(label)
     pix = _pixbuf_from_surface(surf)
     _PCS[spec] = pix
