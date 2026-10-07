@@ -300,7 +300,35 @@ def test_gitstatus_ahead_and_commit_then_push():
         cok, ctext, pok, ptext = gitstatus.commit_then_push(t, ["missing.py"], "x", None)
         assert not cok and not pok and ctext and ptext == ""
 
+@register
+def test_gitstatus_branch_menu_ops():
+    from alpaca_code import gitstatus
+    with tempfile.TemporaryDirectory() as t:
+        assert gitstatus.branches(t) is None            # not a repo
+        g = _gitrepo(t)
+        open(t + "/f.py", "w").write("a\n")
+        g("add", "."); g("commit", "-m", "one")
+        first = gitstatus.branches(t)[0]                # default branch name is config-dependent
+        assert gitstatus.branches(t) == [first]
+        g("checkout", "-q", "-b", "feature")
+        assert gitstatus.branches(t) == sorted([first, "feature"])
+        # switch: checkout an existing branch
+        ok, text = gitstatus.switch(t, first)
+        assert ok, text
+        assert gitstatus.branch_of(t) == first
+        assert gitstatus.switch(t, "no-such")[0] is False
+        # create_switch: checkout -b from HEAD, create AND switch
+        ok, text = gitstatus.create_switch(t, "wip")
+        assert ok, text
+        assert gitstatus.branch_of(t) == "wip"
+        assert "wip" in gitstatus.branches(t)
+        assert gitstatus.create_switch(t, "wip")[0] is False   # exists → git error text
+        assert gitstatus.switch(t, "")[0] is False             # guards, no git call
+        assert gitstatus.switch(t, "-evil")[0] is False
+        assert gitstatus.create_switch(t, "-x")[0] is False
+
 # --- filetree (Task 5) -----------------------------------------------------------
+
 def _tree(tmp):
     os.makedirs(tmp + "/src/components")
     os.makedirs(tmp + "/hooks")

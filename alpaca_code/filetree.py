@@ -17,6 +17,7 @@ ge.require("Graphene", ("1.0",))
 from gi.repository import GdkPixbuf, Gdk, Gio, GLib, Gtk, Pango, Graphene
 
 from . import badges
+from .branchmenu import BranchMenu
 from .treehover import HoverTree
 from .gitview import ChangesView
 
@@ -175,12 +176,6 @@ class FileBrowser(Gtk.Box):
 
         bar = Gtk.Box(spacing=6, margin_start=14, margin_end=12, margin_top=0, margin_bottom=0)
         bar.set_css_classes(["alpaca-statusbar"])
-        self.branch_icon = Gtk.Image()
-        bpix = badges.icon("branch.svg")
-        if bpix:
-            self.branch_icon.set_from_paintable(bpix)
-        self.branch_icon.set_visible(False)
-        self.branch_label = Gtk.Label(label="", ellipsize=Pango.EllipsizeMode.MIDDLE)  # long branch names must not widen the bar
         self.dot = Gtk.Box(); self.dot.set_size_request(8, 8); self.dot.set_css_classes(["alpaca-status-dot"])
         self.dot.set_valign(Gtk.Align.CENTER); self.dot.set_visible(False)
         self.spin = Gtk.Spinner(); self.spin.set_size_request(10, 10)
@@ -188,9 +183,10 @@ class FileBrowser(Gtk.Box):
         self.spin.set_valign(Gtk.Align.CENTER); self.spin.set_visible(False)
         self.git_label = Gtk.Label(label="", ellipsize=Pango.EllipsizeMode.MIDDLE); self.git_label.set_visible(False)
         self.count_label = Gtk.Label(label="")
-        pair = Gtk.Box(spacing=3)             # git logo ↔ branch name ride tight; bar spacing stays 6 for the rest
-        pair.append(self.branch_icon); pair.append(self.branch_label)
-        bar.append(pair)
+        self.branchbtn = BranchMenu()            # icon + name + ▾ pill; popover in branchmenu.py
+        self.branchbtn.on_status = self.show_git_status
+        self.branchbtn.allow = lambda: not self._git_busy
+        bar.append(self.branchbtn)
         bar.append(self.dot)
         bar.append(self.spin)
         bar.append(self.git_label)
@@ -296,7 +292,8 @@ class FileBrowser(Gtk.Box):
         if self._git_busy:
             return                           # commit/push flight owns the row (pulse re-syncs)
         is_git = branch is not None
-        for w in (self.branch_icon, self.branch_label, self.dot, self.spin, self.git_label):
+        self.branchbtn.update(branch if is_git else None)
+        for w in (self.dot, self.spin, self.git_label):
             w.set_visible(is_git)
         self.spin.set_visible(False)         # idle state: the dot, never the spinner
         self.ch_btn.set_visible(is_git)
@@ -304,7 +301,6 @@ class FileBrowser(Gtk.Box):
             self._set_mode("tree")    # repo vanished (HEAD deleted) while reading it
         if not is_git:
             return
-        self.branch_label.set_text(branch)
         self.git_label.set_tooltip_text("")   # a past err's tooltip must not outlive the row's re-sync
         # count = porcelain rows (untracked listed per-file, -z -uall) — same
         # number the changes view shows; one git call feeds both.

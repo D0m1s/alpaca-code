@@ -25,6 +25,8 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`
   - `filetree.py` — lazy tree, dir monitors, search, skip-list
   - `state.py` — `~/.config/alpaca-code/state.json` persistence
   - `runctl.py` `gitstatus.py` — pure (no gi imports); safe to test directly
+  - `branchmenu.py` — status-bar branch pill: popover menu (Switch Branch with
+    hover submenu from the right / New Branch entry → `checkout -b` from HEAD)
   - `gi_env.py` — `require(ns, versions)`; must run before any `gi.repository` import
   - `badges.py` — icon/chip factory: `icon(name)` → vector paintables (widgets), pixbuf path (tree cells + cairo text chips)
   - `vector.py` — SVG → `Gsk` paintables for widget icons; one parse per file, no pixbuf in the loop
@@ -138,6 +140,13 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`
   state-invariant only with margin 0 present). `_TabDistributor.CHROME` = 62 (no margin
   px) — without it the req overshoots shares and GTK falls back to unequal min-based
   allocation (measured).
+- Breeze paints popovers via the `popover > contents` child node (bg + 1px
+  #4c4e51 border + tail + 4px padding) — styling the `popover` node itself
+  paints a DOUBLE frame (measured 17,23,35 ring around 28,31,34). Leave
+  popovers bare; per-item classes (`.alpaca-branchitem`) are the styling
+  surface. Label buttons must size their child labels' natural width (never
+  max_width_chars/ellipsize inside a popover list — natural-width collapse
+  shrink the popover to "…").
 - Menubar hover pill: paint = header(34) − the button's own v-margins; Breeze's 16px
   child v-margin (= 18px paint) inflates if padding/min-height grow (bar 34→36/38,
   measured). Grow the paint by SHRINKING the child v-margin: paint tracks the button's
@@ -249,6 +258,17 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`
   (~1.5–2.2× the app's 1×) — anchor each crop on a known value ("File" label ≈26px,
   header 46px) before converting its numbers.
 - No programmatic toplevel resize in GTK4; default splits are `set_position(594)` / `(1181)`.
+- `grab_focus()` on this build (4.22.5) SELECTS ALL when the entry has text and wasn't
+  already its root's focus (probe: (0,11) on 'hello'); re-grabs of an already-focused
+  widget short-circuit → no re-select. Two consequences (branch entry, measured):
+  never hand `grab_focus` to `GLib.idle_add` (it returns True → re-arms FOREVER and
+  re-grabs between keystrokes), and clear the entry before the one grab so no grab
+  ever lands on text (stale reopen text would otherwise pre-select).
+- Popovers are css-DOM CHILDREN of their `set_parent` widget: app USER-tier
+  `X label` descendant selectors PIERCE them (pill's `.alpaca-open label`
+  out-specced `.alpaca-hint` (0,2,1 vs 0,1,0) → hint rendered bright). Law:
+  open/hover text color rides ON the button (label-inherit); every popover child
+  label carries its own explicit rule. Breeze paints no popover label colors.
 
 ## Verifying widget behavior
 

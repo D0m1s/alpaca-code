@@ -143,6 +143,29 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
 .alpaca-statusbar label { color: #8a93a6; font-size: 12px; }
 .alpaca-statusbar > label:last-child { color: #5a6375; }
 
+/* --- branch pill v2 (2026-10-06, user mockup): DEFAULT IS THE PLAIN STATUS ROW
+   (revert) — the raised pill is hover/open only; no ▾ arrow in any state --- */
+.alpaca-branchbtn { background: transparent; border: none; border-radius: 6px;
+                    min-height: 0; padding: 1px 8px; color: #8a93a6; }
+/* open/hover text color rides ON THE BUTTON: label-inherit. The old
+   `branchbtn.alpaca-open label` descendant selectors pierced the popovers
+   (set_parent makes them css children of the pill) and out-specified
+   .alpaca-hint/.alpaca-branchitem at the same USER tier — hint rendered
+   #e6e8ee bright (measured 227,229,235). Every popover label carries its own
+   explicit rule → inherits can't reach them, only the pill's own strip label. */
+.alpaca-branchbtn:hover, .alpaca-branchbtn.alpaca-open { background: #1c2431; color: #e6e8ee; }
+.alpaca-branchbtn label:backdrop { color: #8a93a6; }   /* tabs' label:backdrop leak law */
+/* popovers: Breeze paints popover > contents (bg + #4c4e51 border + tail) —
+   styling the popover node too paints a double frame (measured 17,23,35 ring
+   around 28,31,34); so the popovers go bare and only rows/items carry css */
+.alpaca-branchitem { background: transparent; border: none; border-radius: 6px;
+                     min-height: 0; padding: 4px 10px; color: #8a93a6; font-size: 13px; }
+.alpaca-branchitem:hover { background: #1c2230; color: #e6e8ee; }
+.alpaca-branchitem.alpaca-on { color: #e6e8ee; }
+.alpaca-branchitem label:backdrop { color: #8a93a6; }
+.alpaca-branchitem.alpaca-on label:backdrop { color: #e6e8ee; }
+.alpaca-hint { color: #8a93a6; font-size: 12px; font-style: italic; }
+
 /* --- changes view: commit bar (spec §6) --- */
 /* no border-top: the bar's 6px top margin air is the separator — a 1px rule
    here paints a stray hairline directly above the message input */

@@ -16,6 +16,46 @@ def branch_of(root: str) -> str | None:
         return content[len("ref: refs/heads/"):]
     return None  # detached HEAD / worktree pointer → hide branch widget
 
+def branches(root: str) -> list[str] | None:
+    """Local branch names, refname-sorted; None outside a repo / no git /
+    timeout. Runs on menu open — sync with a timeout like the status row."""
+    if not root or not os.path.isdir(os.path.join(root, ".git")):
+        return None
+    try:
+        r = subprocess.run(["git", "-C", root, "for-each-ref", "refs/heads",
+                            "--sort=refname", "--format=%(refname:short)"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    return [l for l in r.stdout.splitlines() if l]
+
+def _checkout(root: str, args: list[str]) -> tuple[bool, str]:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        r = subprocess.run(["git", "-C", root, *args], env=env,
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return (False, f"git checkout failed: {e}")
+    if r.returncode != 0:
+        return (False, ((r.stderr or r.stdout or "git checkout failed").strip())[:400])
+    return (True, "")
+
+def switch(root: str, name: str) -> tuple[bool, str]:
+    if not name or name.startswith("-"):
+        return (False, "Bad branch name")
+    return _checkout(root, ["checkout", name])
+
+def create_switch(root: str, name: str) -> tuple[bool, str]:
+    """`checkout -b` from HEAD (create + switch, user ruling). Git validates
+    the name; the leading-dash guard keeps a "-force" request from being
+    parsed as flags."""
+    name = (name or "").strip()
+    if not name or name.startswith("-"):
+        return (False, "Bad branch name")
+    return _checkout(root, ["checkout", "-b", name])
+
 def status(root: str) -> int | None:
     """Count of dirty paths (`git status --porcelain`); None outside a repo /
     when git is missing or times out. Calls must be cheap-and-off-thread enough —
