@@ -93,6 +93,16 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
   is the twin of rust `vector::icon` — the old rust pixel-path
   `badges::widget_icon` was deleted by the T2 swap (tree cells + letter chips
   stay pixbuf by the frozen-art ruling).
+- `seti.rs` + `assets/icons/seti-*.svg` (2026-10-09 seti swap) — file-type badges from
+  jesseweed/seti-ui: per-rule monochrome glyphs baked one-shot from
+  mapping.less (rule color flattened in, `<style>`/class fills stripped — CSS
+  fill beats baked attrs; gradients flatten to the rule color — seti renders
+  these as one-color font glyphs). `icon_for(name)` replays mapping.less's
+  cascade (LAST matching rule wins; ext rules ci, name rules authored-case,
+  partial = substring); no match = `seti-default-white.svg`. Consumed ONLY
+  through badges' pixbuf path (tree cells, tab badges, CHANGES rows) — never
+  vector.rs's art-walker. Regeneration: rerun the one-shot converter; python
+  side untouched (still text chips).
 - Timers that capture a component's Sender: `glib::timeout_add_local` — plain
   `timeout_add` requires Send and TreePath-bearing messages (filetree) are not.
 

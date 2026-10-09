@@ -874,13 +874,14 @@ mod tests {
 
     #[test]
     fn strip_icons_law() {
-        // unknown-ext / ext-less files fall back to the WORKSPACE's symbolic
-        // icon (filetree.rs push_row law) — this is the no-icon bug: .rs rows
-        // showed a bare blank slot in CHANGES while WORKSPACE showed a page icon
-        assert_eq!(strip_icons("editor.rs", false), (None, Some("text-x-generic-symbolic")));
-        assert_eq!(strip_icons("LICENSE", false), (None, Some("text-x-generic-symbolic")));
-        // chip art → no fallback
-        assert_eq!(strip_icons("editor.py", false).1, None);
+        // seti swap (2026-10-09): every file maps to a baked glyph (seti.rs cascade,
+        // default = seti-default-white.svg) — "no-icon" only happens when the
+        // svg rasterize FAILS, which is what the symbolic fallback guards.
+        // This is the old no-icon bug's inverse: .rs rows now badge themselves.
+        assert_eq!(strip_icons("editor.rs", false).1, None);
+        assert_eq!(strip_icons("editor.rs", false).0.is_some(), true);
+        assert_eq!(strip_icons("LICENSE", false).1, None); // seti license glyph, not fallback
+        assert_eq!(strip_icons("whatever.zzz", false).0.is_some(), true); // default-white
         // dirs: folder art → no fallback
         assert_eq!(strip_icons("src", true).1, None);
     }
