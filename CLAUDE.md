@@ -14,6 +14,88 @@ python3 tests/responsive_probe.py  # no-clip min-widths; needs a display (prints
 
 System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`. No pip deps.
 
+## Rust port (stage 1)
+
+Parallel rewrite under `alpaca-code-rs/` (relm4 0.11 + gtk4 0.11 v4_22,
+sourceview5 0.11, vte4 0.10, glib/gio 0.22, gdk-pixbuf 0.22). Python app stays
+the UI reference; python code untouched.
+- **S3 (pixel polish) landed 2026-10-09 — S1/S2/S3 all complete.** The waiver
+  kept S3's work uncommitted; the ledger
+  `.superpowers/sdd/2026-10-08-rust-port-stage3/progress.md` is the record.
+  Wayland frame-callback freeze (measured, this stage): after a KWin restart,
+  surfaces get no frame callbacks until touched, so GTK allocations FREEZE at
+  the startup paint (~0.9-2.2s) — positional/live geometry is unreachable
+  there; python's `tests/responsive_probe.py` also inherits this (prints skip).
+  Live probes need the running display before the freeze, or never restart KWin.
+
+```
+cargo test --manifest-path alpaca-code-rs/Cargo.toml   # displayless — THE test command
+cargo build --manifest-path alpaca-code-rs/Cargo.toml  # cargo test does NOT refresh the runnable bin
+alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
+```
+
+- App-id `io.alpaca.rs`. Same `~/.config/alpaca-code/state.json` schema as python;
+  both apps read/write it sequentially (never launch both on the same project
+  concurrently and toggle tabs — last writer wins, that's the shared-file contract).
+- relm4 idioms (see src comments): `#[relm4::component(pub)]` (pub attr required,
+  else E0446), init epilogue `let widgets = view_output!();` then `ComponentParts`
+  (no `root` field), `T::builder().launch(x).connect_receiver(cb)` — connect_receiver
+  RETURNS the Controller (no detach); outputs carry state (App can't query panes
+  synchronously); `ComponentSender<C>` is generic over the COMPONENT.
+- Widget ports must be probed live before trust: the respawn-band bug (spawn_pane
+  clearing the budget every spawn — python keeps the clear in `_ensure_current`, pane
+  resurrection forever) shipped past 21 green unit tests because the bookkeeping is
+  widget-layer. Kill the pane child externally and count resurrections via
+  `pgrep -P <app>`; that is the pane-exit path's only live gate.
+- Rust probe envs (PROBE-ONLY chains in app.rs, never run with env unset):
+  `ALPACA_PROBE_S2=<dir>` (workspace chain) and `ALPACA_PROBE_S3=<dir>` (hpane
+  width-step chain + tab strip). S3's wrapper arms a 60ms root `queue_draw`
+  damage keeper because an occluded/late-mapped Wayland surface gets no frame
+  callbacks and its allocations freeze after the first paint (see S3 row
+  above); it prints `PROBE step N`/tick traces, and the probe script kills the
+  process at `PROBE S3 DONE` — the timer is never disarmed. Step timers each
+  BREAK after firing (no idle re-arm hazard).
+- `glib::TimeoutSource::…`/`timeout_add` in ms; spawn flags
+  `SEARCH_PATH | SEARCH_PATH_FROM_ENVP`; env-marker override list
+  (`runctl::pane_environ`, 9 markers) must stay in sync with `runctl.pane_environ` —
+  both `runctl`s are the single source for pane env (marker drift = transcript-less
+  child sessions).
+
+## Rust modules (alpaca-code-rs/src/, S2 git layer + S3 vector rows added)
+
+- `gitstatus.rs` — pure git porcelain/diff parser + subprocess callers
+  (`branch_of/branches/switch/create_switch/changes/parse_*/diff_for/commit/ahead/
+  commit_then_push/group_tree`, git_run timeouts 5–120s).
+- `treehover.rs` — HoverTree + press capture + toggle hit-test (press_xy, toggle_hit).
+- `gitview.rs` — CHANGES view: tree + checkbox column + Select-all row + commit bar;
+  CommitClicked validation guards + flight (Phase/Landed). apply() skips the
+  store rebuild when the porcelain is identical and Filter() when the needle
+  is unchanged — both are LOAD-BEARING: without them the 2s probe rebuilds a
+  big repo's store every tick (31k rows ≈2.3s UI-thread each, misiuscode's
+  unignored target/ measured it) and the mainloop saturates = hard hang.
+- `branchmenu.rs` — branch status-bar pill + Switch/New-Branch hover popover
+  (80/250ms hysteresis timers, generation-cancelled).
+- `gitpanel.rs` — WORKSPACE/CHANGES mode card: shared search entry + status row
+  (branch pill, dot, spinner, count) + 2s live probe; hosts file tree, changes
+  view, branch pill.
+- `editor.rs` (S2 additions) — diff pages: `OpenDiff` side-by-side tinted mono
+  views (cross-linked scroll via allocation-notify re-link), `SaveOpen` flush
+  chain, `Flushed` ack.
+- `app.rs` (S2 additions) — Commit → `pending_commit` → SaveOpen → Flushed →
+  StartCommit; `notify::is-active` → gitpanel RefreshGit.
+- `vector.rs` (S1) — SVG → `VecIcon` paintable: gsk::Path::parse of the d
+  attributes; art-only XML walker (`walk`: svg/g/path/rect/circle, no
+  `<polygon>` — a golden count test fails visibly if art ever uses it);
+  `icon(name)` caches the PARSED shapes (raw walk), not VecIcon objects —
+  glib wrappers + gsk::Path are !Send so a static Mutex can't hold them;
+  each call rebuilds a cheap VecIcon over the shared parse. Widget icons ride
+  the paintable: python's `badges.icon(name)` (badges.py:24, VecIcon | None)
+  is the twin of rust `vector::icon` — the old rust pixel-path
+  `badges::widget_icon` was deleted by the T2 swap (tree cells + letter chips
+  stay pixbuf by the frozen-art ruling).
+- Timers that capture a component's Sender: `glib::timeout_add_local` — plain
+  `timeout_add` requires Send and TreePath-bearing messages (filetree) are not.
+
 ## Layout
 
 - `bin/alpaca-code` — launcher (arg → `main.run`)
@@ -27,6 +109,7 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`
   - `runctl.py` `gitstatus.py` — pure (no gi imports); safe to test directly
   - `branchmenu.py` — status-bar branch pill: popover menu (Switch Branch with
     hover submenu from the right / New Branch entry → `checkout -b` from HEAD)
+  - `gitview.py` — CHANGES view: checkbox rows + Select-all + commit bar (S2)
   - `gi_env.py` — `require(ns, versions)`; must run before any `gi.repository` import
   - `badges.py` — icon/chip factory: `icon(name)` → vector paintables (widgets), pixbuf path (tree cells + cairo text chips)
   - `vector.py` — SVG → `Gsk` paintables for widget icons; one parse per file, no pixbuf in the loop
@@ -111,7 +194,7 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`
   minimum unless the nb has `hexpand=True` (900px wrap → 280px nb, measured).
   Fixes in editor.py: `hexpand` on the nb + `_TabDistributor` (BoxLayout subclass wrapping
   the nb) sets each tab-name label's min from the strip's live allocation inside its
-  do_allocate — every tab = equal share `avail/n − CHROME(91)` capped at natural, recomputed
+  do_allocate — every tab = equal share `avail/n − CHROME(62)` capped at natural, recomputed
   on (width, n) change only. No fixed floor: one below the share re-enters scroll mode.
   Pre-map name floor stays `set_size_request(96, -1)` (GTK4 GtkLabel has no min-width-chars).
   Pane-tab labels have no ellipsize → min = full text, never starve.
