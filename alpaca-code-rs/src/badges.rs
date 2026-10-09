@@ -3,7 +3,12 @@
 //! WIDGET icons live in vector.rs (VecIcon paintables, S3); TREE-CELL /
 //! tab-badge pixbufs are still rasterized here — CellRendererPixbuf has no
 //! paintable property (CLAUDE.md).
+//!
+//! FILE-TYPE badges come from seti.rs (baked seti-ui glyphs, one per ext rule)
+//! since the 2026-10-09 seti swap; the old cairo text-chip pipeline stays only for the
+//! gitview status letter tiles.
 
+use crate::seti;
 use gdk_pixbuf::prelude::*;
 use gdk_pixbuf::{Colorspace, Pixbuf, PixbufLoader};
 use gtk4::cairo::{Context, FontSlant, Format, FontWeight, ImageSurface};
@@ -11,54 +16,6 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 pub const SIZE: i32 = 16;
-
-/// ext → (label, label color, chip color or None). chip None = bare colored glyph.
-const EXT_BADGE: &[(&str, (&str, &str, Option<&str>))] = &[
-    ("ts", ("TS", "#ffffff", Some("#2f80ed"))),
-    ("tsx", ("TS", "#ffffff", Some("#2f80ed"))),
-    ("d.ts", ("TS", "#ffffff", Some("#2f80ed"))),
-    ("js", ("JS", "#f2c94c", None)),
-    ("jsx", ("JS", "#f2c94c", None)),
-    ("mjs", ("JS", "#f2c94c", None)),
-    ("cjs", ("JS", "#f2c94c", None)),
-    ("css", ("#", "#4d8ef0", None)),
-    ("scss", ("#", "#4d8ef0", None)),
-    ("less", ("#", "#4d8ef0", None)),
-    ("json", ("{ }", "#f2c94c", None)),
-    ("md", ("MD", "#2f80ed", None)),
-    ("markdown", ("MD", "#2f80ed", None)),
-    ("py", ("py", "#4d8ef0", None)),
-    ("pyi", ("py", "#4d8ef0", None)),
-    ("html", ("<>", "#e06c75", None)),
-    ("xml", ("<>", "#4ec9b0", None)),
-    ("yml", ("Y", "#f2c94c", None)),
-    ("yaml", ("Y", "#f2c94c", None)),
-    ("txt", ("≡", "#8a93a6", None)),
-];
-
-/// (label, color, chip-or-None) for the file's extension, None for dirs/unknowns.
-pub fn for_file(
-    name: &str,
-    is_dir: bool,
-) -> Option<(&'static str, &'static str, Option<&'static str>)> {
-    if is_dir {
-        return None;
-    }
-    let ext = ext_of(name);
-    EXT_BADGE
-        .iter()
-        .find(|(e, _)| *e == ext.as_str())
-        .map(|(_, spec)| *spec)
-}
-
-/// os.path.splitext(name)[1].lower().lstrip(".") — a leading-dot filename
-/// (".hidden") counts as extension-less, as does a trailing lone dot.
-fn ext_of(name: &str) -> String {
-    let base = name.strip_prefix('.').unwrap_or(name);
-    base.rsplit_once('.')
-        .map(|(_, e)| e.to_ascii_lowercase())
-        .unwrap_or_default()
-}
 
 /// One rasterization per (name, size), like python's `_SVGS`. Caches the
 /// straight-alpha RGBA bytes (Pixbuf itself is !Send).
@@ -125,7 +82,7 @@ pub(crate) fn svg_data(name: &str) -> Option<&'static [u8]> {
             env!("CARGO_MANIFEST_DIR"),
             "/assets/icons/x-dim.svg"
         ))),
-        _ => None,
+        _ => seti::svg_data(name),
     }
 }
 
@@ -177,15 +134,14 @@ pub fn svg_pixbuf(name: &str, size: i32) -> Option<Pixbuf> {
     cached.as_ref().map(to_pixbuf)
 }
 
+/// File-row badge: the seti glyph for this filename (seti.rs cascade, fallback
+/// = the seti default file icon); dirs keep the chrome folder.svg. Fill colors
+/// are baked into the files — do not tint these.
 pub fn pixbuf_for(name: &str, is_dir: bool) -> Option<Pixbuf> {
     if is_dir {
         return folder_pixbuf();
     }
-    let ext = ext_of(name);
-    if ["css", "scss", "less"].contains(&ext.as_str()) {
-        return svg_pixbuf("hash.svg", SIZE); // the vector hash beats cairo text "#" at row size
-    }
-    for_file(name, false).and_then(|(l, fg, chip)| render(l, fg, chip))
+    svg_pixbuf(seti::icon_for(name), SIZE)
 }
 
 pub fn folder_pixbuf() -> Option<Pixbuf> {
@@ -347,18 +303,6 @@ fn unpremultiply(mut surf: ImageSurface) -> PixbufBytes {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn badge_table_and_exts() {
-        assert!(for_file("x.ts", false).is_some());
-        assert_eq!(for_file("x.ts", false).unwrap().1, "#ffffff"); // label color
-        assert!(for_file("x.jsx", false).unwrap().2.is_none()); // bare glyph, no chip
-        assert_eq!(for_file("a.js", false).unwrap().0, "JS");
-        assert!(for_file("somedir", true).is_none()); // dirs never get chips
-        assert!(for_file("noext", false).is_none()); // unknown ext
-        // "css" is a NAME not ext — ext-less → None
-        assert!(for_file("css", false).is_none());
-    }
 
     #[test]
     fn pixbufs_render_if_art_present() {

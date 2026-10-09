@@ -9,6 +9,7 @@ mod gitview;
 mod treehover;
 mod panes;
 mod runctl;
+mod seti;
 mod state;
 mod style;
 mod vector;

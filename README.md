@@ -1,6 +1,6 @@
 # alpaca-code
 
-A minimal GTK4 desktop editor that wraps the raw `claude` CLI. One dark window:
+A minimal GTK4 desktop editor (Rust, relm4) that wraps the raw `claude` CLI. One dark window:
 a tabbed code editor, a file browser, and a bottom console area running the real
 `claude` TUI beside an Output pane and a plain terminal.
 
@@ -24,14 +24,15 @@ a tabbed code editor, a file browser, and a bottom console area running the real
 ## Install (Arch / CachyOS)
 
 ```
-sudo pacman -S --needed gtksourceview5 vte4 python-gobject
+sudo pacman -S --needed gtksourceview5 vte4
 ```
 
 ## Run
 
 ```
-./bin/alpaca-code                 # reopen last project
-./bin/alpaca-code ~/some/project  # open a specific project
+cargo build --manifest-path alpaca-code-rs/Cargo.toml          # refresh the bin
+alpaca-code-rs/target/debug/alpaca-code-rs                 # reopen last project
+alpaca-code-rs/target/debug/alpaca-code-rs ~/some/project  # open a specific project
 ```
 
 ## Shortcuts
@@ -48,5 +49,5 @@ sudo pacman -S --needed gtksourceview5 vte4 python-gobject
 ## Tests
 
 ```
-python3 tests/test_selfcheck.py
+cargo test --manifest-path alpaca-code-rs/Cargo.toml
 ```
