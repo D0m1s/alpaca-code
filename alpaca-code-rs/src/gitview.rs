@@ -21,8 +21,24 @@ use relm4::gtk::{self, gdk_pixbuf, glib, pango, prelude::*};
 use relm4::prelude::*;
 
 use crate::badges;
+use crate::filetree::icon_of;
 use crate::gitstatus::{self, FlightOut, GitStatusKind, Rows};
 use crate::treehover::{HoverTree, toggle_hit};
+
+/// CHANGES strip icon law — WORKSPACE parity (filetree.rs push_row): chip art
+/// when the extension has a badge, else the themed symbolic fallback when it
+/// doesn't (`.rs`, no ext, …). Dirs keep folder art; blank only if that art
+/// itself failed (embedded asset — never misses).
+pub fn strip_icons(name: &str, is_dir: bool) -> (Option<gdk_pixbuf::Pixbuf>, Option<&'static str>) {
+    let art = if is_dir {
+        badges::folder_pixbuf()
+    } else {
+        badges::pixbuf_for(name, false)
+    };
+    let fallback =
+        if art.is_some() || is_dir { None } else { Some(icon_of(name, false)) };
+    (art, fallback)
+}
 
 /// python LETTER_COLOR (gitview.py:17-21) — M amber, A/U green, D red,
 /// R blue (+T typechange), C conflict red (I1).
@@ -104,6 +120,8 @@ const COL_INCONSIST: i32 = 8;
 const COL_BADGE_VIS: i32 = 9;
 const COL_CHIP_VIS: i32 = 10;
 const COL_TOG_VIS: i32 = 11;
+const COL_ICON: i32 = 12;
+const COL_ICON_VIS: i32 = 13;
 
 #[derive(Debug)]
 pub enum GitViewMsg {
@@ -173,7 +191,8 @@ impl Component for ChangesView {
     }
 
     fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        // python gitview.py:33-42 — store columns, 12 exactly
+        // python gitview.py:33-42 — store columns, 12 in python; +2 here (rust
+        // only): WORKSPACE's symbolic fallback for artless exts (filetree law)
         let store = gtk::TreeStore::new(&[
             glib::Type::STRING,                // 0 name
             glib::Type::STRING,                // 1 rel
@@ -187,6 +206,8 @@ impl Component for ChangesView {
             glib::Type::BOOL,                  // 9 badge-vis
             glib::Type::BOOL,                  // 10 chip-vis
             glib::Type::BOOL,                  // 11 toggle-vis
+            glib::Type::STRING,                // 12 symbolic icon-name (artless exts)
+            glib::Type::BOOL,                  // 13 icon-vis
         ]);
 
         let view = HoverTree::default();
@@ -241,6 +262,15 @@ impl Component for ChangesView {
         col.pack_start(&badge, false);
         col.add_attribute(&badge, "pixbuf", COL_BADGE);
         col.add_attribute(&badge, "visible", COL_BADGE_VIS);
+        // emblem fallback (filetree.rs cells): themed symbolic icon when the
+        // chip art is absent — same strip, badge hidden that row
+        let icon = gtk::CellRendererPixbuf::new();
+        icon.set_property("xpad", 2u32);
+        icon.set_property("ypad", 2u32);
+        icon.set_property("yalign", 1.0f32); // bottom-pin: same law as the badge cell
+        col.pack_start(&icon, false);
+        col.add_attribute(&icon, "icon-name", COL_ICON);
+        col.add_attribute(&icon, "visible", COL_ICON_VIS);
         col.pack_start(&name, true); // text cell LAST with expand=True — pins the strip left
         col.add_attribute(&name, "text", COL_NAME);
         col.set_expand(true);
@@ -427,6 +457,8 @@ impl ChangesView {
         badge_vis: bool,
         chip_vis: bool,
         tog_vis: bool,
+        icon_name: &str,
+        icon_vis: bool,
     ) -> gtk::TreeIter {
         let vals: Vec<(u32, &dyn glib::value::ToValue)> = vec![
             (0, &name),
@@ -441,6 +473,8 @@ impl ChangesView {
             (9, &badge_vis),
             (10, &chip_vis),
             (11, &tog_vis),
+            (12, &icon_name),
+            (13, &icon_vis),
         ];
         self.store.insert_with_values(parent, None, &vals)
     }
@@ -491,14 +525,14 @@ impl ChangesView {
         if shown.is_empty() {
             self.insert_row(
                 None, "No changes", "", "e", "", &blank, &blank, &blank, false, false, false,
-                false, false,
-            ); // cols 7-11 ALL false
+                false, false, "", false,
+            ); // cols 7-11,13 ALL false
             self.sync();
             return;
         }
         self.insert_row(
             None, "Select all", "", "s", "", &blank, &blank, &blank, false, false, false, false,
-            true,
+            true, "", false,
         ); // only toggle-vis col11 true
         // BTreeMap: parents sort before any descendant (prefix < child), so the
         // append-parent lookups and the expand pass below see ancestors before
@@ -506,11 +540,8 @@ impl ChangesView {
         let mut iters: BTreeMap<String, gtk::TreeIter> = BTreeMap::new();
         for t in gitstatus::group_tree(shown) {
             let is_dir = t.kind == "d";
-            let badge = if is_dir {
-                badges::folder_pixbuf().unwrap_or_else(badges::blank_pixbuf)
-            } else {
-                badges::pixbuf_for(&t.name, false).unwrap_or_else(badges::blank_pixbuf)
-            };
+            let (art, fallback) = strip_icons(&t.name, is_dir);
+            let badge = art.clone().unwrap_or_else(badges::blank_pixbuf);
             let lpix = if !t.letter.is_empty() {
                 badges::letter_pixbuf(&t.letter, letter_color(&t.letter))
                     .unwrap_or_else(badges::blank_pixbuf)
@@ -526,7 +557,7 @@ impl ChangesView {
                 .rel
                 .rsplit_once('/')
                 .and_then(|(dir, _)| iters.get(dir).cloned());
-            let badge_vis = true; // badge-vis (files+dirs)
+            let badge_vis = art.is_some(); // badge-vis; artless rows show the fallback instead
             let chip_vis = !is_dir; // chip-vis (file rows: a letterless file keeps its slot)
             let tog_vis = true;
             let it = self.insert_row(
@@ -543,6 +574,8 @@ impl ChangesView {
                 badge_vis,
                 chip_vis,
                 tog_vis,
+                fallback.unwrap_or_default(),
+                fallback.is_some(),
             );
             if is_dir {
                 iters.insert(t.rel.clone(), it);
@@ -837,5 +870,18 @@ mod tests {
         assert_eq!(c, ck);
         // unknown kind → None (never flips a "No changes" row)
         assert!(toggled_checked("e", "x", &ck, &vis).is_none());
+    }
+
+    #[test]
+    fn strip_icons_law() {
+        // unknown-ext / ext-less files fall back to the WORKSPACE's symbolic
+        // icon (filetree.rs push_row law) — this is the no-icon bug: .rs rows
+        // showed a bare blank slot in CHANGES while WORKSPACE showed a page icon
+        assert_eq!(strip_icons("editor.rs", false), (None, Some("text-x-generic-symbolic")));
+        assert_eq!(strip_icons("LICENSE", false), (None, Some("text-x-generic-symbolic")));
+        // chip art → no fallback
+        assert_eq!(strip_icons("editor.py", false).1, None);
+        // dirs: folder art → no fallback
+        assert_eq!(strip_icons("src", true).1, None);
     }
 }

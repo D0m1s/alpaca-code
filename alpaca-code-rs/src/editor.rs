@@ -251,7 +251,7 @@ pub enum EditorCommand {
         text: String,
         binary: bool,
     },
-    FreshDiffs(Vec<(String, Sides, String)>),
+    FreshDiffs(Vec<(String, String, Sides, String)>),
 }
 
 // editor.py:209-211
@@ -260,11 +260,18 @@ const DIFF_ADD_BG: &str = "#15261d";
 const DIFF_HDR_FG: &str = "#5a6375";
 
 /// both diff sides' scroll pairing state: the widgets the live renewal
-/// re-children, plus each view's linked-adjustment dedupe (python `_linked`
-/// attrs — one per direction)
+/// refills, plus each view's linked-adjustment dedupe (python `_linked`
+/// attrs — one per direction). `v_r` stays so the refill can retarget the
+/// right side's buffer in place (python swaps the views; the measured churn
+/// law says keep the widget tree: teardown re-allocates and the visible page
+/// jumps — see refresh_diff). `diff_text` is the raw text the sides came
+/// from: the renewal flight dedupes against it (python renews every
+/// GitChanged; a byte-identical diff must not tear the page down every tick).
 struct DiffWidgets {
     sw_l: gtk::ScrolledWindow,
     sw_r: gtk::ScrolledWindow,
+    v_r: sourceview5::View,
+    diff_text: Option<String>,
     linked_l: Rc<RefCell<Option<gtk::Adjustment>>>,
     linked_r: Rc<RefCell<Option<gtk::Adjustment>>>,
 }
@@ -425,19 +432,33 @@ impl Component for Editor {
                 // per OPEN diff page still present in the change set; resolved
                 // tabs stay as-is. python ran this fetch SYNC on the UI
                 // thread — the flight is a responsiveness improvement only,
-                // identical behavior when it lands
+                // identical behavior when it lands.
+                //
+                // The flight dedupes byte-identical renewals (each page's
+                // shown text + letter captured here, fresh ones compared
+                // in-thread): python and pre-fix rust renewed on EVERY probe
+                // tick and tore the visible page down with it (measured: 6
+                // full rebuilds of one unchanged diff in 10s, both sides'
+                // scroll adj flapping 320→0→320 — the "diff jumps around"
+                // glitch). Same guard class as gitview's identical-porcelain
+                // Apply skip. A stale page (diff_text None) reads as text ""
+                // and letter "" → never deduped, always refreshed.
                 let map: HashMap<String, String> = letters.into_iter().collect();
-                let mut pairs: Vec<(String, String)> = Vec::new();
+                let mut pairs: Vec<(String, String, String, String)> = Vec::new();
                 for pg in &self.pages {
                     let Some(key) = pg.diff_of.as_deref() else { continue };
                     let Some(rel) = key.strip_prefix("diff:") else { continue };
                     if let Some(fresh) = map.get(rel) {
-                        pairs.push((rel.to_string(), fresh.clone()));
+                        let (old_text, old_letter) = match pg.diff.as_ref() {
+                            Some(d) => (d.diff_text.clone().unwrap_or_default(), pg.diff_letter.clone()),
+                            None => (String::new(), String::new()),
+                        };
+                        pairs.push((rel.to_string(), fresh.clone(), old_text, old_letter));
                     }
                 }
                 sender.spawn_command(move |out| {
-                    let mut fresh: Vec<(String, Sides, String)> = Vec::new();
-                    for (rel, fresh_letter) in pairs {
+                    let mut fresh: Vec<(String, String, Sides, String)> = Vec::new();
+                    for (rel, fresh_letter, old_text, old_letter) in pairs {
                         let (text, binary) = gitstatus::diff_for(
                             &root.to_string_lossy(),
                             &rel,
@@ -447,11 +468,11 @@ impl Component for Editor {
                         if binary {
                             continue; // the tab stays stale rather than die
                         }
-                        fresh.push((
-                            rel,
-                            gitstatus::build_sides(&gitstatus::parse_unified(&text)),
-                            fresh_letter,
-                        ));
+                        if text == old_text && fresh_letter == old_letter {
+                            continue; // already on screen — no teardown for it
+                        }
+                        let parsed = gitstatus::build_sides(&gitstatus::parse_unified(&text));
+                        fresh.push((rel, text, parsed, fresh_letter));
                     }
                     out.emit(EditorCommand::FreshDiffs(fresh));
                 });
@@ -558,11 +579,11 @@ impl Component for Editor {
                     );
                     return;
                 }
-                self.open_diff(&rel, &sides, &letter, &sender);
+                self.open_diff(&rel, &sides, &letter, &text, &sender);
             }
             EditorCommand::FreshDiffs(fresh) => {
-                for (rel, sides, letter) in fresh {
-                    self.refresh_diff(&rel, &sides, &letter, &sender);
+                for (rel, text, sides, letter) in fresh {
+                    self.refresh_diff(&rel, &sides, &letter, &text, &sender);
                 }
             }
         }
@@ -933,17 +954,18 @@ impl Editor {
 
     // ---- diff pages (S2) ------------------------------------------------------
 
-    /// python `_diff_side` — one side: fresh GtkSource buffer (scheme + lang),
-    /// bg tint over the marked lines, header fg, `set_modified` AFTER the tags
-    /// ("diff tabs never dirty"), non-editable unnumbered mono view.
-    fn diff_side(
+    /// python `_diff_side`'s buffer half — fresh GtkSource buffer (scheme +
+    /// lang), bg tint over the marked lines, header fg, `set_modified` AFTER
+    /// the tags ("diff tabs never dirty"). Shared by the page build and the
+    /// refresh refill.
+    fn diff_buf(
         &self,
         lines: &[String],
         idxs: &BTreeSet<usize>,
         hdr: &BTreeSet<usize>,
         hexcol: &str,
         lang: Option<&sourceview5::Language>,
-    ) -> (sourceview5::View, sourceview5::Buffer) {
+    ) -> sourceview5::Buffer {
         let buf = sourceview5::Buffer::builder().text(&lines.join("\n")).build();
         if let Some(scheme) = &self.scheme {
             buf.set_style_scheme(Some(scheme));
@@ -983,6 +1005,19 @@ impl Editor {
         }
         // born modified (invariant); diff tabs never dirty
         buf.set_modified(false);
+        buf
+    }
+
+    /// one diff side: the buffer above + non-editable unnumbered mono view.
+    fn diff_side(
+        &self,
+        lines: &[String],
+        idxs: &BTreeSet<usize>,
+        hdr: &BTreeSet<usize>,
+        hexcol: &str,
+        lang: Option<&sourceview5::Language>,
+    ) -> (sourceview5::View, sourceview5::Buffer) {
+        let buf = self.diff_buf(lines, idxs, hdr, hexcol, lang);
         let view = sourceview5::View::builder()
             .buffer(&buf)
             .show_line_numbers(false) // padded sides would falsify numbers
@@ -999,7 +1034,14 @@ impl Editor {
     /// (del, red tint) / right (add, green tint), linked scroll, letter chip
     /// in the tab head ("diff tabs never dirty" → no dot). Reuses the file
     /// page's widget fields for the LEFT side.
-    fn open_diff(&mut self, rel: &str, sides: &Sides, letter: &str, sender: &ComponentSender<Self>) {
+    fn open_diff(
+        &mut self,
+        rel: &str,
+        sides: &Sides,
+        letter: &str,
+        text: &str,
+        sender: &ComponentSender<Self>,
+    ) {
         let key = format!("diff:{rel}");
         if let Some(idx) = self.page_of_key(&key) {
             self.nb.set_current_page(Some(idx as u32));
@@ -1096,6 +1138,8 @@ impl Editor {
         let diff = DiffWidgets {
             sw_l: sw_l.clone(),
             sw_r: sw_r.clone(),
+            v_r: v_r.clone(),
+            diff_text: Some(text.to_string()),
             linked_l: Rc::new(RefCell::new(None)),
             linked_r: Rc::new(RefCell::new(None)),
         };
@@ -1123,28 +1167,48 @@ impl Editor {
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    /// python editor.py:refresh_diff — live renewal of an open diff page:
-    /// scroll fracs FIRST (the re-children resets both views), both sides
-    /// rebuilt fresh, rewired, scroll restored, letter chip rebuilt on change.
-    fn refresh_diff(&mut self, rel: &str, sides: &Sides, letter: &str, sender: &ComponentSender<Self>) {
+    /// python editor.py:refresh_diff's live renewal of an open diff page —
+    /// same trigger/fraction/letter-chip contract, measured-churn-safe body
+    /// (see the comment inside).
+    fn refresh_diff(
+        &mut self,
+        rel: &str,
+        sides: &Sides,
+        letter: &str,
+        text: &str,
+        sender: &ComponentSender<Self>,
+    ) {
         let key = format!("diff:{rel}");
         let Some(idx) = self.page_of_key(&key) else { return };
         let (frac_l, frac_r) = {
             let dw = self.pages[idx].diff.as_ref().unwrap(); // diff pages always carry theirs
             (frac_of(&dw.sw_l), frac_of(&dw.sw_r))
         };
+        // refresh_diff — live renewal of an open diff page. NOT the python
+        // shape (python swaps both sides' child VIEWS): measured churn law —
+        // every widget swap re-allocates the visible page and its scroll
+        // adjustments reset/flap; the swap raced restore_frac too. The views,
+        // ScrolledWindows and scroll pairing here are RETAINED and only the
+        // side buffers are swapped in (the reload path's shape, swap_text:
+        // adj identity persists → linked_l/linked_r stay live, no re-wire,
+        // no set_child). The byte-identical dedupe lives in the RefreshDiffs
+        // flight — this path runs only when the diff really changed.
         let lang = self.lm.guess_language(Some(Self::rel_base(rel)), None);
-        let (v_l, _b_l) = self.diff_side(&sides.old, &sides.del, &sides.hdr, DIFF_DEL_BG, lang.as_ref());
-        let (v_r, _b_r) = self.diff_side(&sides.new, &sides.add, &sides.hdr, DIFF_ADD_BG, lang.as_ref());
+        let (b_l, b_r) = (
+            self.diff_buf(&sides.old, &sides.del, &sides.hdr, DIFF_DEL_BG, lang.as_ref()),
+            self.diff_buf(&sides.new, &sides.add, &sides.hdr, DIFF_ADD_BG, lang.as_ref()),
+        );
         {
-            let dw = self.pages[idx].diff.as_ref().unwrap();
-            dw.sw_l.set_child(Some(&v_l));
-            dw.sw_r.set_child(Some(&v_r));
-            // wire takes two VIEWS — the dst is captured at wire time
-            wire_diff(&v_l, &v_r, &dw.linked_l);
-            wire_diff(&v_r, &v_l, &dw.linked_r);
-            restore_frac(&dw.sw_l, frac_l);
-            restore_frac(&dw.sw_r, frac_r);
+            let (sw_l, sw_r, v_r) = {
+                let dw = self.pages[idx].diff.as_ref().unwrap();
+                (dw.sw_l.clone(), dw.sw_r.clone(), dw.v_r.clone())
+            };
+            self.pages[idx].view.set_buffer(Some(&b_l)); // left view kept
+            v_r.set_buffer(Some(&b_r)); // right view kept
+            self.pages[idx].buf = b_l;
+            self.pages[idx].diff.as_mut().unwrap().diff_text = Some(text.to_string());
+            restore_frac(&sw_l, frac_l);
+            restore_frac(&sw_r, frac_r);
         }
         // python refresh_diff touches no page refs (its diff pages carry no
         // buf attr at all) and never calls _refresh_tab_state
@@ -1435,14 +1499,25 @@ fn frac_of(sw: &gtk::ScrolledWindow) -> f64 {
     }
 }
 
-/// python `_scroll_frac` — reapply a captured fraction AFTER the rebuild;
-/// fetch vadj at run time (unallocated adj reads 0-span → top, brief churn)
+// measured law (broadway adjlaw probe): set_buffer's relayout RESETS the adj
+// value (100→0 even with a growing upper; 100→10 on an identical set_text) —
+// the reset rides the bounds-update burst of GtkAdjustment::changed, which is
+// synchronous within one frame. Re-apply the captured fraction on every changed
+// fire for a short window: the burst ends with frac*current-span in place
+// BEFORE paint — no top-flash, no timed race. The window expires, so no stale
+// frac sticks to later user scrolling (value changes never fire changed).
+// Unallocated page: nothing fires; when it maps, the bounds change re-applies.
 fn restore_frac(sw: &gtk::ScrolledWindow, frac: f64) {
-    let s2 = sw.clone();
-    glib::idle_add_local_once(move || {
-        let adj = s2.vadjustment(); // inherent getter: non-Option
-        let span = (adj.upper() - adj.page_size()).max(0.0);
-        adj.set_value((frac * span).min(span));
+    let adj = sw.vadjustment(); // inherent getter: non-Option
+    let id = adj.connect_changed(move |a| {
+        let span = (a.upper() - a.page_size()).max(0.0);
+        if span > 0.0 {
+            a.set_value((frac * span).min(span));
+        }
+    });
+    let adj2 = adj.clone();
+    glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+        adj2.disconnect(id); // window expired — later bounds changes are the user's business
     });
 }
 
