@@ -1,32 +1,28 @@
-# CLAUDE.md — alpaca-code
+# CLAUDE.md — alpaca-code-rs
 
-GTK4 desktop app (PyGObject, Python 3.14) wrapping the raw `claude` CLI: tabbed
-GtkSourceView editor + file browser + three VTE panes (Agent = raw claude
-TUI, Terminal = `$SHELL`, Output = npm/dotnet run), Run/Stop buttons, File menu.
+GTK4 desktop app wrapping the raw `claude` CLI: tabbed GtkSourceView editor +
+file browser + three VTE panes (Agent = raw claude TUI, Terminal = `$SHELL`,
+Output = npm/dotnet run), Run/Stop buttons, File menu. Stack: relm4 0.11 +
+gtk4 0.11 (v4_22), sourceview5 0.11, vte4 0.10, glib/gio 0.22, gdk-pixbuf 0.22.
+The original PyGObject build was removed 2026-10-09 — git history keeps it.
 
 ## Run / test
 
 ```
-bin/alpaca-code [project-dir]      # no arg → last_project from state, else empty workspace
-python3 tests/test_selfcheck.py    # plain asserts, displayless — THE test command
-python3 tests/responsive_probe.py  # no-clip min-widths; needs a display (prints skip when headless)
+cargo test --manifest-path alpaca-code-rs/Cargo.toml    # displayless — THE test command
+cargo build --manifest-path alpaca-code-rs/Cargo.toml   # cargo test does NOT refresh the runnable bin
+alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]  # no arg → last_project from state
 ```
 
-System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4 python-gobject`. No pip deps.
+System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
-## Rust port (stage 1)
+## Port status
 
-Parallel rewrite under `alpaca-code-rs/` (relm4 0.11 + gtk4 0.11 v4_22,
-sourceview5 0.11, vte4 0.10, glib/gio 0.22, gdk-pixbuf 0.22). Python app stays
-the UI reference; python code untouched.
-- **S3 (pixel polish) landed 2026-10-09 — S1/S2/S3 all complete.** The waiver
-  kept S3's work uncommitted; the ledger
-  `.superpowers/sdd/2026-10-08-rust-port-stage3/progress.md` is the record.
+- **S1/S2/S3 complete (2026-10-09).**
   Wayland frame-callback freeze (measured, this stage): after a KWin restart,
   surfaces get no frame callbacks until touched, so GTK allocations FREEZE at
   the startup paint (~0.9-2.2s) — positional/live geometry is unreachable
-  there; python's `tests/responsive_probe.py` also inherits this (prints skip).
-  Live probes need the running display before the freeze, or never restart KWin.
+  there; live probes need the running display before the freeze, or never restart KWin.
 
 ```
 cargo test --manifest-path alpaca-code-rs/Cargo.toml   # displayless — THE test command
@@ -34,18 +30,16 @@ cargo build --manifest-path alpaca-code-rs/Cargo.toml  # cargo test does NOT ref
 alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
 ```
 
-- App-id `io.alpaca.rs`. Same `~/.config/alpaca-code/state.json` schema as python;
-  both apps read/write it sequentially (never launch both on the same project
-  concurrently and toggle tabs — last writer wins, that's the shared-file contract).
+- App-id `io.alpaca.rs`. Reads/writes `~/.config/alpaca-code/state.json`
+  (schema at the bottom of this file, atomic rename write).
 - relm4 idioms (see src comments): `#[relm4::component(pub)]` (pub attr required,
   else E0446), init epilogue `let widgets = view_output!();` then `ComponentParts`
   (no `root` field), `T::builder().launch(x).connect_receiver(cb)` — connect_receiver
   RETURNS the Controller (no detach); outputs carry state (App can't query panes
   synchronously); `ComponentSender<C>` is generic over the COMPONENT.
 - Widget ports must be probed live before trust: the respawn-band bug (spawn_pane
-  clearing the budget every spawn — python keeps the clear in `_ensure_current`, pane
-  resurrection forever) shipped past 21 green unit tests because the bookkeeping is
-  widget-layer. Kill the pane child externally and count resurrections via
+  clearing the budget every spawn — pane resurrection forever) shipped past 21
+  green unit tests because the bookkeeping is widget-layer. Kill the pane child externally and count resurrections via
   `pgrep -P <app>`; that is the pane-exit path's only live gate.
 - Rust probe envs (PROBE-ONLY chains in app.rs, never run with env unset):
   `ALPACA_PROBE_S2=<dir>` (workspace chain) and `ALPACA_PROBE_S3=<dir>` (hpane
@@ -57,11 +51,10 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
   BREAK after firing (no idle re-arm hazard).
 - `glib::TimeoutSource::…`/`timeout_add` in ms; spawn flags
   `SEARCH_PATH | SEARCH_PATH_FROM_ENVP`; env-marker override list
-  (`runctl::pane_environ`, 9 markers) must stay in sync with `runctl.pane_environ` —
-  both `runctl`s are the single source for pane env (marker drift = transcript-less
-  child sessions).
+  (`runctl::pane_environ`, 9 markers) — runctl is the single source for pane env
+  (marker drift = transcript-less child sessions).
 
-## Rust modules (alpaca-code-rs/src/, S2 git layer + S3 vector rows added)
+## Rust modules (alpaca-code-rs/src/)
 
 - `gitstatus.rs` — pure git porcelain/diff parser + subprocess callers
   (`branch_of/branches/switch/create_switch/changes/parse_*/diff_for/commit/ahead/
@@ -89,10 +82,8 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
   `icon(name)` caches the PARSED shapes (raw walk), not VecIcon objects —
   glib wrappers + gsk::Path are !Send so a static Mutex can't hold them;
   each call rebuilds a cheap VecIcon over the shared parse. Widget icons ride
-  the paintable: python's `badges.icon(name)` (badges.py:24, VecIcon | None)
-  is the twin of rust `vector::icon` — the old rust pixel-path
-  `badges::widget_icon` was deleted by the T2 swap (tree cells + letter chips
-  stay pixbuf by the frozen-art ruling).
+  the paintable; the old pixel-path `badges::widget_icon` was deleted by the
+  T2 swap (tree cells + letter chips stay pixbuf by the frozen-art ruling).
 - `seti.rs` + `assets/icons/seti-*.svg` (2026-10-09 seti swap) — file-type badges from
   jesseweed/seti-ui: per-rule monochrome glyphs baked one-shot from
   mapping.less (rule color flattened in, `<style>`/class fills stripped — CSS
@@ -101,40 +92,16 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
   cascade (LAST matching rule wins; ext rules ci, name rules authored-case,
   partial = substring); no match = `seti-default-white.svg`. Consumed ONLY
   through badges' pixbuf path (tree cells, tab badges, CHANGES rows) — never
-  vector.rs's art-walker. Regeneration: rerun the one-shot converter; python
-  side untouched (still text chips).
+  vector.rs's art-walker. Regeneration: rerun the one-shot converter.
 - Timers that capture a component's Sender: `glib::timeout_add_local` — plain
   `timeout_add` requires Send and TreePath-bearing messages (filetree) are not.
 
-## Layout
-
-- `bin/alpaca-code` — launcher (arg → `main.run`)
-- `alpaca_code/` — package (import name is `alpaca_code`: hyphens can't be Python identifiers)
-  - `main.py` — CSS, forced-dark theme, style-scheme path, Application, argv → root resolution
-  - `window.py` — layout, `set_workspace` (dirty gate + `_set_workspace_now`), Run/Stop wiring, File menu, New Project
-  - `editor.py` — GtkSource tabs, Ctrl+S, dirty dot, delete-watch dialogs, binary-file rejection
-  - `panels.py` — VTE panes + run lifecycle: pid landing, Running/Exit statuses, stop, respawn budget
-  - `filetree.py` — lazy tree, dir monitors, search, skip-list
-  - `state.py` — `~/.config/alpaca-code/state.json` persistence
-  - `runctl.py` `gitstatus.py` — pure (no gi imports); safe to test directly
-  - `branchmenu.py` — status-bar branch pill: popover menu (Switch Branch with
-    hover submenu from the right / New Branch entry → `checkout -b` from HEAD)
-  - `gitview.py` — CHANGES view: checkbox rows + Select-all + commit bar (S2)
-  - `gi_env.py` — `require(ns, versions)`; must run before any `gi.repository` import
-  - `badges.py` — icon/chip factory: `icon(name)` → vector paintables (widgets), pixbuf path (tree cells + cairo text chips)
-  - `vector.py` — SVG → `Gsk` paintables for widget icons; one parse per file, no pixbuf in the loop
-  - `data/alpaca-dark.xml` — editor style scheme; `data/icons/*.svg` — the art (source of truth)
-
 ## Invariants and gotchas (each is a measured ruling — trust them)
 
-- Never import `gi.repository` before `gi_env.require(...)` sets the versions.
-- PyGObject property-by-attribute assignment silently no-ops (`win.title = x` does nothing) —
-  always use `set_title()`/property setters.
-- PyGObject wrapper identity is unstable: `get_nth_page(i) is get_nth_page(j)` matches only
-  when a closure happens to keep a wrapper alive — compare indices
-  (`nb.page_num(page) == nb.get_current_page()`) instead of object identity. Measured
-  via editor tab badges: the `is` check matched a closed-tab wrapper and gave the active
-  tab the inactive-tab hash glyph.
+Python-era rulings keep their values; `.py` paths below are historical
+provenance — the Python build was removed 2026-10-09 and the Rust port
+implements the behaviors.
+
 - `GtkSource.Buffer(text=…)` is born `modified=True` — an open must call `set_modified(False)`.
 - `Gtk.Notebook.append_page` does NOT switch pages on this build — `set_current_page()` after.
 - Theme styling of app widgets needs MORE than `border`: Breeze paints
@@ -154,17 +121,15 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
  fullscreen page replica rendered clean; only a second application-id `io.alpaca.probe`
  real-app replica leaked). And re-derive window geometry from the KWin Scripting dump
  each capture — a missed/stale spectacle frame silently scans other windows' pixels and
- reads as a "clean" or "moved" artifact.
-- This box's vte4 is Vte-3.91: `ge.require("Vte", ("4", "4.0", "3.91"))`.
- `spawn_async` accepts only the keyword form.
+ reads as a "clean" or "moved" artifact. Don't trust `spectacle -a` alone (stale
+ committed frames on this WM) — assert probe state numerically, never eyeball pixels.
 - Spawn flags must be `SEARCH_PATH | SEARCH_PATH_FROM_ENVP`, never `DEFAULT` (plain execv →
  bare `claude` dies ENOENT). Env: full environ with `~/.local/bin` appended to PATH — and
  VTE `spawn_async(envv=…)` MERGES envv onto the child's INHERITED environ, it never
  replaces it (measured: child kept the whole parent env). Omitting a key in `envv`
  scrubs NOTHING; to kill an inherited var (claude's ambient session markers turn the
  Agent pane's claude into a no-transcript child session — empty values satisfy its
- truthiness checks) OVERRIDE it to `""` in envv. Env build is pure `runctl.pane_environ()`
- (panels.get_env wraps it).
+ truthiness checks) OVERRIDE it to `""` in envv. Env build is pure `runctl::pane_environ`.
 - VTE children are session leaders — kill trees with `killpg(getpgid(pid), SIGHUP)` +
  2s SIGKILL escalation (`panels.Panes._kill_tree`). `/proc/<pid>` existing is not proof of
  life (zombies); judge by exit status.
@@ -174,7 +139,7 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
  status stays truthful.
 - Pane children auto-respawn on user exit, capped (3 per budget; a ≥60s-lived child re-arms;
   re-entering the tab re-arms; <3s deaths are broken children, never respawns — no loops).
-- state.py contract: `load()`/`project_tabs()` NEVER raise on any corrupt file — coerce
+- state.json contract (state.rs): load NEVER raises on any corrupt file — coerce
   missing/wrong types to defaults. A bad `state.json` must not brick startup.
 - Editor refuses non-UTF-8 / NUL-containing files at open (`readable_text`) — a lossy
   buffer would be rewritten on Ctrl+S. Valid non-ASCII UTF-8 opens fine.
@@ -207,8 +172,8 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
   do_allocate — every tab = equal share `avail/n − CHROME(62)` capped at natural, recomputed
   on (width, n) change only. No fixed floor: one below the share re-enters scroll mode.
   Pre-map name floor stays `set_size_request(96, -1)` (GTK4 GtkLabel has no min-width-chars).
-  Pane-tab labels have no ellipsize → min = full text, never starve.
-  `tests/responsive_probe.py` asserts the maxima + uniform shrinking allocs; default size clamps to the monitor.
+  Pane-tab labels have no ellipsize → min = full text, never starve; the S3 probe
+  chain (ALPACA_PROBE_S3) asserts tab-strip geometry; default size clamps to the monitor.
 - Editor tab badges: every tab carries its own file-type icon (user overrode the mockup's
   hash-for-inactive rule — a selected tab must not blank the others'); restamp via
   `_refresh_tab_state(index)` using the switch-page signal's index (get_current_page is
@@ -277,7 +242,7 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
   collapses the headerbar to a 12×0 alloc (GTK/KWin interplay on this build) — verify
   header stuff on a WINDOWED replica; header child allocs read 0 on this build even
   when painted (locate by pixel pattern, the struct dump is unreliable there).
-- CSS/paint changes need a REAL restart — a second `bin/alpaca-code` spawn forwards
+- CSS/paint changes need a REAL restart — a second spawn forwards
   to the running primary (GtkApplication single-instance: the spawn exits, the old
   process gains the window) so the user keeps looking at the OLD css and "nothing
   changed". Kill the old process first (exact pid, not pkill -f), then relaunch.
@@ -363,20 +328,9 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
   open/hover text color rides ON the button (label-inherit); every popover child
   label carries its own explicit rule. Breeze paints no popover label colors.
 
-## Verifying widget behavior
-
-The suite is displayless and never instantiates VTE/widgets. Widget behavior is verified
-with throwaway `/tmp` probe scripts: `Gtk.init()` on the live display (returns None — GTK4
-void; never truthy-test it), construct the real widget, then drive handlers directly where
-view machinery is unreliable (signals don't fire
-on unrealized widgets — call e.g. `fb._on_row_expanded(view, iter, path)` yourself).
-Pump the mainloop: `GLib.MainContext.default().iteration(may_block=False)` in a time-bounded
-loop. Don't trust `spectacle -a` screenshots alone (stale committed frames on this WM) —
-assert probe state numerically.
-
 ## Persistence schema
 
-`~/.config/alpaca-code/state.json` (atomic tmp + `os.replace` write):
+`~/.config/alpaca-code/state.json` (atomic temp-file + rename write):
 
 ```json
 {"last_project": "/path|null", "recents": ["/path", …cap 10, newest first],
