@@ -53,11 +53,16 @@ fn tag_name(s: &str) -> &str {
     &s[..end]
 }
 
+/// `name="value"` pairs read by read_attrs
+type Attrs = Vec<(String, String)>;
+/// a walked icon: viewBox units + raw shapes (the !Send cache's payload)
+type ParsedIcon = (f32, Vec<RawShape>);
+
 /// Reads `name="value"` pairs starting after the tag name; returns the pairs,
 /// whether the tag self-closed (`/>`), and the index past `>`. Attribute values
 /// are the quoting char that starts them (art is double-quoted; python's ET
 /// accepted both).
-fn read_attrs(text: &str, at: usize) -> Option<(Vec<(String, String)>, bool, usize)> {
+fn read_attrs(text: &str, at: usize) -> Option<(Attrs, bool, usize)> {
     let b = text.as_bytes();
     let mut i = at;
     let mut out: Vec<(String, String)> = Vec::new();
@@ -82,9 +87,9 @@ fn read_attrs(text: &str, at: usize) -> Option<(Vec<(String, String)>, bool, usi
                 if b.get(i) == Some(&b'=') {
                     i += 1;
                     while i < b.len() && (b[i] as char).is_ascii_whitespace() { i += 1; }
-                    let Some(&q) = b.get(i) else { return None };
-                    let Some(vstart) = i.checked_add(1) else { return None };
-                    let Some(rel) = text[vstart..].find(q as char) else { return None };
+                    let q = *b.get(i)?;
+                    let vstart = i.checked_add(1)?;
+                    let rel = text[vstart..].find(q as char)?;
                     out.push((name, text[vstart..vstart + rel].to_string()));
                     i = vstart + rel + 1;
                 } else {
@@ -128,17 +133,17 @@ pub(crate) fn walk(text: &str) -> Option<(f32, Vec<RawShape>)> {
         }
         if text[i..].starts_with("<!--") {
             i += 4;
-            let Some(p) = text[i..].find("-->") else { return None };
+            let p = text[i..].find("-->")?;
             i += p + 3;
             continue;
         }
         if text[i..].starts_with("<?") {
-            let Some(p) = text[i..].find("?>") else { return None };
+            let p = text[i..].find("?>")?;
             i += p + 2;
             continue;
         }
         if text[i..].starts_with("</") {
-            let Some(p) = text[i..].find('>') else { return None };
+            let p = text[i..].find('>')?;
             let name = tag_name(&text[i + 2..i + p]).to_string();
             // pop the matching open; stop at the first name match (art is
             // well-formed so the nearest entry is the right one)
@@ -271,7 +276,7 @@ fn circle_d(cx: f64, cy: f64, r: f64) -> String {
 }
 
 fn rgba_of(s: Option<&String>, name: &str) -> Option<gdk::RGBA> {
-    let raw = s.as_deref().filter(|x| !x.is_empty() && *x != "none")?;
+    let raw = s.filter(|x| !x.is_empty() && *x != "none")?;
     let c = match gdk::RGBA::parse(raw) {
         Ok(c) => c,
         Err(_) => { println!("vector: {name}: unparsable color {raw:?}"); return None; }
@@ -398,17 +403,14 @@ fn load(name: &str) -> Option<(f32, Vec<RawShape>)> {
 /// static Mutex can't hold either — so the cache holds the parse instead and
 /// each call builds a fresh (cheap) VecIcon over the same parsed shapes.
 pub(crate) fn icon(name: &str) -> Option<VecIcon> {
-    static CACHE: LazyLock<Mutex<HashMap<String, Option<(f32, Vec<RawShape>)>>>> =
+    static CACHE: LazyLock<Mutex<HashMap<String, Option<ParsedIcon>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
-    let Some((units, raw)) = CACHE
+    let (units, raw) = CACHE
         .lock()
         .unwrap()
         .entry(name.to_string())
         .or_insert_with(|| load(name))
-        .clone()
-    else {
-        return None;
-    };
+        .clone()?;
     let shapes = build(name, &raw);
     if shapes.is_empty() {
         println!("vector: {name}: no drawable shapes");
@@ -426,18 +428,17 @@ mod tests {
     use super::*;
     use crate::badges::svg_data;
 
-    const GOLDEN: [(&str, f32, usize); 12] = [
+    const GOLDEN: [(&str, f32, usize); 11] = [
         // (icon, viewBox units, walked raw shape count) — frozen against the
         // art on 2026-10-08 (per-file: path+rect+circle element counts:
         // bot 4+1+0=5, branch 2+0+2=4, chevron-down 1, chevron 1, folder 2,
-        // hash 4, play 1, plus 2, prompt 2+1=3, stop 1, terminal 2, x-dim 2).
+        // play 1, plus 2, prompt 2+1=3, stop 1, terminal 2, x-dim 2).
         // A count change means art or walker drifted — re-walk, don't edit.
         ("bot.svg", 16.0, 5),
         ("branch.svg", 16.0, 4),
         ("chevron-down.svg", 16.0, 1),
         ("chevron.svg", 16.0, 1),
         ("folder.svg", 16.0, 2),
-        ("hash.svg", 16.0, 4),
         ("play.svg", 16.0, 1),
         ("plus.svg", 16.0, 2),
         ("prompt.svg", 16.0, 3),

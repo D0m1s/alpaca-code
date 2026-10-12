@@ -33,16 +33,14 @@ pub fn pane_environ() -> Vec<String> {
     let mut env = env;
     if let Some(home) = std::env::var_os("HOME") {
         let p = Path::new(&home).join(".local/bin");
-        if p.is_dir() {
-            if let Some(ps) = p.to_str() {
-                if let Some(idx) = env.iter().position(|e| e.starts_with("PATH=")) {
+        if p.is_dir()
+            && let Some(ps) = p.to_str()
+                && let Some(idx) = env.iter().position(|e| e.starts_with("PATH=")) {
                     let cur = &env[idx]["PATH=".len()..];
                     if !cur.split(':').any(|c| c == ps) {
                         env[idx] = format!("PATH={cur}:{ps}");
                     }
                 }
-            }
-        }
     }
     env
 }
@@ -76,17 +74,16 @@ pub fn detect(root: &Path) -> Option<RunCmd> {
     let top_csproj = |e: &std::fs::DirEntry| {
         e.path().extension() == Some(std::ffi::OsStr::new("csproj"))
     };
-    if let Ok(rs) = std::fs::read_dir(root) {
-        if rs.filter_map(|e| e.ok()).any(|e| top_csproj(&e)) {
+    if let Ok(rs) = std::fs::read_dir(root)
+        && rs.filter_map(|e| e.ok()).any(|e| top_csproj(&e)) {
             return Some(RunCmd { argv: vec!["dotnet".into(), "run".into()], label: "dotnet run".into() });
         }
-    }
     // one-level nested: */*.csproj sorted by path, first hit
     let mut subdirs: Vec<std::fs::DirEntry> = std::fs::read_dir(root)
         .ok()?
         .filter_map(|e| e.ok())
         .collect();
-    subdirs.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    subdirs.sort_by_key(|a| a.file_name());
     for d in subdirs {
         if std::fs::read_dir(d.path()).ok().is_some_and(|mut rd| {
             rd.any(|e| e.ok().is_some_and(|e| top_csproj(&e)))

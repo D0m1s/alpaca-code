@@ -405,7 +405,7 @@ impl Component for Editor {
                     let flush = self.pages[idx]
                         .path
                         .as_ref()
-                        .map_or(false, |p| paths.contains(p))
+                        .is_some_and(|p| paths.contains(p))
                         && self.pages[idx].buf.is_modified();
                     if flush {
                         let _ = self.write_page(idx);
@@ -502,11 +502,10 @@ impl Component for Editor {
             EditorMsg::Copy => self.clip_op("copy-clipboard"),
             EditorMsg::Paste => self.clip_op("paste-clipboard"),
             EditorMsg::SelectAll => {
-                if let Some(idx) = self.active() {
-                    if let Some(w) = self.op_target(idx) {
+                if let Some(idx) = self.active()
+                    && let Some(w) = self.op_target(idx) {
                         let _ = w.activate_action("select-all", Some(&true.to_variant()));
                     }
-                }
             }
             EditorMsg::Switched => {
                 self.refresh_restamps(&sender);
@@ -791,7 +790,7 @@ impl Editor {
             slot.append(&gtk::Image::from_pixbuf(Some(&want)));
         }
         let index = self.nb.append_page(&page_box, Some(&head));
-        self.nb.set_current_page(Some(index as u32)); // append does not switch; a new tab must take focus
+        self.nb.set_current_page(Some(index)); // append does not switch; a new tab must take focus
         // resolve the (possibly shifted) index at click time via the page widget
         let nb2 = self.nb.clone();
         let pg_widget = page_box.clone();
@@ -866,11 +865,10 @@ impl Editor {
             while let Some(c) = pg.badge_slot.first_child() {
                 pg.badge_slot.remove(&c);
             }
-            if let Some(path) = &pg.path {
-                if let Some(want) = badges::pixbuf_for(&basename(path), false) {
+            if let Some(path) = &pg.path
+                && let Some(want) = badges::pixbuf_for(&basename(path), false) {
                     pg.badge_slot.append(&gtk::Image::from_pixbuf(Some(&want)));
                 }
-            }
         }
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
@@ -966,7 +964,7 @@ impl Editor {
         hexcol: &str,
         lang: Option<&sourceview5::Language>,
     ) -> sourceview5::Buffer {
-        let buf = sourceview5::Buffer::builder().text(&lines.join("\n")).build();
+        let buf = sourceview5::Buffer::builder().text(lines.join("\n")).build();
         if let Some(scheme) = &self.scheme {
             buf.set_style_scheme(Some(scheme));
         }
@@ -988,7 +986,7 @@ impl Editor {
                 continue;
             }
             if let Some(a) = buf.iter_at_line(i as i32) {
-                let mut b = a.clone();
+                let mut b = a;
                 b.forward_to_line_end();
                 buf.apply_tag(&tag, &a, &b);
             }
@@ -998,7 +996,7 @@ impl Editor {
                 continue;
             }
             if let Some(a) = buf.iter_at_line(i as i32) {
-                let mut b = a.clone();
+                let mut b = a;
                 b.forward_to_line_end();
                 buf.apply_tag(&fg, &a, &b);
             }
@@ -1123,7 +1121,7 @@ impl Editor {
             .build();
 
         let index = self.nb.append_page(&page, Some(&head));
-        self.nb.set_current_page(Some(index as u32)); // append does not switch; a new tab must take focus
+        self.nb.set_current_page(Some(index)); // append does not switch; a new tab must take focus
         // resolve the (possibly shifted) index at click time via the page widget
         let nb2 = self.nb.clone();
         let pg_widget = page.clone();
@@ -1252,11 +1250,10 @@ impl Editor {
     }
 
     fn clip_op(&self, op: &str) {
-        if let Some(idx) = self.active() {
-            if let Some(w) = self.op_target(idx) {
+        if let Some(idx) = self.active()
+            && let Some(w) = self.op_target(idx) {
                 let _ = w.activate_action(op, None);
             }
-        }
     }
 
     // ---- live file changes: no popups, disk is the truth ----------------------
@@ -1468,14 +1465,12 @@ fn discard_dialog(win: &gtk::Window, text: &str) -> gtk::MessageDialog {
     d
 }
 
-/// fracs at renewal — measured law: the ScrolledWindow swaps the view's
-/// placeholder adjustment for its own at the page's first allocation, WITHOUT
-/// any property notify (notify::vadjustment never fires on view or sw). All
-/// linking therefore dedupes by adjustment identity (Adjustment PartialEq) and
-/// retries on allocation notify.
-///
-/// Also python `_diff_resync`'s idle retry — cover a post-emit swap in the
-/// same frame.
+// diff-page renewal law: the ScrolledWindow swaps the view's placeholder
+// adjustment for its own at the page's first allocation, WITHOUT any property
+// notify (notify::vadjustment never fires on view or sw). All linking
+// therefore dedupes by adjustment identity (Adjustment PartialEq) and retries
+// on allocation notify. Also python `_diff_resync`'s idle retry — cover a
+// post-emit swap in the same frame.
 
 /// python `_rgba` — fresh Gdk.RGBA() (transparent) that parse() fills in
 /// place; a bad hex stays transparent (an invisible tag, not a panic)

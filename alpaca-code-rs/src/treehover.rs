@@ -1,5 +1,5 @@
-//! Hover-tree: gtk::TreeView subclass — hover-band painting + scroll-adj sync
-//! + press-position capture. Moves here from filetree.rs (S2) so the git
+//! Hover-tree: gtk::TreeView subclass — hover-band painting, scroll-adj sync,
+//! press-position capture. Moves here from filetree.rs (S2) so the git
 //! changes view (gitview.rs) can reuse it without importing filetree internals.
 
 #![allow(deprecated)]
@@ -77,7 +77,7 @@ impl WidgetImpl for Imp {
                 .obj()
                 .style_context()
                 .lookup_color("alpaca-hover")
-                .unwrap_or_else(|| fallback_hover());
+                .unwrap_or_else(fallback_hover);
             let rect = graphene::Rect::new(x, y, w, h);
             snapshot.append_color(&rgba, &rect);
         }
@@ -133,11 +133,10 @@ impl Imp {
             .as_ref()
             .filter(|r| r.valid())
             .and_then(|r| r.path());
-        if let (Some(a), Some(b)) = (old.as_ref(), new.as_ref()) {
-            if a == b {
+        if let (Some(a), Some(b)) = (old.as_ref(), new.as_ref())
+            && a == b {
                 return;
             }
-        }
         let model = obj.model();
         let row = new.as_ref().and_then(|p| {
             model

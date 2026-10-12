@@ -233,7 +233,7 @@ pub fn parse_unified(text: &str) -> Vec<Hunk> {
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut in_hunk = false;
     for line in text.split('\n') {
-        if let Some(_) = hunk_head(line) {
+        if hunk_head(line).is_some() {
             hunks.push(Hunk { lines: Vec::new() });
             in_hunk = true;
             continue;
@@ -489,11 +489,10 @@ pub fn commit_then_push(
     if !cok {
         return FlightOut { cok: false, ctext, pok: false, ptext: String::new() };
     }
-    if !paths.is_empty() {
-        if let Some(phase) = phase {
+    if !paths.is_empty()
+        && let Some(phase) = phase {
             phase("busy");
         }
-    }
     let (pok, ptext) = push(root);
     FlightOut { cok: true, ctext, pok, ptext }
 }
@@ -804,7 +803,7 @@ mod tests {
     #[test]
     fn diff_for_binary_sniff() {
         let p = repo("bin");
-        std::fs::write(p.join("blob.bin"), &[0x00u8, 1, 2, 3]).unwrap();
+        std::fs::write(p.join("blob.bin"), [0x00u8, 1, 2, 3]).unwrap();
         git(&p, &["add", "."]);
         let (t, b) = diff_for(p.to_str().unwrap(), "blob.bin", false).unwrap();
         assert!(b && t.is_empty(), "binary flagged by markers, got: {t}");

@@ -16,13 +16,22 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use relm4::gtk::{self, gio, glib, pango, gdk_pixbuf, prelude::*};
 use relm4::prelude::*;
 
 use crate::badges;
 
-pub const SKIP_DIRS: [&str; 6] = ["node_modules", ".git", "obj", "bin", "vendor", "__pycache__"];
+pub const SKIP_DIRS: [&str; 7] = [
+    "node_modules",
+    ".git",
+    "obj",
+    "bin",
+    "vendor",
+    "__pycache__",
+    "target", // rust build dir — 31k+ files here, the measured count-cost case
+];
 
 // ext → themed mime icon (Papirus/Breeze names; anything else falls back)
 fn ext_of(name: &str) -> String {
@@ -199,6 +208,9 @@ pub enum FileTreeMsg {
     DirChanged { parent: String, file: Option<PathBuf>, ev: DirEv },
     /// search-clear restore: replay open dirs parents-first, then scroll
     RestoreTree(PathBuf, Vec<String>, f64),
+    /// debounce tick for the dir-event count — the gen IS the token (timer
+    /// law: a superseded tick fires and is discarded by the gen check)
+    CountTick(u64),
     /// store mutated → re-evaluate the hover band under a stationary pointer
     RefreshHover,
 }
@@ -218,6 +230,8 @@ pub struct FileTree {
     monitors: Vec<gio::FileMonitor>,
     monitored: HashSet<String>,  // dirs with a live monitor (cap)
     saved_tree: Option<(PathBuf, HashSet<String>, f64)>,
+    /// count-debounce token: newest request wins (one walk per event burst)
+    count_gen: u64,
 }
 
 #[relm4::component(pub)]
@@ -333,6 +347,7 @@ impl Component for FileTree {
             monitors: Vec::new(),
             monitored: HashSet::new(),
             saved_tree: None,
+            count_gen: 0,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -347,6 +362,11 @@ impl Component for FileTree {
             FileTreeMsg::Activated(tpath) => self.activated(&tpath, &sender),
             FileTreeMsg::DirChanged { parent, file, ev } => {
                 self.dir_changed(&parent, file.as_ref(), ev, &sender)
+            }
+            FileTreeMsg::CountTick(g) => {
+                if g == self.count_gen {
+                    self.count(&sender); // newest request only
+                }
             }
             FileTreeMsg::RestoreTree(root, open, scroll) => {
                 self.restore_tree(&root, open, scroll)
@@ -461,14 +481,13 @@ impl FileTree {    // ---- store helpers ---------------------------------------
         let Some(root) = self.root.clone() else { return };
         if text.is_empty() {
             self.populate_root();
-            if let Some((sroot, sopen, s)) = self.saved_tree.take() {
-                if sroot == root && !sopen.is_empty() {
+            if let Some((sroot, sopen, s)) = self.saved_tree.take()
+                && sroot == root && !sopen.is_empty() {
                     let snd2 = sender.clone();
                     glib::idle_add_local_once(move || {
                         snd2.input(FileTreeMsg::RestoreTree(root, sopen.into_iter().collect(), s))
                     });
                 }
-            }
             return;
         }
         if self.saved_tree.is_none() {
@@ -488,8 +507,8 @@ impl FileTree {    // ---- store helpers ---------------------------------------
 
     /// Stage 1: replay remembered open dirs parents-first (shallow→deep), then
     /// hand the scroll to stage 2. A workspace opened meanwhile cancels silently.
-    fn restore_tree(&mut self, root: &PathBuf, open: Vec<String>, scroll: f64) {
-        if self.root.as_deref() != Some(root.as_path()) {
+    fn restore_tree(&mut self, root: &Path, open: Vec<String>, scroll: f64) {
+        if self.root.as_deref() != Some(root) {
             return;
         }
         let mut sorted = open;
@@ -591,9 +610,18 @@ impl FileTree {    // ---- store helpers ---------------------------------------
 
     // ---- dir monitor events ------------------------------------------------------
 
-    /// CREATED/DELETED/MOVED only. count first, then the collapsed/open gates.
+    /// CREATED/DELETED/MOVED only. count first (DEBOUNCED: a burst — cargo
+    /// builds churn monitor events — coalesces into one walk; one full walk
+    /// per event sat on the UI thread, python did the same), then the
+    /// collapsed/open gates.
     fn dir_changed(&mut self, parent: &str, file: Option<&PathBuf>, ev: DirEv, sender: &ComponentSender<Self>) {
-        self.count(sender);
+        self.count_gen += 1;
+        let g = self.count_gen;
+        let snd = sender.clone();
+        glib::timeout_add_local(Duration::from_millis(300), move || {
+            snd.input(FileTreeMsg::CountTick(g));
+            glib::ControlFlow::Break
+        });
         if !self.open.contains(parent) {
             return; // collapsed: next expansion reloads from disk anyway
         }
@@ -620,7 +648,7 @@ impl FileTree {    // ---- store helpers ---------------------------------------
             let mut cur = self.store.iter_children(Some(&row_i));
             while let Some(ci) = cur {
                 cur = {
-                    let mut t = ci.clone();
+                    let mut t = ci;
                     if self.store.iter_next(&mut t) { Some(t) } else { None }
                 };
                 if self.row_str(&ci, PATH) == p.to_string_lossy() {
@@ -649,12 +677,12 @@ impl FileTree {    // ---- store helpers ---------------------------------------
         };
         while let Some(i) = cur {
             cur = {
-                let mut t = i.clone();
+                let mut t = i;
                 if self.store.iter_next(&mut t) { Some(t) } else { None }
             };
             let is_dir = self.row_bool(&i, IS_DIR);
             if self.row_str(&i, PATH) == path {
-                found.push(i.clone());
+                found.push(i);
             }
             if is_dir {
                 self.walk_iters(Some(&i), path, found);

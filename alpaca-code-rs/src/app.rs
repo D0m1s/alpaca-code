@@ -60,6 +60,10 @@ pub enum AppMsg {
     GitChanged(crate::gitstatus::Rows),
     /// window notify::is-active → git re-sync (filetree.py:refresh_git)
     WindowActive,
+    /// New Project dialog result — makedirs + `git init` ran OFF the main
+    /// thread (runctl.create_project has a 10s wall; a stalled git must not
+    /// freeze the window). The Sender marshals back onto the main context.
+    ProjectCreated { target: PathBuf, res: Result<(), String> },
     /// PROBE-ONLY (ALPACA_PROBE_S2) — never runs in production (env unset)
     ProbeS2(PathBuf),
     /// PROBE-ONLY (ALPACA_PROBE_S2) — the step-chain driver
@@ -262,13 +266,13 @@ impl Component for App {
                     app_in.input(AppMsg::OpenFile(p));
                 }
                 GitPanelOutput::OpenDiff { rel, letter } => {
-                    let _ = app_in.input(AppMsg::OpenDiff { rel, letter });
+                    app_in.input(AppMsg::OpenDiff { rel, letter });
                 }
                 GitPanelOutput::Commit { root, paths, msg } => {
-                    let _ = app_in.input(AppMsg::Commit { root, paths, msg });
+                    app_in.input(AppMsg::Commit { root, paths, msg });
                 }
                 GitPanelOutput::GitChanged(rows) => {
-                    let _ = app_in.input(AppMsg::GitChanged(rows));
+                    app_in.input(AppMsg::GitChanged(rows));
                 }
             });
 
@@ -413,6 +417,10 @@ impl Component for App {
             AppMsg::RecentMissing(p) => {
                 error_dialog(root, &format!("Project not found: {p}"), "");
             }
+            AppMsg::ProjectCreated { target, res } => match res {
+                Err(e) => error_dialog(root, &format!("Couldn't create {}", target.display()), &e),
+                Ok(()) => sender.input(AppMsg::SetWorkspace(target)),
+            },
             AppMsg::OpenDiff { rel, letter } => {
                 // window.py:_open_changes_diff runs ON the window with its own
                 // root guard — same shape here (App's root is Option<String>)
@@ -528,7 +536,7 @@ impl Component for App {
                     let mut c = root.first_child();
                     while let Some(w) = c {
                         let next = w.next_sibling();
-                        if let Some(p) = w.downcast::<gtk::Paned>().ok() {
+                        if let Ok(p) = w.downcast::<gtk::Paned>() {
                             found = Some(p);
                         }
                         c = next;
@@ -844,12 +852,11 @@ fn py_basename(s: &str) -> String {
 fn default_size() -> (i32, i32) {
     if let Some(disp) = gdk::Display::default() {
         let mons = disp.monitors();
-        if mons.n_items() > 0 {
-            if let Some(mon) = mons.item(0).and_downcast::<gdk::Monitor>() {
+        if mons.n_items() > 0
+            && let Some(mon) = mons.item(0).and_downcast::<gdk::Monitor>() {
                 let g = mon.geometry();
                 return (1586.min(g.width() - 40), 992.min(g.height() - 140));
             }
-        }
     }
     (1586, 992)
 }
@@ -950,11 +957,10 @@ fn open_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>)
             None
         };
         d.destroy();
-        if let Some(p) = path {
-            if p.is_dir() {
+        if let Some(p) = path
+            && p.is_dir() {
                 sender.input(AppMsg::SetWorkspace(p));
             }
-        }
     });
     dialog.show();
 }
@@ -972,7 +978,6 @@ fn new_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) 
     d.content_area().append(&parent_e);
     d.add_button("Create", gtk::ResponseType::Accept);
     d.add_button("Cancel", gtk::ResponseType::Cancel);
-    let root_win = root_win.clone();
     d.connect_response(move |dd, resp| {
         let name = name_e.text().trim().to_owned();
         let parent = parent_e.text().trim().to_owned();
@@ -981,10 +986,15 @@ fn new_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) 
             return;
         }
         let target = Path::new(&parent).join(name.as_str());
-        match runctl::create_project(&target) {
-            Err(e) => error_dialog(&root_win, &format!("Couldn't create {}", target.display()), &e),
-            Ok(()) => sender.input(AppMsg::SetWorkspace(target)),
-        }
+        // OFF the response thread: create_project blocks up to 10s (git init
+        // wall) — running it here would freeze the whole window, python
+        // ran it synchronously on this handler. The Sender is Send: the
+        // spawned thread posts straight back into the main context.
+        let snd = sender.clone();
+        std::thread::spawn(move || {
+            let res = runctl::create_project(&target);
+            snd.input(AppMsg::ProjectCreated { target, res });
+        });
     });
     d.present();
 }
@@ -1115,6 +1125,17 @@ fn register_actions(
     app.set_accels_for_action("app.quit", &["<Control>q"]);
 }
 
+/// Launch entry: the component's Widgets struct is macro-private, so the
+/// launch has to live beside the component (upstream's own examples do this).
+pub fn run(root: Option<String>) {
+    let root: Option<PathBuf> = root.filter(|p| Path::new(p).is_dir()).map(Into::into);
+    // Empty argv: RelmApp's default (process argv) makes g_application_run
+    // treat the project dir as a "file to open" → 'can not open files' critical.
+    let relm = relm4::RelmApp::new("io.alpaca.rs").with_args(vec![]);
+    crate::style::init();
+    relm.run::<App>(root);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1194,15 +1215,4 @@ mod tests {
         assert_eq!(win_menu().n_items(), 2);
         assert_eq!(help_menu().n_items(), 1);
     }
-}
-
-/// Launch entry: the component's Widgets struct is macro-private, so the
-/// launch has to live beside the component (upstream's own examples do this).
-pub fn run(root: Option<String>) {
-    let root: Option<PathBuf> = root.filter(|p| Path::new(p).is_dir()).map(Into::into);
-    // Empty argv: RelmApp's default (process argv) makes g_application_run
-    // treat the project dir as a "file to open" → 'can not open files' critical.
-    let relm = relm4::RelmApp::new("io.alpaca.rs").with_args(vec![]);
-    crate::style::init();
-    relm.run::<App>(root);
 }

@@ -56,6 +56,19 @@ pub enum BranchCommand {
         text: String,
         okmsg: String,
     },
+    /// branch-list flight (hover submenu + open menu): branch_of + branches
+    /// off the UI thread — python blocked the popup handler on both. The
+    /// widget rebuild lands in update_cmd; `popup_sub` + the open_gen token
+    /// decide the submenu pop (the sync handler popped inline inside SubOpen
+    /// AFTER the gen check — an async landing must re-validate that the hover
+    /// is still alive, or it re-pops a submenu the user already left).
+    Branches {
+        root: PathBuf,
+        cur: Option<String>,
+        names: Vec<String>,
+        popup_sub: bool,
+        open_gen: u64,
+    },
 }
 
 pub struct BranchMenu {
@@ -261,11 +274,10 @@ impl Component for BranchMenu {
             BranchMenuMsg::Update(b) => {
                 // row repaint: branch name or None (outside a repo → hide)
                 root.set_visible(b.is_some());
-                if let Some(n) = b.as_deref() {
-                    if !n.is_empty() {
+                if let Some(n) = b.as_deref()
+                    && !n.is_empty() {
                         self.label.set_text(n);
                     }
-                }
             }
             BranchMenuMsg::Gate(g) => self.gate = g,
             BranchMenuMsg::Pick(name) => {
@@ -286,8 +298,7 @@ impl Component for BranchMenu {
                     return; // stale timer, canceled by a gen bump
                 }
                 self.open_armed = false;
-                self.fill_branches(&sender);
-                self.sub.popup();
+                self.list_branches(&sender, true);
             }
             BranchMenuMsg::SubClose(g) => {
                 if g != self.close_gen {
@@ -296,7 +307,7 @@ impl Component for BranchMenu {
                 self.sub.popdown();
             }
             BranchMenuMsg::OpenMenu => {
-                self.fill_branches(&sender);
+                self.list_branches(&sender, false);
                 self.stack.set_visible_child(&self.menupage);
                 root.add_css_class("alpaca-open"); // clicked-pill state (user mockup)
                 self.pop.popup();
@@ -349,6 +360,17 @@ impl Component for BranchMenu {
                     if ok { okmsg } else { text },
                 ));
             }
+            BranchCommand::Branches { root, cur, names, popup_sub, open_gen } => {
+                if self.root.as_ref() != Some(&root) {
+                    return; // root switched mid-flight: this list is not ours
+                }
+                // popup only if the hover that spawned us is still alive AND
+                // nothing already popped the submenu (double-sub.open guard)
+                let do_pop = popup_sub
+                    && self.open_gen == open_gen
+                    && !self.sub.is_visible();
+                self.paint_branches(&sender, cur.as_deref(), &names, do_pop);
+            }
         }
     }
 }
@@ -396,24 +418,40 @@ impl BranchMenu {
         });
     }
 
-    /// Branch list, SYNC on the UI thread (python parity — the popup handler
-    /// blocks on two git subprocess calls, same class as the refresh sync).
-    fn fill_branches(&self, sender: &ComponentSender<Self>) {
-        let cur = self
-            .root
-            .clone()
-            .and_then(|r| gitstatus::branch_of(&r.to_string_lossy()));
+    /// Branch list as a command flight — python blocked the popup handler on
+    /// two git subprocess calls (branch_of + branches, 5s walls); hovering the
+    /// pill no longer freezes the mainloop on a stalled git. Widgets build in
+    /// Branches's landing (the root guard drops a switched workspace).
+    fn list_branches(&self, sender: &ComponentSender<Self>, popup_sub: bool) {
+        let Some(root) = self.root.clone() else {
+            // not a repo: no git calls — the "No branches yet" state lands now
+            self.paint_branches(sender, None, &[], popup_sub);
+            return;
+        };
+        let open_gen = self.open_gen; // stamped for the landing's pop validation
+        sender.spawn_command(move |out| {
+            let cur = gitstatus::branch_of(&root.to_string_lossy());
+            let names = gitstatus::branches(&root.to_string_lossy()).unwrap_or_default();
+            out.emit(BranchCommand::Branches { root, cur, names, popup_sub, open_gen });
+        });
+    }
+
+    /// The widget half of python fill_branches: clear + rebuild the submenu
+    /// rows from landed git data, pop the submenu when the request was a hover
+    /// (✓ tick marks the current branch; unborn HEAD → "No branches yet").
+    fn paint_branches(
+        &self,
+        sender: &ComponentSender<Self>,
+        cur: Option<&str>,
+        names: &[String],
+        popup_sub: bool,
+    ) {
         let mut child = self.branch_box.first_child();
         while let Some(c) = child {
             let nxt = c.next_sibling();
             self.branch_box.remove(&c);
             child = nxt;
         }
-        let names = self
-            .root
-            .clone()
-            .and_then(|r| gitstatus::branches(&r.to_string_lossy()))
-            .unwrap_or_default();
         if names.is_empty() {
             // unborn HEAD: nothing to switch to
             let lbl = gtk::Label::builder()
@@ -426,12 +464,16 @@ impl BranchMenu {
                 .css_classes(["alpaca-hint"])
                 .build();
             self.branch_box.append(&lbl);
+            if popup_sub {
+                self.sub.popup();
+            }
             return;
         }
         for n in names {
+            let n = n.clone(); // rows are few: an owned copy for the Pick closure
             let mut classes = Vec::with_capacity(2);
             classes.push("alpaca-branchitem");
-            if cur.as_deref() == Some(n.as_str()) {
+            if cur == Some(n.as_str()) {
                 classes.push("alpaca-on");
             }
             let b = gtk::Button::builder()
@@ -440,7 +482,7 @@ impl BranchMenu {
                 .build();
             // current branch row ticks (✓); plain label otherwise
             let lbl = gtk::Label::builder()
-                .label(if cur.as_deref() == Some(n.as_str()) {
+                .label(if cur == Some(n.as_str()) {
                     format!("✓ {n}")
                 } else {
                     n.clone()
@@ -452,6 +494,9 @@ impl BranchMenu {
             let snd = sender.clone();
             b.connect_clicked(move |_| snd.input(BranchMenuMsg::Pick(n.clone())));
             self.branch_box.append(&b);
+        }
+        if popup_sub {
+            self.sub.popup();
         }
     }
 }

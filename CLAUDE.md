@@ -92,7 +92,9 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
   cascade (LAST matching rule wins; ext rules ci, name rules authored-case,
   partial = substring); no match = `seti-default-white.svg`. Consumed ONLY
   through badges' pixbuf path (tree cells, tab badges, CHANGES rows) — never
-  vector.rs's art-walker. Regeneration: rerun the one-shot converter.
+  vector.rs's art-walker. Assets are frozen artifacts — the one-shot converter
+  was never tracked (run outside the repo); to regenerate, re-author it from
+  mapping.less rules rather than trusting any in-repo script.
 - Timers that capture a component's Sender: `glib::timeout_add_local` — plain
   `timeout_add` requires Send and TreePath-bearing messages (filetree) are not.
 
