@@ -94,14 +94,6 @@ thread_local! {
     static PROBE_S3_TICKS: Cell<u32> = const { Cell::new(0) };
 }
 
-#[derive(Clone)]
-struct HeaderButtons {
-    file: gtk::MenuButton,
-    edit: gtk::MenuButton,
-    window: gtk::MenuButton,
-    help: gtk::MenuButton,
-}
-
 /// Requirement 5 — maximum simultaneously open workspaces.
 pub const MAX_WORKSPACES: usize = 3;
 
@@ -272,7 +264,6 @@ struct App {
     run_btn: gtk::Button,
     stop_btn: gtk::Button,
     run_row: gtk::Box,
-    menu_btns: HeaderButtons,
     ws: Vec<Workspace>,
     /// valid iff !ws.is_empty() — never read on empty
     active: usize,
@@ -303,20 +294,6 @@ impl Component for App {
 
     fn init(model: Self::Init, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         let arg = model.clone(); // the CLI arg — read before `model` is shadowed
-        let menu_btns = HeaderButtons {
-            file: gtk::MenuButton::new(),
-            edit: gtk::MenuButton::new(),
-            window: gtk::MenuButton::new(),
-            help: gtk::MenuButton::new(),
-        };
-        menu_btns.file.set_label("File");
-        menu_btns.edit.set_label("Edit");
-        menu_btns.window.set_label("Window");
-        menu_btns.help.set_label("Help");
-        no_arrow(&menu_btns.file);
-        no_arrow(&menu_btns.edit);
-        no_arrow(&menu_btns.window);
-        no_arrow(&menu_btns.help);
 
         // Mockup's pill buttons: green play / red stop — design SVG (theme
         // symbols grey both out); t4's symbolic stand-in paid off — badges (t5)
@@ -390,11 +367,29 @@ impl Component for App {
         let send = sender.clone();
         add_btn.connect_clicked(move |_b| send.input(AppMsg::AddProjectDialog));
         header.set_title_widget(Some(&proj_box));
-        // design's menu row: File Edit Window Help
-        header.pack_start(&menu_btns.file);
-        header.pack_start(&menu_btns.edit);
-        header.pack_start(&menu_btns.window);
-        header.pack_start(&menu_btns.help);
+        // The one header menu: a small down arrow (chevron-down.svg — 16-grid,
+        // w2 #8A93A6, the branch-art family) opening the workbench actions.
+        // Custom-child = icon mode: MenuButton hides its own arrow (measured
+        // law), so no arrow walk. Header menubuttons are styled by the bare
+        // `.alpaca-header menubutton > button` css rule. img valign CENTER rides
+        // the run-icon law (default FILL parks ink high in the taller button).
+        let menu_btn = gtk::MenuButton::new();
+        if let Some(vec) = vector::icon("chevron-down.svg") {
+            let img = gtk::Image::from_paintable(Some(&vec));
+            img.set_pixel_size(14);
+            img.set_valign(gtk::Align::Center);
+            menu_btn.set_child(Some(&img));
+        } else {
+            // art loss (never on a shipped build): symbolic stand-in
+            menu_btn.set_child(Some(&gtk::Image::builder()
+                .icon_name("pan-down-symbolic")
+                .pixel_size(14)
+                .valign(gtk::Align::Center)
+                .build()));
+        }
+        menu_btn.set_tooltip_text(Some("Workbench"));
+        menu_btn.set_popover(Some(&gtk::PopoverMenu::from_model(Some(&workbench_menu()))));
+        header.pack_start(&menu_btn);
 
         // Hover swatches live on wrapper cells, not the buttons: a GtkButton's
         // CSS box paints 16+2·pad-tall around a 16px icon while its measure adds
@@ -414,8 +409,10 @@ impl Component for App {
         divider.set_margin_bottom(4);
         let first = run_row.first_child().unwrap();
         run_row.insert_child_after(&divider, Some(&first)); // run | div | stop
-        // band = 28 exactly BECAUSE the row stands 28 tall (CENTER in the 32px
-        // bar = 2px air each side); header interior would FILL it to 32.
+        // band = 24 exactly BECAUSE the row stands 24 tall (CENTER in the 32px
+        // bar = 4px air each side — equalized 2026-10-14 with the project
+        // pills' selected band and the menubutton margin, measured image #13);
+        // header interior would FILL it to 32.
         run_row.set_valign(gtk::Align::Center);
         header.pack_end(&run_row);
         root.set_titlebar(Some(&header));
@@ -447,7 +444,6 @@ impl Component for App {
             run_btn,
             stop_btn,
             run_row,
-            menu_btns,
             ws: Vec::new(),
             active: 0,
             probe_ws: None,
@@ -456,7 +452,6 @@ impl Component for App {
         };
 
         register_actions(&relm4::main_application(), &root, sender.clone());
-        model.refresh_menus();
 
         // notify::is-active fires on EVERY notify (both False→True and the rare
         // True→False edge); each fire costs one sync refresh — keep exactly that.
@@ -1270,10 +1265,6 @@ impl App {
         self.refresh_run_style();
     }
 
-    fn refresh_menus(&self) {
-        refresh_menus(&self.menu_btns);
-    }
-
     /// the running class rides the pill row — the ACTIVE workspace's mirror
     fn refresh_run_style(&self) {
         let running = self.ws.get(self.active).map(|w| w.running).unwrap_or(false);
@@ -1305,83 +1296,20 @@ fn default_size() -> (i32, i32) {
     (1586, 992)
 }
 
-/// Label-mode MenuButtons draw a real 16×24 `down` arrow widget (invisible
-/// glyph, real width → menu labels sat 38px apart). set_always_show_arrow(False)
-/// no-ops on this build; hide the widget instead; survives set_popover (probed).
-fn no_arrow(btn: &gtk::MenuButton) {
-    let c = match btn.first_child().and_then(|b| b.first_child()) {
-        Some(c) => c,
-        None => return,
-    };
-    let mut c = c;
-    loop {
-        if c.has_css_class("down") {
-            c.set_visible(false);
-            return;
-        }
-        match c.next_sibling() {
-            Some(sib) => c = sib,
-            None => return,
-        }
-    }
-}
-
-fn refresh_menus(btns: &HeaderButtons) {
-    // File menu lives in exactly one place: the headerbar File button.
-    let s = state::load();
-    btns.file.set_popover(Some(&gtk::PopoverMenu::from_model(Some(&file_menu(&s)))));
-    btns.edit.set_popover(Some(&gtk::PopoverMenu::from_model(Some(&edit_menu()))));
-    btns.window.set_popover(Some(&gtk::PopoverMenu::from_model(Some(&win_menu()))));
-    btns.help.set_popover(Some(&gtk::PopoverMenu::from_model(Some(&help_menu()))));
-}
-
-fn file_menu(s: &state::State) -> gio::Menu {
-    let menu = gio::Menu::new();
-    menu.append(Some("Open Project…"), Some("app.open-project"));
-    // recents submenu: "basename(rstrip /) — path" rows, newest first; the
-    // submenu row only exists when there is at least one recent
-    // (`if recents.get_n_items()`)
-    let recents = gio::Menu::new();
-    for p in &s.recents {
-        let item = gio::MenuItem::new(Some(&format!("{} — {}", py_basename(p), p)), None);
-        item.set_action_and_target_value(Some("app.open-recent"), Some(&glib::Variant::from(p)));
-        recents.append_item(&item);
-    }
-    if recents.n_items() > 0 {
-        menu.append_submenu(Some("Open Recent"), &recents);
-    }
-    menu.append(Some("New Project…"), Some("app.new-project"));
-    menu.append(Some("Quit"), Some("app.quit"));
-    menu
-}
-
-fn edit_menu() -> gio::Menu {
+/// The one header menu: workbench actions. Sections between groups are
+/// what PopoverMenu renders as the separator lines — no separator rows.
+fn workbench_menu() -> gio::Menu {
     let m = gio::Menu::new();
     let sec = gio::Menu::new();
-    sec.append(Some("Undo"), Some("app.undo"));
-    sec.append(Some("Redo"), Some("app.redo"));
+    sec.append(Some("New Workbench"), Some("app.new-workbench"));
+    sec.append(Some("Open Workbench"), Some("app.open-workbench"));
     m.append_section(None, &sec);
     let sec = gio::Menu::new();
-    sec.append(Some("Cut"), Some("app.cut"));
-    sec.append(Some("Copy"), Some("app.copy"));
-    sec.append(Some("Paste"), Some("app.paste"));
+    sec.append(Some("Save Workbench"), Some("app.save-workbench"));
     m.append_section(None, &sec);
     let sec = gio::Menu::new();
-    sec.append(Some("Select All"), Some("app.select-all"));
+    sec.append(Some("Exit"), Some("app.quit"));
     m.append_section(None, &sec);
-    m
-}
-
-fn win_menu() -> gio::Menu {
-    let m = gio::Menu::new();
-    m.append(Some("Minimize"), Some("app.win-minimize"));
-    m.append(Some("Close"), Some("app.close"));
-    m
-}
-
-fn help_menu() -> gio::Menu {
-    let m = gio::Menu::new();
-    m.append(Some("About alpaca-code"), Some("app.about"));
     m
 }
 
@@ -1502,6 +1430,20 @@ fn register_actions(
     }
     app.add_action(&quit);
 
+    // no-op stubs until workbenches land (they'll be the superproject layer
+    // loading the up-to-3 projects): the rows must look enabled and do
+    // nothing yet — these three become the wiring slots then.
+    for name in ["new-workbench", "open-workbench", "save-workbench"] {
+        let a = gio::SimpleAction::new(name, None);
+        a.connect_activate(|_a, _p| {});
+        app.add_action(&a);
+    }
+
+    // Surface-less for now (File/Edit/Window/Help rows removed 2026-10-14):
+    // open-project/new-project/undo/redo/cut/copy/paste/select-all/
+    // win-minimize/close/about/open-recent keep firing — the workbench
+    // phase re-surfaces or deletes them when it defines its own menus.
+
     // undo/redo buffer-side, clipboard ops on the view's
     // own actions; routed to the ACTIVE workspace's editor
     for name in ["undo", "redo", "cut", "copy", "paste", "select-all"] {
@@ -1582,7 +1524,6 @@ pub fn run(root: Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::State;
 
     fn pb(s: &str) -> PathBuf {
         PathBuf::from(s)
@@ -1601,15 +1542,6 @@ mod tests {
         assert_eq!(add_decision(&[], Path::new("/a")), AddDecision::Add);
     }
 
-    fn fixture(recents: &[&str]) -> State {
-        State {
-            last_project: None,
-            recents: recents.iter().map(|s| s.to_string()).collect(),
-            projects: Default::default(),
-            open_projects: Vec::new(),
-        }
-    }
-
     /// MenuModel item's attribute as a String (label / action).
     fn attr(model: &impl glib::object::IsA<gio::MenuModel>, name: &str, i: i32) -> Option<String> {
         use gio::prelude::MenuModelExt;
@@ -1619,61 +1551,24 @@ mod tests {
     }
 
     #[test]
-    fn file_menu_items_and_recents_submenu_model() {
+    fn workbench_menu_sections_labels_actions() {
         use gio::prelude::MenuModelExt;
-        // fixed rows + recents submenu (newest first,
-        // each "basename(rstrip) — path"), submenu only when recents non-empty.
-        let m = file_menu(&fixture(&["/home/u/misiuscode", "/home/u/porttest"]));
-        assert_eq!(m.n_items(), 4);
-        assert_eq!(attr(&m, "label", 0).as_deref(), Some("Open Project…"));
-        assert_eq!(attr(&m, "label", 2).as_deref(), Some("New Project…"));
-        assert_eq!(attr(&m, "label", 3).as_deref(), Some("Quit"));
-        let rec = m
-            .item_link(1, gio::MENU_LINK_SUBMENU)
-            .expect("item 1 must be the Open Recent submenu");
-        assert_eq!(rec.n_items(), 2);
-        assert_eq!(
-            attr(&rec, "label", 0).as_deref(),
-            Some("misiuscode — /home/u/misiuscode")
-        );
-        assert_eq!(
-            attr(&rec, "label", 1).as_deref(),
-            Some("porttest — /home/u/porttest")
-        );
-        // action wiring: item 0 → open-project, Quit → app.quit
-        assert_eq!(attr(&m, "action", 0).as_deref(), Some("app.open-project"));
-        assert_eq!(attr(&m, "action", 1), None); // submenu item carries no action
-        assert_eq!(attr(&m, "action", 2).as_deref(), Some("app.new-project"));
-        assert_eq!(attr(&m, "action", 3).as_deref(), Some("app.quit"));
-    }
-
-    #[test]
-    fn file_menu_without_recents_has_no_submenu() {
-        use gio::prelude::MenuModelExt;
-        // submenu gated on non-empty recents
-        let m = file_menu(&fixture(&[]));
+        // 3 sections = the two separator lines: [New, Open] | [Save] | [Exit]
+        let m = workbench_menu();
         assert_eq!(m.n_items(), 3);
-        assert!(
-            m.item_link(1, gio::MENU_LINK_SUBMENU).is_none(),
-            "empty recents must not leave an empty submenu row"
-        );
-        assert_eq!(attr(&m, "label", 1).as_deref(), Some("New Project…"));
-        assert_eq!(attr(&m, "label", 2).as_deref(), Some("Quit"));
-    }
-
-    #[test]
-    fn edit_window_help_menus_populated() {
-        use gio::prelude::MenuModelExt;
-        // brief step 4: "Edit/Window/Help populated" — sections 2/3/1, Win 2, Help 1
-        let e = edit_menu();
-        assert_eq!(e.n_items(), 3); // 3 sections
-        for (i, n) in [(0, 2), (1, 3), (2, 1)] {
-            let sec = e
-                .item_link(i, gio::MENU_LINK_SECTION)
-                .expect("section");
-            assert_eq!(sec.n_items(), n, "section {i}");
-        }
-        assert_eq!(win_menu().n_items(), 2);
-        assert_eq!(help_menu().n_items(), 1);
+        let sec = m.item_link(0, gio::MENU_LINK_SECTION).expect("section 0");
+        assert_eq!(sec.n_items(), 2);
+        assert_eq!(attr(&sec, "label", 0).as_deref(), Some("New Workbench"));
+        assert_eq!(attr(&sec, "action", 0).as_deref(), Some("app.new-workbench"));
+        assert_eq!(attr(&sec, "label", 1).as_deref(), Some("Open Workbench"));
+        assert_eq!(attr(&sec, "action", 1).as_deref(), Some("app.open-workbench"));
+        let sec = m.item_link(1, gio::MENU_LINK_SECTION).expect("section 1");
+        assert_eq!(sec.n_items(), 1);
+        assert_eq!(attr(&sec, "label", 0).as_deref(), Some("Save Workbench"));
+        assert_eq!(attr(&sec, "action", 0).as_deref(), Some("app.save-workbench"));
+        let sec = m.item_link(2, gio::MENU_LINK_SECTION).expect("section 2");
+        assert_eq!(sec.n_items(), 1);
+        assert_eq!(attr(&sec, "label", 0).as_deref(), Some("Exit"));
+        assert_eq!(attr(&sec, "action", 0).as_deref(), Some("app.quit"));
     }
 }

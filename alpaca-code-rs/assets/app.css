@@ -62,49 +62,50 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
 .alpaca-projbtn label:backdrop { color: #4d5666; }
 .alpaca-projbtn.alpaca-on label:backdrop { color: #e6e8ee; }
 .alpaca-projbtn:hover label:backdrop, .alpaca-projbtn.alpaca-on:hover label:backdrop { color: #e6e8ee; }
-.alpaca-projadd { color: #8a93a6; font-size: 13px; font-weight: 500; padding: 1px 8px; }
+.alpaca-projadd { color: #8a93a6; font-size: 13px; font-weight: 500; padding: 1px 5px; }
 .alpaca-projadd:disabled { color: #3d4454; opacity: 0.35; }
-/* menu buttons floor at 34px on this build/theme (GtkImage 16px floor + 18px
-   13px label, measured) — zero vertical padding keeps them from riding higher.
-   Hover pill must grow WITHOUT growing the bar: pill paint = wrapper(34) − child
-   v-margins (wrapper keeps a 16px child v-margin: paint 34−2·8 = 18, measured) —
-   shrinking the child margin grew the paint 18→22 (margin 6) →28 (margin 3),
-   matching the runpill hover band height; min untouched. */
+/* The workbench chevron (the one header MenuButton, 2026-10-14): band =
+   interior 32 − 2·margin → margin 4px 0 = 24px tall; width = icon 14 +
+   2·5px pad = 24 → a 24×24 SQUARE band (ruling images #14-16: band
+   width = height, since height is clamped; rounded corners as before,
+   the project pills' shared 6px radius). The old label-floor arithmetic
+   (34pxGtkImage+label) retired with the File/Edit/Window/Help row. */
 .alpaca-header menubutton > button { background: transparent; color: #e6e8ee; font-size: 13px;
-                                     border: none; border-radius: 6px; padding: 0 8px;
-                                     min-height: 2px; margin: 3px 0; }
+                                     border: none; border-radius: 6px; padding: 0 5px;
+                                     min-height: 2px; margin: 4px 0; }
 .alpaca-header menubutton > button:hover { background: #111723; }
 /* Run/Stop: flat idle like the menu buttons (user: the idle raised pill read as
    wrong fill) — the shell exists only while a run is live (class toggled by
    window._refresh_run_style). No border in either state, so the running flip
-   never jumps layout. The cells are 28px tall (runpill min-height): the
-   buttons themselves refuse to shrink vertically at APPLICATION priority
-   (min-height 2px / padding 0 measured 32px button mins, probe_pill9-16) —
-   USER priority moves them (probe_mtx: px-true 12/13/14/16 tall, minh28 → 28).
+   never jumps layout. The cells are 24px tall (runpill min-height, equalized
+   with the project pills' selected band 2026-10-14): the buttons themselves
+   refuse to shrink vertically at APPLICATION priority (min-height 2px /
+   padding 0 measured 32px button mins, probe_pill9-16) — USER priority moves
+   them (probe_mtx: px-true 12/13/14/16 tall, minh28 → 28).
    Hover swatches live on the wrapper cells, NOT the buttons: cells paint
-   their full (fill) allocation, so a rounded background-color on
-   .alpaca-runcell:hover is a rounded 24/22 × 28 band flush with the menu
-   pills' height. */
+   their full (fill) allocation, so a background-color on .alpaca-runcell:hover
+   is a 24×24 SQUARE band (ruling images #14-16: band width = height — button
+   pad 5px × icon 14; corner radius back to the original 6px/8px). */
 .alpaca-runpill { background: transparent; border: none; border-radius: 8px;
-                  min-height: 28px; }
+                  min-height: 24px; }
 .alpaca-runpill.running, .alpaca-runpill.running:hover { background: #111723; }
 /* Zero the button's OWN css metrics first (min-height/padding/border on a
    headerbar-ancestry button are lost to a ~16px vertical additive that
    survives every button-side kill — probe_dis: headerbar button = 28 css + 16
    = 44; everything-0 incl. the child sweep drops it to 14x14), then re-raise
-   the wanted 28x22 in the later rule (last equal-priority rule wins). */
+   the wanted 24x22 in the later rule (last equal-priority rule wins). */
 .alpaca-runpill button, .alpaca-runpill button > box,
 .alpaca-runpill button > box > image {
     min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border: none;
     border-spacing: 0px; }
 .alpaca-runpill button { background: transparent; border: none;
-                         min-height: 28px; padding: 0 4px; }
+                         min-height: 24px; padding: 0 5px; }
 .alpaca-runpill button:disabled { opacity: 0.35; }
 /* the hover paint is a real background-color at the cell's full allocation —
-   radius-6 clipped by the paint itself, so the corners are ROUND (the
-   background-image band this replaced could only paint square or arc-bitten
-   corners: bg-image is clipped to the cell's radius path — full-width = bite,
-   inset = square, measured both ways). */
+   radius 6 = the original rounded corners (the background-image band this
+   replaced could only paint square or arc-bitten corners: bg-image is
+   clipped to the cell's radius path — measured both ways; the SQUARE here
+   is geometric, 24 wide × 24 tall). */
 .alpaca-runcell { border-radius: 6px; }
 .alpaca-runcell:hover { background-color: #111723; }
 .alpaca-runpill.running .alpaca-runcell:hover { background-color: #1b2233; }

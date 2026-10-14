@@ -17,6 +17,16 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
 ## Status
 
+- **Header menu row swap (2026-10-14, workbenches pending):** the
+  File/Edit/Window/Help label buttons are GONE — one icon-mode chevron
+  MenuButton (`chevron-down.svg` as custom child) at the header's left opens
+  the workbench menu (New/Open | Save | Exit; `gio::Menu` sections = the
+  separator lines; new/open/save = no-op stub actions, Exit = `app.quit`).
+  Static popover attached ONCE at init — `refresh_menus`, `HeaderButtons`,
+  `no_arrow` and the old menu-model fns are deleted (the open/recent/
+  minimize/close/about/edit-op ACTIONS stay registered, surface-less, for
+  the workbench phase). Menu test: `workbench_menu_sections_labels_actions`.
+
 - **S1/S2/S3 complete (2026-10-09). S4 (multi-workspace tabs) complete
   (2026-10-14):** every open project = one `Workspace` (app.rs) — its own
   Editor/Panes/GitPanel controllers + hpaned assembly; the window child is a
@@ -215,20 +225,34 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   surface. Label buttons must size their child labels' natural width (never
   max_width_chars/ellipsize inside a popover list — natural-width collapse
   shrink the popover to "…").
-- Menubar hover pill: paint = header(34) − the button's own v-margins; Breeze's 16px
-  child v-margin (= 18px paint) inflates if padding/min-height grow (bar 34→36/38,
-  measured). Grow the paint by SHRINKING the child v-margin: paint tracks the button's
-  internal box exactly (34−2·margin): `margin: 3px 0` → 28px pill (rows 3..30, pixel
-  capture), matching the run-cell band; bar untouched. Same phantom law as the run pill
-  (buttons track child req +16).
+- Menubar hover pill: paint = header interior (32 today; the bar was 34 when this was
+  first measured) − the button's own v-margins; Breeze's 16px child v-margin (= 18px
+  paint) inflates if padding/min-height grow (bar 34→36/38, measured). Grow the
+  paint by SHRINKING the child v-margin: paint tracks the button's internal box
+  exactly (`interior − 2·margin`). Same phantom law as the run pill (buttons track
+  child req +16).
+- Header band heights EQUAL (2026-10-14, image #13, pixel-scan of the user's
+  screenshot): selected project pill band ~24 (top-gap 4) is the reference;
+  `.alpaca-header menubutton > button` margin `4px 0` → 24; `.alpaca-runpill` +
+  `.alpaca-runpill button` min-height 24 → the run cells paint 24 too. All three
+  bands share the header-interior center (valign/padding must stay 0 on pill text,
+  image valign CENTER). Re-measure if the header interior ever changes. Hover
+  bands are SQUARE = width EQUALS height, not right angles (user ruling
+  2026-10-14, images #14-16, first misunderstood as radius-0 then corrected):
+  height clamped at 24, so width comes to 24 via the 14px icons' horizontal
+  padding `0 5px` (menubutton, `.alpaca-projadd`, runpill buttons); corner
+  radii are the originals (6px menubutton/projadd-family/runcell, 8px runpill
+  row shell).
 - Run-cell hover band (2026-10-05, replaces the bg-image inset): the band is the
   cell's own `background-color` at FULL allocation — `background-image` could only
   be square or arc-bitten (bg-image is clipped to the cell's radius path: full-width
   = bite, inset = square, measured both ways). A bg-color paint is clipped to the
-  same radius, so corners stay ROUND by construction — no inset arithmetic. Band
-  height = 28 exactly BECAUSE the run row stands only 28 tall: `run_row.set_valign(
-  Center)` in app.rs (default FILL would make the row allocate the header
-  interior 32 — band would grow to 32). Keep this alignment if the header changes.
+  same radius, so the shape comes from the cell's own `border-radius` — radius 0 =
+  square by the 2026-10-14 ruling (was round). Band height = the run row's own
+  min-height (24 since 2026-10-14) exactly BECAUSE the row stands that tall:
+  `run_row.set_valign(Center)` in app.rs (default FILL would make the row allocate
+  the header interior 32 — band would grow to 32). Keep this alignment if the
+  header changes.
 - Button metrics live at USER priority, and only after a zero-first sweep
   (2026-10-05): rules at APPLICATION (600) LOSE `button min-height` to Breeze on
   this build (32px button mins); USER (800) moves buttons to px-true. Then the
@@ -315,6 +339,8 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   `display:none` selectors (`arrow`, `icon.down`, `button > box > icon`) don't match it
   either — fix = walk toggle → child box → css class `down`, `set_visible(False)`
   (stable across set_popover/set_label). Icon-mode buttons hide the arrow themselves.
+  (2026-10-14: no label-mode MenuButton survives — the header's one menu button is a
+  custom-child icon button; the walk law is kept for future label menus.)
 - Uniform pill insets belong on the tab's head Box (`.alpaca-panetab { padding: 0 12px }`,
   never on the label: label-side padding leaves the leading icon flush with the pill
   edge (0px) while the text keeps ~9px — the "icon cramped, text floating" look.
