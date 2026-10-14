@@ -357,13 +357,34 @@ impl Component for App {
         // strip of project pills, centered as ONE entity by the headerbar's own
         // title-widget centering. 6px tasteful gaps (requirement 7).
         let proj_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        // the strip must NOT fill the bar: default FILL stretches every pill
+        // band to the header's 32px interior (image #8: band flush top/bottom).
+        // CENTER pins band = the strip's own req with air each side — the
+        // run_row recipe (band = the row it stands in, app.rs:396-398) applied
+        // at strip level.
+        proj_box.set_valign(gtk::Align::Center);
         // requirement 3: "+" to the right of the project pills; the strip is
         // [pill … pill | +] — the same flat pill family
+        // the "+" rides plus.svg's stroke art: a text "+" is an x-height glyph
+        // (measured image #9, ~7px vs the pill text's 9px cap band) and carried
+        // no hover band. Same recipe as the run icons (paintable + pixel_size +
+        // valign); 14px matches the 13px pill text; the baked #8a93a6 stroke
+        // matches the branch-icon family (branch.svg stays grey on hover too —
+        // baked-stroke law: recolor is opacity/alt-art only, CSS color can't
+        // reach a Gsk node).
         let add_btn = gtk::Button::builder()
             .has_frame(false)
             .css_classes(["alpaca-projadd"])
-            .label("+")
             .build();
+        if let Some(vec) = vector::icon("plus.svg") {
+            let img = gtk::Image::from_paintable(Some(&vec));
+            img.set_pixel_size(14);
+            img.set_valign(gtk::Align::Center);
+            add_btn.set_child(Some(&img));
+        } else {
+            // art loss (never on a shipped build): the old text stand-in
+            add_btn.set_child(Some(&gtk::Label::builder().label("+").build()));
+        }
         add_btn.set_tooltip_text(Some("Open project…"));
         proj_box.append(&add_btn);
         let send = sender.clone();
@@ -742,6 +763,28 @@ impl Component for App {
                             "on-class-wsA",
                             self.ws[0].btn.has_css_class("alpaca-on")
                                 && !self.ws[1].btn.has_css_class("alpaca-on"),
+                        );
+                        // polish task: the pill band must FLOAT —
+                        // stretched-to-the-bar is the image-#8 regression
+                        // (default FILL); Center pins band = the strip's own
+                        // req. Uniformity is free: all strip children share
+                        // the strip's height. A bh of 0 = never-allocated
+                        // (the S4 hpane comment's race) → inconclusive,
+                        // rerun; never tune CSS off a 0.
+                        let bh = self.proj_box.allocated_height();
+                        let bands: Vec<i32> =
+                            self.ws.iter().map(|w| w.btn.allocated_height()).collect();
+                        println!("PROBE strip: proj_box-h={} pill-band-heights={:?}", bh, bands);
+                        let ok = bh > 0
+                            && bands.len() == 2
+                            && bands.iter().all(|h| *h == bh && *h < 32);
+                        say("pill-band-floats", ok);
+                        // polish task: the "+" lost its text label for the
+                        // plus.svg stroke icon (image #9: a text "+" is an
+                        // x-height glyph, ~7px next to 9px cap text)
+                        say(
+                            "add-btn-icon",
+                            self.add_btn.child().and_downcast::<gtk::Image>().is_some(),
                         );
                         // requirement 1: the WM title carries the bare name
                         say(

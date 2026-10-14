@@ -51,14 +51,19 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
     background: transparent; border: none; border-radius: 6px;
     min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border-spacing: 0px;
 }
-.alpaca-projbtn { color: #4d5666; font-size: 13px; font-weight: 500; padding: 2px 10px; }
-.alpaca-projbtn.alpaca-on { color: #6b7487; }
-.alpaca-projbtn:hover, .alpaca-projbtn.alpaca-on:hover { background: #1c2431; color: #e6e8ee; }
+.alpaca-projbtn { color: #4d5666; font-size: 13px; font-weight: 500; padding: 1px 8px; }
+/* ink law (the .alpaca-tabname fix): the eye anchors the dense ink band and a
+   centered label hangs ~1.3-1.8px low — 3px bottom pad re-centers the ink in
+   the pill band so the tight hover outline reads optically centred */
+.alpaca-projbtn > label, .alpaca-projadd > label { padding: 0 0 3px 0; }
+.alpaca-projbtn.alpaca-on { color: #e6e8ee; background: #1c2431; }
+.alpaca-projbtn:hover, .alpaca-projbtn.alpaca-on:hover, .alpaca-projadd:hover,
+.alpaca-branchbtn:hover, .alpaca-branchbtn.alpaca-open { background: #1c2431; color: #e6e8ee; }
 .alpaca-projbtn label:backdrop { color: #4d5666; }
-.alpaca-projbtn.alpaca-on label:backdrop { color: #6b7487; }
+.alpaca-projbtn.alpaca-on label:backdrop { color: #e6e8ee; }
 .alpaca-projbtn:hover label:backdrop, .alpaca-projbtn.alpaca-on:hover label:backdrop { color: #e6e8ee; }
-.alpaca-projadd { color: #8a93a6; font-size: 13px; font-weight: 500; padding: 2px 8px; }
-.alpaca-projadd:disabled { color: #3d4454; }
+.alpaca-projadd { color: #8a93a6; font-size: 13px; font-weight: 500; padding: 1px 8px; }
+.alpaca-projadd:disabled { color: #3d4454; opacity: 0.35; }
 /* menu buttons floor at 34px on this build/theme (GtkImage 16px floor + 18px
    13px label, measured) — zero vertical padding keeps them from riding higher.
    Hover pill must grow WITHOUT growing the bar: pill paint = wrapper(34) − child
@@ -164,7 +169,6 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
    .alpaca-hint/.alpaca-branchitem at the same USER tier — hint rendered
    #e6e8ee bright (measured 227,229,235). Every popover label carries its own
    explicit rule → inherits can't reach them, only the pill's own strip label. */
-.alpaca-branchbtn:hover, .alpaca-branchbtn.alpaca-open { background: #1c2431; color: #e6e8ee; }
 .alpaca-branchbtn label:backdrop { color: #8a93a6; }   /* tabs' label:backdrop leak law */
 /* popovers: Breeze paints popover > contents (bg + #4c4e51 border + tail) —
    styling the popover node too paints a double frame (measured 17,23,35 ring
