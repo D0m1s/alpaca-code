@@ -185,7 +185,6 @@ pub enum FileState {
 pub struct EditorSnapshot {
     pub open_tabs: Vec<String>,
     pub active_tab: i64,
-    pub has_dirty: bool,
 }
 
 #[derive(Debug)]
@@ -1686,8 +1685,7 @@ impl Editor {
             .collect();
         // index, not a path; restore re-clamps via min(saved, n-1)
         let active_tab = self.nb.current_page().map(i64::from).unwrap_or(0);
-        let has_dirty = self.pages.iter().any(|pg| pg.buf.is_modified());
-        EditorSnapshot { open_tabs, active_tab, has_dirty }
+        EditorSnapshot { open_tabs, active_tab }
     }
 
 }

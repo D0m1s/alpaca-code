@@ -25,41 +25,49 @@ pub use crate::editor::EditorSnapshot;
 
 #[derive(Debug)]
 pub enum AppMsg {
-    SetWorkspace(PathBuf),
-    /// tree → editor routing; wired when editor lands (t6)
-    OpenFile(PathBuf),
-    /// editor state flip → (a) dirty gate for set_workspace, (b) arms the
-    /// persist-tabs debounce
-    EditorState(EditorSnapshot),
-    /// panes → header Run/Stop sync (t8: launch accepted — the starting window)
-    RunStarting,
-    RunStatus(bool),
-    /// the run/stop pills
+    /// every open path (File▸Open Project…, recents, "+", New Project…,
+    /// probe chains): switch if open / add under the cap / report when full
+    OpenWorkspace(PathBuf),
+    /// header-pill click → instant switch (requirement 8)
+    SwitchWorkspace(usize),
+    /// startup: swing to the remembered project after ALL queued opens ran
+    BootActivate(PathBuf),
+    /// requirement 3: header "+" → the folder picker (shared open path)
+    AddProjectDialog,
+    /// tree → editor routing within the tagged workspace
+    OpenFile(usize, PathBuf),
+    /// editor state flip → snapshot storage + persist debounce
+    EditorState(usize, EditorSnapshot),
+    /// panes → header Run/Stop sync (launch accepted — the starting window)
+    RunStarting(usize),
+    RunStatus(usize, bool),
+    /// the run/stop pills (shared chrome → the ACTIVE workspace's panes)
     RunPressed,
     StopPressed,
     FlushTabs,
     /// open-recent target no longer exists → info dialog
     RecentMissing(String),
-    /// discard-dialog accepted → switch without the dirty gate
-    DiscardWorkspace(PathBuf),
-    /// CHANGES row → editor diff page
+    /// CHANGES row → editor diff page (tagged)
     OpenDiff {
+        ws: usize,
         rel: String,
         letter: String,
     },
-    /// gitview commit button → the flush chain (Commit → SaveOpen → Flushed →
-    /// StartCommit)
+    /// gitview commit button → that workspace's flush chain
     Commit {
+        ws: usize,
         root: PathBuf,
         paths: Vec<String>,
         msg: String,
     },
     /// editor SaveOpen's ack — the ONLY thing that releases pending_commit
-    Flushed,
-    /// git rows → editor diff-tab renewal
-    GitChanged(crate::gitstatus::Rows),
-    /// window notify::is-active → git re-sync
+    Flushed(usize),
+    /// git rows → that workspace's diff-tab renewal
+    GitChanged(usize, crate::gitstatus::Rows),
+    /// window notify::is-active → the ACTIVE workspace's git re-sync
     WindowActive,
+    /// Edit menu → the active workspace's editor
+    EditOp(EditKind),
     /// New Project dialog result — makedirs + `git init` ran OFF the main
     /// thread (runctl.create_project has a 10s wall; a stalled git must not
     /// freeze the window). The Sender marshals back onto the main context.
@@ -75,6 +83,10 @@ pub enum AppMsg {
     /// PROBE-ONLY (ALPACA_PROBE_S3) — 60ms damage keeper (probe script kills
     /// the process right after DONE, so its forever timer is harmless)
     ProbeDraw,
+    /// PROBE-ONLY (ALPACA_PROBE_S4) — never runs in production (env unset)
+    ProbeS4(PathBuf),
+    /// PROBE-ONLY (ALPACA_PROBE_S4) — the step-chain driver
+    ProbeS4Step,
 }
 
 thread_local! {
@@ -90,34 +102,189 @@ struct HeaderButtons {
     help: gtk::MenuButton,
 }
 
+/// Requirement 5 — maximum simultaneously open workspaces.
+pub const MAX_WORKSPACES: usize = 3;
+
+/// open_workspace's routing decision (pure; the unit test pins it).
+#[derive(Debug, PartialEq, Eq)]
+pub enum AddDecision {
+    /// already open → switch to this strip index (no re-root, no restore)
+    Switch(usize),
+    /// not open, under the cap → add to the right
+    Add,
+    /// cap reached (requirement 5) — the caller reports, nothing opens
+    Full,
+}
+
+pub fn add_decision(open: &[PathBuf], path: &Path) -> AddDecision {
+    if let Some(i) = open.iter().position(|p| p.as_path() == path) {
+        return AddDecision::Switch(i);
+    }
+    if open.len() >= MAX_WORKSPACES {
+        return AddDecision::Full;
+    }
+    AddDecision::Add
+}
+
+/// Edit-menu ops route by active workspace (the actions now fan out to N
+/// editors; the shared actions can't hold a Sender per editor).
+#[derive(Debug, Clone, Copy)]
+pub enum EditKind {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+/// One open project: its own editor card, VTE pane card, git panel card and
+/// header-strip pill. Switching = a GtkStack visibility flip over these
+/// assemblies — everything (VTE children, git probe timers, editor pages,
+/// scroll pairing) stays ALIVE while hidden, which is the feature: a
+/// project's processes keep running in the background. No re-rooting ever.
+pub struct Workspace {
+    root: PathBuf,
+    /// the card assembly (hpaned → [editor | panes-vpaned, gitpanel]) — one GtkStack page
+    hpane: gtk::Paned,
+    /// the header-strip pill (App places it left of nothing; T3 adds "+" after)
+    btn: gtk::Button,
+    editor: relm4::Controller<Editor>,
+    panes: relm4::Controller<Panes>,
+    gitpanel: relm4::Controller<GitPanel>,
+    /// the running mirror for the shared header Run/Stop pills
+    running: bool,
+    /// latest editor snapshot — FlushTabs persists EVERY workspace's
+    snapshot: EditorSnapshot,
+    /// gitview Commit → App → SaveOpen → Flushed(ack) → gitpanel StartCommit,
+    /// per workspace so a switch mid-flight can't strand the chain
+    pending_commit: Option<(PathBuf, Vec<String>, String)>,
+}
+
+impl Workspace {
+    /// Build the whole per-project UI. `ws` = the index this instance will
+    /// occupy in App's vec; component outputs are tagged with it so App
+    /// routes back into THIS workspace regardless of the active one.
+    fn new(path: PathBuf, ws: usize, app_out: ComponentSender<App>) -> Self {
+        let path_str = path.to_string_lossy().into_owned();
+
+        // Task 6 (editor card) — the component carries its own alpaca-card
+        let editor_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let app_in = app_out.clone();
+        let editor = Editor::builder()
+            .launch(())
+            .connect_receiver(move |_, out| match out {
+                EditorOutput::StateChanged(s) => app_in.input(AppMsg::EditorState(ws, s)),
+                EditorOutput::Flushed => app_in.input(AppMsg::Flushed(ws)), // the flush chain's ack
+            });
+        let tabs = state::project_tabs(&state::load(), &path_str);
+        editor_slot.append(editor.widget());
+
+        // Task 8 (the real panes card)
+        let app_in = app_out.clone();
+        let panes = Panes::builder()
+            .launch(())
+            .connect_receiver(move |_, out| match out {
+                PanesOutput::RunStarting => app_in.input(AppMsg::RunStarting(ws)),
+                PanesOutput::RunStatus { running } => app_in.input(AppMsg::RunStatus(ws, running)),
+            });
+        let panes_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        panes_slot.append(panes.widget());
+        let vpane = gtk::Paned::new(gtk::Orientation::Vertical);
+        vpane.set_wide_handle(true);
+        vpane.set_start_child(Some(&editor_slot));
+        vpane.set_end_child(Some(&panes_slot));
+        // design: editor card 56..649 (593) − pane handle overlap
+        vpane.set_position(592);
+
+        // git panel card (the hpane end child)
+        let app_in = app_out.clone();
+        let gitpanel = GitPanel::builder()
+            .launch(())
+            .connect_receiver(move |_, out| match out {
+                GitPanelOutput::OpenFile(p) => app_in.input(AppMsg::OpenFile(ws, p)),
+                GitPanelOutput::OpenDiff { rel, letter } => {
+                    app_in.input(AppMsg::OpenDiff { ws, rel, letter });
+                }
+                GitPanelOutput::Commit { root, paths, msg } => {
+                    app_in.input(AppMsg::Commit { ws, root, paths, msg });
+                }
+                GitPanelOutput::GitChanged(rows) => app_in.input(AppMsg::GitChanged(ws, rows)),
+            });
+
+        // hpane DIRECTLY as the stack page child — a wrapping Box under-allocates
+        // (measured 43px tall)
+        let hpane = gtk::Paned::new(gtk::Orientation::Horizontal);
+        hpane.set_wide_handle(true);
+        hpane.set_start_child(Some(&vpane));
+        hpane.set_end_child(Some(gitpanel.widget()));
+        // design: cards gap columns 1172..1180 → pane pos = card end − 10.
+        // NOT re-applied at switch (the position property must survive the
+        // hidden page's first allocation — the S4 probe asserts exactly that).
+        hpane.set_position(1161);
+
+        // Requirement 2: the pill's idle look IS the old title look
+        // (.alpaca-projbtn mirrors .alpaca-wintitle); hover = the branch pill's.
+        let btn = gtk::Button::builder()
+            .has_frame(false)
+            .css_classes(["alpaca-projbtn"])
+            .build();
+        let lbl = gtk::Label::builder().label(py_basename(&path_str)).build();
+        lbl.set_ellipsize(pango::EllipsizeMode::End);
+        lbl.set_max_width_chars(24); // 3 long names must not blow the strip out
+        btn.set_child(Some(&lbl));
+        btn.set_tooltip_text(Some(&path_str));
+        // requirement 6: every pill is clickable → instant switch
+        let snd = app_out.clone();
+        btn.connect_clicked(move |_b| snd.input(AppMsg::SwitchWorkspace(ws)));
+
+        // tree first, then panes, editor Restore LAST (the old set_workspace
+        // order — restore must ride after the re-roots it reads back)
+        gitpanel.emit(GitPanelMsg::SetRoot(path.clone()));
+        panes.emit(PanesMsg::SetRoot(path.clone()));
+        editor.emit(EditorMsg::Restore(
+            path.clone(),
+            tabs.open_tabs.clone(),
+            tabs.active_tab,
+        ));
+
+        Self {
+            root: path,
+            hpane,
+            btn,
+            editor,
+            panes,
+            gitpanel,
+            running: false,
+            snapshot: EditorSnapshot {
+                open_tabs: tabs.open_tabs,
+                active_tab: tabs.active_tab,
+            },
+            pending_commit: None,
+        }
+    }
+}
+
 struct App {
-    root: Option<String>,
-    title: gtk::Label,
+    stack: gtk::Stack,
+    proj_box: gtk::Box,
+    add_btn: gtk::Button,
     run_btn: gtk::Button,
     stop_btn: gtk::Button,
     run_row: gtk::Box,
     menu_btns: HeaderButtons,
-    /// Task 8: the panes component (Agent/Terminal/Output + run lifecycle)
-    panes: relm4::Controller<Panes>,
-    /// Task 6: the git panel card (filetree + changes + branch pill behind one
-    /// chrome) — kept for its input sender + widget
-    gitpanel: relm4::Controller<GitPanel>,
-    /// T7 — the flush chain: Commit → SaveOpen → Flushed → StartCommit
-    pending_commit: Option<(PathBuf, Vec<String>, String)>,
+    ws: Vec<Workspace>,
+    /// valid iff !ws.is_empty() — never read on empty
+    active: usize,
     /// PROBE-ONLY (ALPACA_PROBE_S2) — step chain (workspace, step index);
     /// production never constructs it (env unset)
     probe_ws: Option<(PathBuf, usize)>,
     /// PROBE-ONLY (ALPACA_PROBE_S3) — step chain (workspace, step index);
     /// production never constructs it (env unset)
     probe_s3: Option<(PathBuf, usize)>,
-    dirty: bool,
-    /// latest editor snapshot, read by the debounce flush (a snapshot at every
-    /// flip is equivalent to reading the editor live)
-    editor_state: EditorSnapshot,
-    /// panes' has_running_run — Task 8 keeps it honest
-    running: bool,
-    /// Task 6: the editor component (kept for its input sender + widget)
-    editor: relm4::Controller<Editor>,
+    /// PROBE-ONLY (ALPACA_PROBE_S4) — step chain (workspace, step index);
+    /// production never constructs it (env unset)
+    probe_s4: Option<(PathBuf, usize)>,
 }
 
 #[relm4::component]
@@ -135,11 +302,7 @@ impl Component for App {
     }
 
     fn init(model: Self::Init, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        let title = gtk::Label::new(Some("alpaca-code"));
-        title.set_css_classes(&["alpaca-wintitle"]);
-        // a long project name must not widen the window's min
-        title.set_ellipsize(pango::EllipsizeMode::End);
-
+        let arg = model.clone(); // the CLI arg — read before `model` is shadowed
         let menu_btns = HeaderButtons {
             file: gtk::MenuButton::new(),
             edit: gtk::MenuButton::new(),
@@ -190,7 +353,22 @@ impl Component for App {
 
         let header = gtk::HeaderBar::new();
         header.set_css_classes(&["alpaca-header"]);
-        header.set_title_widget(Some(&title));
+        // Requirements 1/6/7: the title label is GONE — the header center is a
+        // strip of project pills, centered as ONE entity by the headerbar's own
+        // title-widget centering. 6px tasteful gaps (requirement 7).
+        let proj_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        // requirement 3: "+" to the right of the project pills; the strip is
+        // [pill … pill | +] — the same flat pill family
+        let add_btn = gtk::Button::builder()
+            .has_frame(false)
+            .css_classes(["alpaca-projadd"])
+            .label("+")
+            .build();
+        add_btn.set_tooltip_text(Some("Open project…"));
+        proj_box.append(&add_btn);
+        let send = sender.clone();
+        add_btn.connect_clicked(move |_b| send.input(AppMsg::AddProjectDialog));
+        header.set_title_widget(Some(&proj_box));
         // design's menu row: File Edit Window Help
         header.pack_start(&menu_btns.file);
         header.pack_start(&menu_btns.edit);
@@ -227,89 +405,36 @@ impl Component for App {
         let send = sender.clone();
         stop_btn.connect_clicked(move |_b| send.input(AppMsg::StopPressed));
 
-        // Task 6: editor card — the component carries its own alpaca-card
-        let editor_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let app_in = sender.clone();
-        let editor = Editor::builder()
-            .launch(())
-            .connect_receiver(move |_, out| match out {
-                EditorOutput::StateChanged(s) => {
-                    app_in.input(AppMsg::EditorState(s));
-                }
-                EditorOutput::Flushed => app_in.input(AppMsg::Flushed), // the flush chain's ack
-            });
-        let ed_in = editor.sender().clone();
-        editor_slot.append(editor.widget());
-        // Task 8: the real panes card (the placeholder is gone)
-        let app_in = sender.clone();
-        let panes = Panes::builder()
-            .launch(())
-            .connect_receiver(move |_, out| match out {
-                PanesOutput::RunStarting => app_in.input(AppMsg::RunStarting),
-                PanesOutput::RunStatus { running } => app_in.input(AppMsg::RunStatus(running)),
-            });
-        let panes_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        panes_slot.append(panes.widget());
-        let vpane = gtk::Paned::new(gtk::Orientation::Vertical);
-        vpane.set_wide_handle(true);
-        vpane.set_start_child(Some(&editor_slot));
-        vpane.set_end_child(Some(&panes_slot));
-        // design: editor card 56..649 (593) − pane handle overlap
-        vpane.set_position(592);
-
-        // git panel card (the hpane end child)
-        let app_in = sender.clone();
-        let gitpanel = GitPanel::builder()
-            .launch(())
-            .connect_receiver(move |_, out| match out {
-                GitPanelOutput::OpenFile(p) => {
-                    app_in.input(AppMsg::OpenFile(p));
-                }
-                GitPanelOutput::OpenDiff { rel, letter } => {
-                    app_in.input(AppMsg::OpenDiff { rel, letter });
-                }
-                GitPanelOutput::Commit { root, paths, msg } => {
-                    app_in.input(AppMsg::Commit { root, paths, msg });
-                }
-                GitPanelOutput::GitChanged(rows) => {
-                    app_in.input(AppMsg::GitChanged(rows));
-                }
-            });
-
-        // hpane DIRECTLY as the window child — a wrapping Box under-allocates
-        // (measured 43px tall)
-        let hpane = gtk::Paned::new(gtk::Orientation::Horizontal);
-        hpane.set_wide_handle(true);
-        hpane.set_start_child(Some(&vpane));
-        hpane.set_end_child(Some(gitpanel.widget()));
-        // design: cards gap columns 1172..1180 → pane pos = card end − 10
-        hpane.set_position(1161);
-        root.set_child(Some(&hpane));
-
         // clamped AFTER construction, same numbers
         let widgets = view_output!();
         let (w, h) = default_size();
         root.set_default_size(w, h);
 
+        // The window's content = one stack page per open workspace
+        // (requirement 8: transition None = instant, like browser tabs).
+        let stack = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::None)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        root.set_child(Some(&stack));
+
         let model = App {
-            root: model.as_ref().map(|p| p.to_string_lossy().into_owned()),
-            title,
+            stack,
+            proj_box,
+            add_btn,
             run_btn,
             stop_btn,
             run_row,
             menu_btns,
-            panes,
-            gitpanel,
-            dirty: false,
-            editor_state: EditorSnapshot::default(),
-            running: false,
-            editor,
-            pending_commit: None,
+            ws: Vec::new(),
+            active: 0,
             probe_ws: None,
             probe_s3: None,
+            probe_s4: None,
         };
 
-        register_actions(&relm4::main_application(), &root, sender.clone(), ed_in);
+        register_actions(&relm4::main_application(), &root, sender.clone());
         model.refresh_menus();
 
         // notify::is-active fires on EVERY notify (both False→True and the rare
@@ -319,9 +444,30 @@ impl Component for App {
             in_active.input(AppMsg::WindowActive)
         });
 
-        // startup workspace (last_project populates everything)
-                if let Some(p) = model.root.clone() {
-            sender.input(AppMsg::SetWorkspace(PathBuf::from(p)));
+        // startup: reopen last session's strip (open_projects; old files
+        // coerce to [last_project] via the fallback), then swing active to the
+        // remembered one. BootActivate must ride the SAME queue as the opens.
+        let st = state::load();
+        let mut opens: Vec<PathBuf> = state::open_projects(&st)
+            .iter()
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .collect();
+        if opens.is_empty()
+            && let Some(l) = st.last_project.clone()
+            && Path::new(&l).is_dir()
+        {
+            opens.push(PathBuf::from(l));
+        }
+        for p in opens {
+            sender.input(AppMsg::OpenWorkspace(p));
+        }
+        if let Some(l) = st.last_project {
+            sender.input(AppMsg::BootActivate(PathBuf::from(l)));
+        }
+        // the CLI arg opens LAST — it ends active (the old launch's whole point)
+        if let Some(p) = arg {
+            sender.input(AppMsg::OpenWorkspace(p));
         }
         // PROBE-ONLY (ALPACA_PROBE_S2) — never runs in production (env unset)
         if let Ok(dir) = std::env::var("ALPACA_PROBE_S2") {
@@ -331,31 +477,38 @@ impl Component for App {
         if let Ok(dir) = std::env::var("ALPACA_PROBE_S3") {
             sender.input(AppMsg::ProbeS3(PathBuf::from(dir)));
         }
+        // PROBE-ONLY (ALPACA_PROBE_S4) — never runs in production (env unset)
+        if let Ok(dir) = std::env::var("ALPACA_PROBE_S4") {
+            sender.input(AppMsg::ProbeS4(PathBuf::from(dir)));
+        }
 
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
-            AppMsg::SetWorkspace(p) => {
-                self.set_workspace(&p, root, sender);
+            AppMsg::OpenWorkspace(p) => self.open_workspace(&p, root, sender),
+            AppMsg::SwitchWorkspace(i) => self.switch_to(i, root),
+            AppMsg::BootActivate(p) => {
+                if let Some(i) = self.ws.iter().position(|w| w.root.as_path() == p.as_path()) {
+                    self.switch_to(i, root);
+                }
             }
-            AppMsg::DiscardWorkspace(p) => {
-                self.dirty = false;
-                self.set_workspace_now(&p, root);
-                self.refresh_menus();
+            AppMsg::AddProjectDialog => open_project(root, sender),
+            AppMsg::OpenFile(ws, p) => {
+                // filetree → editor routing within the tagged workspace
+                if let Some(w) = self.ws.get_mut(ws) {
+                    w.editor.emit(EditorMsg::OpenFile(p));
+                }
             }
-            AppMsg::OpenFile(p) => {
-                // filetree → editor routing (tree lands in Task 7)
-                self.editor.emit(EditorMsg::OpenFile(p));
-            }
-            AppMsg::EditorState(s) => {
-                self.dirty = s.has_dirty;
-                self.editor_state = s;
-                if self.root.is_some() {
+            AppMsg::EditorState(ws, s) => {
+                if let Some(w) = self.ws.get_mut(ws) {
+                    w.snapshot = s;
+                }
+                if !self.ws.is_empty() {
                     // debounced ≤1s; each event re-arms (stacked timers flush
-                    // the LATEST snapshot; last event before quit may be lost —
-                    // acceptable)
+                    // the LATEST snapshots of EVERY workspace; last event
+                    // before quit may be lost — acceptable, as before)
                     let sender = sender.clone();
                     glib::timeout_add(std::time::Duration::from_millis(1000), move || {
                         sender.input(AppMsg::FlushTabs);
@@ -364,51 +517,66 @@ impl Component for App {
                 }
             }
             AppMsg::FlushTabs => {
-                if let Some(root) = &self.root {
-                    let st = self.editor_state.clone();
-                    state::save(&state::set_tabs(
-                        state::load(),
-                        root,
-                        st.open_tabs,
-                        st.active_tab,
-                    ));
+                let mut st = state::load();
+                for w in &self.ws {
+                    st = state::set_tabs(
+                        st,
+                        w.root.to_string_lossy().as_ref(),
+                        w.snapshot.open_tabs.clone(),
+                        w.snapshot.active_tab,
+                    );
                 }
+                state::save(&st);
             }
-            AppMsg::RunStatus(running) => {
+            AppMsg::RunStatus(ws, running) => {
                 // the run-status payload is not displayed; the
-                // buttons + pill class follow the running mirror
-                self.running = running;
-                if !running {
-                    self.run_btn.set_sensitive(true);
+                // buttons + pill class follow the workspace's running mirror
+                if let Some(w) = self.ws.get_mut(ws) {
+                    w.running = running;
                 }
-                self.stop_btn.set_sensitive(running);
-                self.refresh_run_style();
+                if ws == self.active {
+                    self.run_btn.set_sensitive(!running);
+                    self.stop_btn.set_sensitive(running);
+                    self.refresh_run_style();
+                }
             }
-            AppMsg::RunStarting => {
-                self.running = true;
-                self.run_btn.set_sensitive(false); // Stop-only until run ends
-                self.refresh_run_style();
+            AppMsg::RunStarting(ws) => {
+                if let Some(w) = self.ws.get_mut(ws) {
+                    w.running = true;
+                }
+                if ws == self.active {
+                    self.run_btn.set_sensitive(false); // Stop-only until run ends
+                    self.refresh_run_style();
+                }
             }
             AppMsg::RunPressed => {
-                // no root / live run → noop
-                if self.root.is_none() || self.running {
+                // no workspace yet / live run → noop
+                let running = self.ws.get(self.active).map(|w| w.running).unwrap_or(true);
+                if running {
                     return;
                 }
-                let Some(cmd) = runctl::detect(Path::new(self.root.as_deref().unwrap())) else {
+                let cmd = self
+                    .ws
+                    .get(self.active)
+                    .and_then(|w| runctl::detect(w.root.as_path()));
+                let Some(cmd) = cmd else {
                     self.run_btn.set_sensitive(false);
                     self.run_btn
                         .set_tooltip_text(Some("No dev/start script or .csproj found"));
                     return;
                 };
                 self.stop_btn.set_sensitive(true);
-                self.panes
-                    .emit(PanesMsg::LaunchRun { argv: cmd.argv });
+                if let Some(w) = self.ws.get(self.active) {
+                    w.panes.emit(PanesMsg::LaunchRun { argv: cmd.argv });
+                }
                 // run-off + style land with RunStarting (accepted) —
                 // one mainloop turn, same frame
             }
             AppMsg::StopPressed => {
-                // unconditional button sync, then the panes
-                self.panes.emit(PanesMsg::StopRun);
+                // unconditional button sync, then the active workspace's panes
+                if let Some(w) = self.ws.get(self.active) {
+                    w.panes.emit(PanesMsg::StopRun);
+                }
                 self.stop_btn.set_sensitive(false);
                 self.run_btn.set_sensitive(true);
                 self.refresh_run_style();
@@ -418,53 +586,65 @@ impl Component for App {
             }
             AppMsg::ProjectCreated { target, res } => match res {
                 Err(e) => error_dialog(root, &format!("Couldn't create {}", target.display()), &e),
-                Ok(()) => sender.input(AppMsg::SetWorkspace(target)),
+                Ok(()) => sender.input(AppMsg::OpenWorkspace(target)),
             },
-            AppMsg::OpenDiff { rel, letter } => {
-                // the diff open runs ON the window with its own
-                // root guard (App's root is Option<String>)
-                if self.root.is_none() {
-                    return;
+            AppMsg::OpenDiff { ws, rel, letter } => {
+                // the diff open runs within the tagged workspace
+                if let Some(w) = self.ws.get(ws) {
+                    w.editor.emit(EditorMsg::OpenDiff { root: w.root.clone(), rel, letter });
                 }
-                let root_path = PathBuf::from(self.root.as_deref().unwrap().to_owned());
-                self.editor.emit(EditorMsg::OpenDiff { root: root_path, rel, letter });
             }
-            AppMsg::Commit { root, paths, msg } => {
+            AppMsg::Commit { ws, root, paths, msg } => {
                 // the commit's dirty-file flush (editor.save_open) must run
                 // SYNCHRONOUSLY on the commit's mainloop turn — relm4 inputs
                 // are QUEUE-processed, not call-stack: the turn's equivalent
-                // is the pending store + the Flushed ack chain
-                self.pending_commit = Some((root.clone(), paths.clone(), msg.clone()));
-                self.editor.emit(EditorMsg::SaveOpen(
-                    paths.iter().map(|rel| root.join(rel)).collect(),
-                ));
+                // is the workspace's pending store + the Flushed ack chain.
+                // SaveOpen FIRST (paths by ref), the store move second —
+                // pending_commit takes ownership of the payload tail
+                if let Some(w) = self.ws.get_mut(ws) {
+                    w.editor.emit(EditorMsg::SaveOpen(
+                        paths.iter().map(|rel| root.join(rel)).collect(),
+                    ));
+                    w.pending_commit = Some((root, paths, msg));
+                }
             }
-            AppMsg::Flushed => {
+            AppMsg::Flushed(ws) => {
                 // the editor's Flushed strictly follows its SaveOpen in its
                 // FIFO input queue → a sound chain (T5's_save_open ALWAYS
                 // emits Flushed, zero-flushed included — the chain cannot
                 // strand; eager-busy closes the duplicate-click window)
-                if let Some((root, paths, msg)) = self.pending_commit.take() {
-                    self.gitpanel.emit(GitPanelMsg::StartCommit { root, paths, msg });
-                }
+                if let Some(w) = self.ws.get_mut(ws)
+                    && let Some((root, paths, msg)) = w.pending_commit.take() {
+                        w.gitpanel.emit(GitPanelMsg::StartCommit { root, paths, msg });
+                    }
             }
-            AppMsg::GitChanged(rows) => {
-                // diff-tab renewal. A stale diff
-                // tab across workspaces: rust restore (S1) rebuilds ONLY path
-                // pages, so a diff page stays open with stale sides
-                // (measured: set_workspace_now re-roots the trees, the
-                // letters map misses the foreign rel, fresh is None → left
-                // as-is). Self.root None → no diffs can exist (skip).
-                if self.root.is_none() {
-                    return;
+            AppMsg::GitChanged(ws, rows) => {
+                // diff-tab renewal for the tagged workspace (a stale diff tab
+                // across WORKSPACE switches does not exist anymore — each
+                // workspace's editor carries its own diffs; restore rebuilds
+                // ONLY path pages for the boot path)
+                if let Some(w) = self.ws.get(ws) {
+                    let letters = rows.iter().map(|(rel, letter)| (rel.clone(), letter.clone())).collect();
+                    w.editor.emit(EditorMsg::RefreshDiffs { root: w.root.clone(), letters });
                 }
-                let root_path = PathBuf::from(self.root.as_deref().unwrap().to_owned());
-                let letters = rows.iter().map(|(rel, letter)| (rel.clone(), letter.clone())).collect();
-                self.editor.emit(EditorMsg::RefreshDiffs { root: root_path, letters });
             }
             AppMsg::WindowActive => {
-                // window focus re-syncs git
-                self.gitpanel.emit(GitPanelMsg::RefreshGit);
+                // window focus re-syncs the ACTIVE workspace's git
+                if let Some(w) = self.ws.get(self.active) {
+                    w.gitpanel.emit(GitPanelMsg::RefreshGit);
+                }
+            }
+            AppMsg::EditOp(kind) => {
+                if let Some(w) = self.ws.get_mut(self.active) {
+                    w.editor.emit(match kind {
+                        EditKind::Undo => EditorMsg::Undo,
+                        EditKind::Redo => EditorMsg::Redo,
+                        EditKind::Cut => EditorMsg::Cut,
+                        EditKind::Copy => EditorMsg::Copy,
+                        EditKind::Paste => EditorMsg::Paste,
+                        EditKind::SelectAll => EditorMsg::SelectAll,
+                    });
+                }
             }
             AppMsg::ProbeS2(dir) => {
                 // PROBE-ONLY (ALPACA_PROBE_S2) — never runs in production
@@ -477,11 +657,7 @@ impl Component for App {
                     glib::ControlFlow::Break
                 });
             }
-            AppMsg::ProbeS2Step => {
-                // PROBE-ONLY (ALPACA_PROBE_S2) — never runs in production
-                // (env unset); one chain, each timer BREAKs — no re-arm hazard
-                self.probe_step(&sender);
-            }
+            AppMsg::ProbeS2Step => self.probe_step(root, &sender),
             AppMsg::ProbeDraw => {
                 // PROBE-ONLY (ALPACA_PROBE_S3) — an occluded Wayland surface
                 // gets NO compositor frame callbacks, so GTK allocations
@@ -499,6 +675,129 @@ impl Component for App {
                         if n % 8 == 0 {
                             println!("PROBE tick {n}: root w={}", root.allocated_width());
                         }
+                    });
+                }
+            }
+            AppMsg::ProbeS4(dir) => {
+                // PROBE-ONLY (ALPACA_PROBE_S4) — never runs in production
+                self.probe_s4 = Some((dir, 0));
+                root.present();
+                let snd = sender.clone();
+                glib::timeout_add(std::time::Duration::from_millis(PROBE_S4_STEP_MS[0]), move || {
+                    snd.input(AppMsg::ProbeS4Step);
+                    glib::ControlFlow::Break
+                });
+            }
+            AppMsg::ProbeS4Step => {
+                let Some((ws_dir, step)) = self.probe_s4.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                    return;
+                };
+                let say = |name: &str, ok: bool| {
+                    println!("PROBE assert: {name}: {}", if ok { "PASS" } else { "FAIL" })
+                };
+                match step {
+                    0 => {
+                        self.open_workspace(ws_dir.as_path(), root, sender.clone());
+                        let i = self.active;
+                        sender.input(AppMsg::OpenFile(i, ws_dir.join("a.txt")));
+                    }
+                    1 => {
+                        let ws_b = ws_dir.to_string_lossy().replace("wsA", "wsB");
+                        self.open_workspace(std::path::Path::new(&ws_b), root, sender.clone());
+                        sender.input(AppMsg::OpenFile(self.active, std::path::Path::new(&ws_b).join("b.txt")));
+                    }
+                    2 => {
+                        println!("PROBE step 2: ts={}", epoch_ms());
+                        self.switch_to(0, root);
+                        say("two-open", self.ws.len() == 2);
+                        // THE feature asserts, live: state survives the flip.
+                        // GObject PartialEq compares memory addresses
+                        // (verified in glib-0.22 object.rs) — Widget vs Paned
+                        // is the same instance's pointer, no upcast dance.
+                        say(
+                            "stack-visible-is-wsA",
+                            self.stack
+                                .visible_child()
+                                .is_some_and(|v| v == self.ws[0].hpane),
+                        );
+                        say(
+                            "editor-tabs-preserved",
+                            // snapshot open_tabs are RELPATHS (editor emit_state)
+                            self.ws[0].snapshot.open_tabs == vec!["a.txt".to_string()],
+                        );
+                        // the paned's first-allocation law: the position clamps
+                        // to max = allocated_width − 6px separator — a narrow
+                        // virtual display (broadway vfb) reads BELOW 1161 by
+                        // exactly that clamp; assert the constructed position
+                        // survived (no recompute/collapse), clamp included
+                        let hw = self.ws[0].hpane.allocated_width();
+                        let pos = self.ws[0].hpane.position();
+                        println!("PROBE hpane-pos reads pos={pos} hpane-w={hw}");
+                        // hw==0 → never allocated yet by assert time (racy on
+                        // the frame clock): the property must read 1161.
+                        // allocated (narrow vfb) → the clamp law applies.
+                        let ok = if hw > 0 { pos == 1161.min(hw - 6) } else { pos == 1161 };
+                        say("hpane-pos-1161", ok);
+                        say(
+                            "on-class-wsA",
+                            self.ws[0].btn.has_css_class("alpaca-on")
+                                && !self.ws[1].btn.has_css_class("alpaca-on"),
+                        );
+                        // requirement 1: the WM title carries the bare name
+                        say(
+                            "title-is-basename",
+                            root.title().as_deref()
+                                == Some(self.ws[0].root.file_name().unwrap().to_str().unwrap()),
+                        );
+                    }
+                    3 => {
+                        let ws_c = ws_dir.to_string_lossy().replace("wsA", "wsC");
+                        self.open_workspace(std::path::Path::new(&ws_c), root, sender.clone());
+                        say("three-open", self.ws.len() == 3);
+                        say("add-btn-disabled", !self.add_btn.is_sensitive());
+                        // state.json's open set must mirror the LIVE strip:
+                        // the rig seeds a ghost dir (GONE, deleted) — boot
+                        // filters it from the strip, and this ADD must prune
+                        // it from the open set (a persisted ghost steals a
+                        // cap slot and evicts live workspaces at next boot)
+                        sender.spawn_command(move |_| {
+                            let st = std::fs::read_to_string(crate::state::state_path())
+                                .unwrap_or_default();
+                            let ops = st
+                                .split("\"open_projects\": [")
+                                .nth(1)
+                                .unwrap_or_default()
+                                .split(']')
+                                .next()
+                                .unwrap_or_default()
+                                .to_string();
+                            let ok = ["wsA", "wsB", "wsC"].iter().all(|w| ops.contains(w))
+                                && !st.contains("GONE");
+                            println!("PROBE assert: state-open-set-live-truth: {}",
+                                     if ok { "PASS" } else { "FAIL" });
+                            println!("PROBE state open_projects=[{}]", ops.trim());
+                        });
+                        // active is wsC now; swing back to wsA via the real
+                        // switch path
+                        self.switch_to(0, root);
+                    }
+                    // requirement: an already-open path must SWITCH (the
+                    // add_decision dedupe), never duplicate the strip pill
+                    4 => {
+                        self.open_workspace(ws_dir.as_path(), root, sender.clone());
+                        say("re-open-wsA-switches", self.ws.len() == 3 && self.active == 0);
+                        println!("PROBE S4 DONE");
+                        self.probe_s4 = None;
+                        return;
+                    }
+                    _ => {}
+                }
+                if let Some(next) = PROBE_S4_STEP_MS.get(step + 1) {
+                    self.probe_s4.as_mut().unwrap().1 = step + 1;
+                    let snd = sender.clone();
+                    glib::timeout_add(std::time::Duration::from_millis(*next), move || {
+                        snd.input(AppMsg::ProbeS4Step);
+                        glib::ControlFlow::Break
                     });
                 }
             }
@@ -522,47 +821,38 @@ impl Component for App {
             }
             AppMsg::ProbeS3Step => {
                 // PROBE-ONLY (ALPACA_PROBE_S3) — never runs in production
-                // (env unset); one chain, each timer BREAKs — no re-arm hazard
-                let Some((ws, step)) = self.probe_s3.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                // (env unset); one chain, each timer BREAKs — no re-arm hazard;
+                // emissions target the ACTIVE workspace (the chain's own open)
+                let Some((ws_dir, step)) = self.probe_s3.as_ref().map(|(w, s)| (w.clone(), *s)) else {
                     return;
                 };
                 println!("PROBE step {}: ts={}", step, epoch_ms());
-                // the window holds TWO widget children (titlebar wrapper first,
-                // hpane second — set_titlebar precedes set_child) so first_child
-                // alone lands on the WindowHandle; walk every child
-                let hpane = {
-                    let mut found: Option<gtk::Paned> = None;
-                    let mut c = root.first_child();
-                    while let Some(w) = c {
-                        let next = w.next_sibling();
-                        if let Ok(p) = w.downcast::<gtk::Paned>() {
-                            found = Some(p);
-                        }
-                        c = next;
-                    }
-                    found
-                };
+                // the S3 split targets: the ACTIVE workspace's hpane (the old
+                // window-children walk is dead under the stack — the paned
+                // lives inside the active stack page now)
                 match step {
                     0 => {
-                        sender.input(AppMsg::SetWorkspace(ws.clone()));
+                        self.open_workspace(ws_dir.as_path(), root, sender.clone());
+                        let i = self.active;
                         for f in ["package-lock.json", "next.config.ts", "components.json",
                                   "related-products.tsx", "trude.json",
                                   "deep/path/segments/segment-file-with-long-name.tsx"] {
-                            sender.input(AppMsg::OpenFile(ws.join(f)));
+                            sender.input(AppMsg::OpenFile(i, ws_dir.join(f)));
                         }
                     }
                     1 => {
+                        let Some(w) = self.ws.get(self.active) else { return };
                         let checks = [
                             ("window", root.measure(gtk::Orientation::Horizontal, -1).0, 560),
-                            ("editor", self.editor.widget().measure(gtk::Orientation::Horizontal, -1).0, 300),
-                            ("panes", self.panes.widget().measure(gtk::Orientation::Horizontal, -1).0, 300),
+                            ("editor", w.editor.widget().measure(gtk::Orientation::Horizontal, -1).0, 300),
+                            ("panes", w.panes.widget().measure(gtk::Orientation::Horizontal, -1).0, 300),
                         ];
                         for (name, got, cap) in checks {
                             let ok = got <= cap;
                             println!("PROBE assert: s3-min-{name} {got}<={cap}: {}",
                                      if ok { "PASS" } else { "FAIL" });
                         }
-                        self.gitpanel.emit(GitPanelMsg::TreeMin);
+                        w.gitpanel.emit(GitPanelMsg::TreeMin);
                     }
                     2 => {
                         // XWayland path: KWin need not honor default_size and
@@ -573,17 +863,18 @@ impl Component for App {
                         // readback came back 1568, the split never applied)
                         root.set_size_request(1586, 992);
                     }
-                    3 => if let Some(h) = &hpane { h.set_position(900); },
+                    3 => if let Some(w) = self.ws.get(self.active) { w.hpane.set_position(900); },
                     4 => {
-                        if let Some(h) = &hpane {
-                            println!("PROBE hpane pos={} w={} at wide-trace",
-                                     h.position(), h.allocated_width());
-                        }
-                        self.editor.emit(EditorMsg::ProbeTrace("wide".into()));
+                        let Some(w) = self.ws.get(self.active) else { return };
+                        println!("PROBE hpane pos={} w={} at wide-trace",
+                                 w.hpane.position(), w.hpane.allocated_width());
+                        w.editor.emit(EditorMsg::ProbeTrace("wide".into()));
                     }
-                    5 => if let Some(h) = &hpane { h.set_position(850); },
+                    5 => if let Some(w) = self.ws.get(self.active) { w.hpane.set_position(850); },
                     6 => {
-                        self.editor.emit(EditorMsg::ProbeTrace("narrow".into()));
+                        if let Some(w) = self.ws.get(self.active) {
+                            w.editor.emit(EditorMsg::ProbeTrace("narrow".into()));
+                        }
                         println!("PROBE S3 DONE");
                         self.probe_s3 = None;
                         return;
@@ -630,6 +921,14 @@ const PROBE_STEP_MS: [u64; 15] = [
 // 6 = editor ProbeTrace("narrow") + "PROBE S3 DONE"
 const PROBE_S3_STEP_MS: [u64; 7] = [500, 700, 700, 700, 600, 600, 600];
 
+// PROBE-ONLY (ALPACA_PROBE_S4) — step chain: multi-workspace asserts; wsB/wsC
+// are the passed dir's name-replaced siblings.
+// 0 = open wsA (+ open a.txt) · 1 = open wsB (+ open b.txt) ·
+// 2 = switch BACK to wsA + live asserts (stack identity, tabs, paned pos,
+//     pill classes, WM title) · 3 = open wsC → cap-full asserts
+//     (3 open, "+" disabled) · 4 = re-open wsA → must SWITCH not add → DONE
+const PROBE_S4_STEP_MS: [u64; 6] = [500, 700, 700, 700, 700, 500];
+
 /// epoch ms for the probe's step trace (the wrapper correlates app ts with
 /// the git-shim log's ts)
 pub(crate) fn epoch_ms() -> u128 {
@@ -645,8 +944,9 @@ fn step_ms(i: usize) -> u64 {
 }
 
 impl App {
-    /// drives the step at `probe_ws`'s index, then schedules the next one.
-    fn probe_step(&mut self, sender: &ComponentSender<Self>) {
+    /// drives the step at `probe_ws`'s index, then schedules the next one;
+    /// emissions target the ACTIVE workspace (the chain's own opens).
+    fn probe_step(&mut self, root: &gtk::ApplicationWindow, sender: &ComponentSender<Self>) {
         // gap[i] — see the table const above
         const PROBE_MSG: &str = "s2 probe commit";
         let Some((ws, step)) = self.probe_ws.as_ref().map(|(w, s)| (w.clone(), *s)) else {
@@ -657,37 +957,77 @@ impl App {
         // probe-only step trace, epoch ms — the wrapper times asserts against it
         println!("PROBE step {}: ts={}", step, epoch_ms());
         match step {
-            // the REAL workspace route — it feeds panel SetRoot + editor
-            // Restore + last_project; the OpenDiff arm needs App root set
-            0 => sender.input(AppMsg::SetWorkspace(ws.clone())),
-            1 => self.gitpanel.emit(GitPanelMsg::ModeChanges),
+            // the REAL workspace route — panel SetRoot + editor Restore + the
+            // open set; the OpenDiff arm needs this workspace active
+            0 => {
+                self.open_workspace(ws.as_path(), root, sender.clone());
+                let i = self.active;
+                for f in ["package-lock.json", "next.config.ts", "components.json",
+                          "related-products.tsx", "trude.json",
+                          "deep/path/segments/segment-file-with-long-name.tsx"] {
+                    sender.input(AppMsg::OpenFile(i, ws.join(f)));
+                }
+            }
+            1 => {
+                if let Some(w) = self.ws.get(self.active) {
+                    w.gitpanel.emit(GitPanelMsg::ModeChanges);
+                }
+            }
             // commit_clicked rejects an empty entry — fill the real entry
-            2 => self.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Changes(
-                GitViewMsg::ProbeMsg(PROBE_MSG.into()),
-            ))),
+            2 => {
+                if let Some(w) = self.ws.get(self.active) {
+                    w.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Changes(
+                        GitViewMsg::ProbeMsg(PROBE_MSG.into()),
+                    )));
+                }
+            }
             // the diff page for the fix-3 assert (Edit-menu target on a diff
             // page must be the focused side view)
             3 => sender.input(AppMsg::OpenDiff {
+                ws: self.active,
                 rel: "a.txt".into(),
                 letter: "M".into(),
             }),
-            4 => self.editor.emit(EditorMsg::ProbeClip),
+            4 => {
+                if let Some(w) = self.ws.get(self.active) {
+                    w.editor.emit(EditorMsg::ProbeClip);
+                }
+            }
             // typing steps — fill the real search entry; GtkSearchEntry's
             // delayed "search-changed" fires the REAL EntryChanged route.
             // Pre-fix the changes arm re-fetches (SYNC git per keystroke);
             // its stall straddles the next typing step's timer — deltas ≈
             // 150ms delay + shim sleep (green ≈ the 400ms gap).
-            5 => self.gitpanel.emit(GitPanelMsg::ProbeEntry("alpha".into())),
-            6 => self.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabet".into())),
-            7 => self.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabetZ".into())),
-            8 => self.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabetZx".into())),
+            5 => {
+                if let Some(w) = self.ws.get(self.active) {
+                    w.gitpanel.emit(GitPanelMsg::ProbeEntry("alpha".into()));
+                }
+            }
+            6 => {
+                if let Some(w) = self.ws.get(self.active) {
+                    w.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabet".into()));
+                }
+            }
+            7 => {
+                if let Some(w) = self.ws.get(self.active) {
+                    w.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabetZ".into()));
+                }
+            }
+            8 => {
+                if let Some(w) = self.ws.get(self.active) {
+                    w.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabetZx".into()));
+                }
+            }
             // clear the needle so the masthead sees the full set again;
             // ProbeDiffScroll rides the same PRE-SWITCH step (the diff page is
             // ~2s old here and settled — step 4 timing is racy, measured;
-            // step 12's SetWorkspace closes every page, so no later step works)
+            // step 12's open closes nothing — it ADDS wsB, so the pre-switch
+            // window is the settled slot)
             9 => {
-                self.gitpanel.emit(GitPanelMsg::ProbeEntry("".into()));
-                self.editor.emit(EditorMsg::ProbeDiffScroll);
+                if let Some(w) = self.ws.get(self.active) {
+                    w.gitpanel.emit(GitPanelMsg::ProbeEntry("".into()));
+                    w.editor.emit(EditorMsg::ProbeDiffScroll);
+                }
             }
             // select-all via the REAL row-toggle law — but rows arrive
             // PRE-CHECKED (a fresh view selects all, gitview SetRoot
@@ -695,21 +1035,28 @@ impl App {
             // twice (off→on) so the live toggle path runs and the state ends
             // all-checked.
             10 => {
-                let mast = || GitPanelMsg::ProbeChild(ProbeChild::Changes(
-                    GitViewMsg::RowToggled(gtk::TreePath::from_string("0").unwrap()),
-                ));
-                self.gitpanel.emit(mast()); // off
-                self.gitpanel.emit(mast()); // on — ends all-checked
+                if let Some(w) = self.ws.get(self.active) {
+                    let mast = || GitPanelMsg::ProbeChild(ProbeChild::Changes(
+                        GitViewMsg::RowToggled(gtk::TreePath::from_string("0").unwrap()),
+                    ));
+                    w.gitpanel.emit(mast()); // off
+                    w.gitpanel.emit(mast()); // on — ends all-checked
+                }
             }
             // the FULL production chain: validate → eager busy → Commit out
             // → App Commit → SaveOpen → Flushed → panel StartCommit → flight
-            11 => self.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Changes(
-                GitViewMsg::CommitClicked,
-            ))),
-            // MID-FLIGHT injection: wsB is its own clean repo; the flight's
-            // root was SNAPSHOT into StartCommit's payload, so the commit
-            // still lands on wsA and wsB receives nothing (asserted next)
-            12 => sender.input(AppMsg::SetWorkspace(PathBuf::from(&ws_b))),
+            11 => {
+                if let Some(w) = self.ws.get(self.active) {
+                    w.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Changes(
+                        GitViewMsg::CommitClicked,
+                    )));
+                }
+            }
+            // MID-FLIGHT injection: wsB is its own clean repo; under the
+            // multi-workspace semantics this ADDS wsB as workspace 2 and
+            // switches (the flight's root was SNAPSHOT into StartCommit's
+            // payload, so the commit still lands on wsA — asserted next)
+            12 => self.open_workspace(Path::new(&ws_b), root, sender.clone()),
             // assertions — a spawn_command runs the fixture asserts off-chain
             13 => {
                 let ws_a = ws.clone();
@@ -783,75 +1130,111 @@ impl App {
         });
     }
 
-    fn set_workspace(&mut self, path: &Path, root: &gtk::ApplicationWindow, sender: ComponentSender<Self>) {
-        if self.dirty {
-            self.show_discard_dialog(root, path, sender);
+    /// Every workspace-open path lands here (header "+", File ▸ Open Project…,
+    /// recents, New Project…, probe chains): switch if open, add to the right
+    /// under the cap, else report (requirements 3/4/5). Nothing is ever
+    /// destroyed on open, so the old discard dialog is GONE — unsaved buffers
+    /// survive inside their own always-alive workspace.
+    fn open_workspace(
+        &mut self,
+        path: &Path,
+        root_win: &gtk::ApplicationWindow,
+        sender: ComponentSender<Self>,
+    ) {
+        let open: Vec<PathBuf> = self.ws.iter().map(|w| w.root.clone()).collect();
+        match add_decision(&open, path) {
+            AddDecision::Full => {
+                error_dialog(root_win, "Maximum of 3 projects open", "");
+            }
+            AddDecision::Switch(i) => self.switch_to(i, root_win),
+            AddDecision::Add => {
+                let i = self.ws.len();
+                let ws = Workspace::new(path.to_path_buf(), i, sender.clone());
+                // stack page name: unique — open paths are deduped
+                self.stack
+                    .add_named(&ws.hpane, Some(&ws.root.to_string_lossy()));
+                self.ws.push(ws);
+                // requirement 4: appended to the right of the previous one;
+                // title_widget centers the strip as one entity (requirement 7).
+                // the + rides LAST (strip order [pill … pill | +]): re-append
+                // moves it back behind the fresh pill
+                self.proj_box.remove(&self.add_btn);
+                self.proj_box.append(&self.ws[i].btn);
+                self.proj_box.append(&self.add_btn);
+                // requirement 5: the cap kills "+" (menu paths still report it)
+                self.add_btn.set_sensitive(self.ws.len() < MAX_WORKSPACES);
+                let path_str = path.to_string_lossy();
+                // persistence: the live strip IS the open set — rebuilt after
+                // the push, it caps by construction (never exceeds it) and
+                // prunes dead entries: a persisted ghost must never steal a
+                // cap slot and evict a live workspace at boot (review finding,
+                // S4's state-open-set-live-truth pins it). remember() carries
+                // the recents/last_project side of the activation.
+                let mut st = state::remember(state::load(), path_str.as_ref());
+                st.open_projects = self
+                    .ws
+                    .iter()
+                    .map(|w| w.root.to_string_lossy().into_owned())
+                    .collect();
+                state::save(&st);
+                self.switch_to(i, root_win);
+            }
+        }
+    }
+
+    /// Header-pill click / an open's activation: flip the stack page — state
+    /// carries over because NOTHING is re-rooted (the feature's core).
+    fn switch_to(&mut self, i: usize, root: &gtk::ApplicationWindow) {
+        if i >= self.ws.len() {
             return;
         }
-        self.set_workspace_now(path, root);
-        // refresh recents after any workspace switch (open / recent /
-        // new-project all land here)
-        self.refresh_menus();
-    }
-
-    /// Discard flow: CANCEL/Discard on the MessageDialog.
-    fn show_discard_dialog(&self, root: &gtk::ApplicationWindow, path: &Path, sender: ComponentSender<Self>) {
-        #[allow(deprecated)] // 4.10-deprecated upstream (S3 polish)
-        let d = gtk::MessageDialog::builder()
-            .transient_for(root)
-            .modal(true)
-            .text("Discard unsaved changes?")
-            .buttons(gtk::ButtonsType::Cancel)
-            .build();
-        d.add_button("Discard", gtk::ResponseType::Accept);
-        let path = path.to_path_buf();
-        d.connect_response(move |dd, r| {
-            dd.destroy(); // destroy in the response handler
-            if r == gtk::ResponseType::Accept {
-                sender.input(AppMsg::DiscardWorkspace(path.clone()));
+        self.stack.set_visible_child(&self.ws[i].hpane);
+        self.active = i;
+        let path_str = self.ws[i].root.to_string_lossy().into_owned();
+        // requirement 1: only the project name, in the WM title as well
+        root.set_title(Some(&py_basename(&path_str)));
+        state::save(&state::remember(state::load(), &path_str));
+        for (j, w) in self.ws.iter().enumerate() {
+            if j == i {
+                w.btn.add_css_class("alpaca-on");
+            } else {
+                w.btn.remove_css_class("alpaca-on");
             }
-        });
-        d.present();
+        }
+        // the shared header pills track the NEW workspace's run state
+        self.sync_run_buttons();
+        // a switch re-syncs git once (the set-root refresh's law, reused)
+        self.ws[i].gitpanel.emit(GitPanelMsg::RefreshGit);
     }
 
-    fn set_workspace_now(&mut self, path: &Path, root: &gtk::ApplicationWindow) {
-        let path_str = path.to_string_lossy();
-        state::save(&state::remember(state::load(), path_str.as_ref()));
-        self.root = Some(path_str.to_string());
-        root.set_title(Some("alpaca-code"));
-        let base = py_basename(&path_str);
-        self.title.set_text(&if base.is_empty() {
-            "alpaca-code".to_owned()
-        } else {
-            format!("alpaca-code — {base}")
-        });
-        // tree first, then panes;
-        // notify::is-active → refresh_git comes true in T7
-        self.gitpanel.emit(GitPanelMsg::SetRoot(path.to_path_buf()));
-        self.panes.emit(PanesMsg::SetRoot(path.to_path_buf()));
-        let cmd = runctl::detect(path);
-        self.run_btn.set_sensitive(cmd.is_some());
+    /// Run/Stop pills + tooltip follow the active workspace (its own run
+    /// mirror + the per-root detect). Called on switch (and from RunStatus).
+    fn sync_run_buttons(&mut self) {
+        let Some(w) = self.ws.get(self.active) else {
+            self.run_btn.set_sensitive(false);
+            self.stop_btn.set_sensitive(false);
+            self.refresh_run_style();
+            return;
+        };
+        let cmd = runctl::detect(w.root.as_path());
         self.run_btn.set_tooltip_text(Some(
             cmd.as_ref()
                 .map(|c| c.label.as_str())
                 .unwrap_or("No dev/start script or .csproj found"),
         ));
-        self.stop_btn.set_sensitive(false);
+        self.run_btn.set_sensitive(!w.running);
+        self.stop_btn.set_sensitive(w.running);
         self.refresh_run_style();
-        // editor restore LAST (after the re-roots above)
-        let tabs = state::project_tabs(&state::load(), path_str.as_ref());
-        self.editor
-            .emit(EditorMsg::Restore(path.to_path_buf(), tabs.open_tabs, tabs.active_tab));
     }
 
     fn refresh_menus(&self) {
         refresh_menus(&self.menu_btns);
     }
 
-    /// the running class rides the pill row
-    /// (App tracks `running` off the panes' outputs)
+    /// the running class rides the pill row — the ACTIVE workspace's mirror
     fn refresh_run_style(&self) {
-        if self.running {
+        let running = self.ws.get(self.active).map(|w| w.running).unwrap_or(false);
+        if running {
             self.run_row.set_css_classes(&["alpaca-runpill", "running"]);
         } else {
             self.run_row.set_css_classes(&["alpaca-runpill"]);
@@ -977,7 +1360,7 @@ fn open_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>)
         d.destroy();
         if let Some(p) = path
             && p.is_dir() {
-                sender.input(AppMsg::SetWorkspace(p));
+                sender.input(AppMsg::OpenWorkspace(p));
             }
     });
     dialog.show();
@@ -1052,7 +1435,6 @@ fn register_actions(
     app: &gtk::Application,
     root_win: &gtk::ApplicationWindow,
     sender: ComponentSender<App>,
-    ed_in: relm4::Sender<EditorMsg>,
 ) {
     {
         let act = gio::SimpleAction::new("open-project", None);
@@ -1078,20 +1460,20 @@ fn register_actions(
     app.add_action(&quit);
 
     // undo/redo buffer-side, clipboard ops on the view's
-    // own actions; S1 has no diff pages so there's no pair-box edge
+    // own actions; routed to the ACTIVE workspace's editor
     for name in ["undo", "redo", "cut", "copy", "paste", "select-all"] {
         let a = gio::SimpleAction::new(name, None);
-        let ed = ed_in.clone();
+        let sender = sender.clone();
         a.connect_activate(move |_a, _p| {
-            let msg = match name {
-                "undo" => EditorMsg::Undo,
-                "redo" => EditorMsg::Redo,
-                "cut" => EditorMsg::Cut,
-                "copy" => EditorMsg::Copy,
-                "paste" => EditorMsg::Paste,
-                _ => EditorMsg::SelectAll,
+            let kind = match name {
+                "undo" => EditKind::Undo,
+                "redo" => EditKind::Redo,
+                "cut" => EditKind::Cut,
+                "copy" => EditKind::Copy,
+                "paste" => EditKind::Paste,
+                _ => EditKind::SelectAll,
             };
-            ed.send(msg).unwrap();
+            sender.input(AppMsg::EditOp(kind));
         });
         app.add_action(&a);
     }
@@ -1132,7 +1514,7 @@ fn register_actions(
         recents.connect_activate(move |_a, param| {
             let p = param.and_then(|v| v.get::<String>()).unwrap_or_default();
             if Path::new(&p).is_dir() {
-                sender.input(AppMsg::SetWorkspace(p.into()));
+                sender.input(AppMsg::OpenWorkspace(p.into()));
             } else {
                 sender.input(AppMsg::RecentMissing(p));
             }
@@ -1159,11 +1541,29 @@ mod tests {
     use super::*;
     use crate::state::State;
 
+    fn pb(s: &str) -> PathBuf {
+        PathBuf::from(s)
+    }
+
+    #[test]
+    fn add_decision_switch_add_full() {
+        // requirement 5 + the dedupe rule: already open → switch (never add),
+        // under cap → add, at cap → rejected
+        let open = [pb("/a"), pb("/b")];
+        assert_eq!(add_decision(&open, Path::new("/b")), AddDecision::Switch(1));
+        assert_eq!(add_decision(&open, Path::new("/c")), AddDecision::Add);
+        let three = [pb("/a"), pb("/b"), pb("/c")];
+        assert_eq!(add_decision(&three, Path::new("/d")), AddDecision::Full);
+        // empty boot: the first open always adds
+        assert_eq!(add_decision(&[], Path::new("/a")), AddDecision::Add);
+    }
+
     fn fixture(recents: &[&str]) -> State {
         State {
             last_project: None,
             recents: recents.iter().map(|s| s.to_string()).collect(),
             projects: Default::default(),
+            open_projects: Vec::new(),
         }
     }
 

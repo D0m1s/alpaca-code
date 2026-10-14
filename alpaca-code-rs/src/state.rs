@@ -10,6 +10,11 @@ pub struct State {
     pub last_project: Option<String>,
     pub recents: Vec<String>,
     pub projects: HashMap<String, ProjectTabs>,
+    /// multi-workspace (2026-10-14): the open tabs at last save, add order =
+    /// strip order. Read path is parse() — the derive's Deserialize is never
+    /// exercised (load_from goes through serde_json::Value), absent keys on
+    /// old files are fine.
+    pub open_projects: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
@@ -65,10 +70,23 @@ fn parse(v: &serde_json::Value) -> State {
                 .filter(|(_k, v)| v.is_object())
                 .map(|(k, v)| (k.clone(), parse_project_entry(v)))
                 .collect();
+            // lenient per-key: absent on pre-multi-workspace files → empty;
+            // non-array → empty; strings only, capped at the strip's 3
+            let open_projects = get("open_projects")
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|p| p.as_str().filter(|s| !s.is_empty()))
+                        .map(str::to_owned)
+                        .take(3)
+                        .collect()
+                })
+                .unwrap_or_default();
             State {
                 last_project: serde_json::from_value(last.clone()).ok(),
                 recents,
                 projects,
+                open_projects,
             }
         }
         _ => State::default(),
@@ -127,6 +145,18 @@ pub fn remember(mut s: State, project_path: &str) -> State {
     recents.extend(s.recents.into_iter().filter(|p| p != project_path));
     s.recents = recents.into_iter().take(10).collect(); // newest first, deduped, cap 10
     s
+}
+
+/// The open-workspace set as saved (boot decides its own fallback:
+/// empty set + existing last_project → open just that one).
+///
+/// The persisted set is REBUILT from the app's live strip on every workspace
+/// ADD (the only path that grows it): parse()'s take(3) caps it at boot and
+/// the app's rebuild keeps saved state in lockstep with the strip, so a
+/// deleted project's ghost can never steal a cap slot. No add helper lives
+/// here — app-side state (open_workspace) is the single writer.
+pub fn open_projects(s: &State) -> Vec<String> {
+    s.open_projects.clone()
 }
 
 pub fn project_tabs(s: &State, project_path: &str) -> ProjectTabs {
@@ -221,6 +251,32 @@ mod tests {
         assert_eq!(project_tabs(&s, "/w3"), ProjectTabs::default());
         assert_eq!(project_tabs(&s, "/w4"), ProjectTabs::default());
         assert_eq!(project_tabs(&s, "/absent"), ProjectTabs::default());
+    }
+
+    #[test]
+    fn open_projects_toleration_and_cap() {
+        // old files lack the key entirely → empty open_projects, nothing
+        // else downgraded (must NOT hit the wholesale default)
+        let old = parse(&json!({"last_project": "/a", "recents": ["/a"], "projects": {}}));
+        assert_eq!(old.open_projects, Vec::<String>::new());
+        assert_eq!(old.recents, vec!["/a".to_string()]);
+        // non-array → empty; non-string/non-empty filtered; cap 3. The
+        // app-side (open_workspace) rebuilds the set from the live strip on
+        // every ADD — dedupe and the ≤3 cap ride that rebuild, not a helper.
+        let s = parse(&json!({"recents": [], "projects": {}, "open_projects":
+                               ["one", 5, null, "", "two", "three", "four"]}));
+        assert_eq!(s.open_projects, vec!["one", "two", "three"]);
+    }
+
+    #[test]
+    fn open_projects_roundtrip() {
+        let p = tmp("op.json");
+        let mut s = State::default();
+        s.open_projects = vec!["/w1".into(), "/w2".into()];
+        s.last_project = Some("/w2".into());
+        save_to(&s, &p);
+        assert_eq!(load_from(&p), s);
+        std::fs::remove_file(&p).ok();
     }
 
     #[test]

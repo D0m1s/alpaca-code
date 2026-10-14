@@ -17,7 +17,23 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
 ## Status
 
-- **S1/S2/S3 complete (2026-10-09).**
+- **S1/S2/S3 complete (2026-10-09). S4 (multi-workspace tabs) complete
+  (2026-10-14):** every open project = one `Workspace` (app.rs) — its own
+  Editor/Panes/GitPanel controllers + hpaned assembly; the window child is a
+  `GtkStack` (transition None = instant switch); hidden pages stay ALIVE
+  (VTE children, git probes, diff pages keep running per project; NOTHING is
+  ever re-rooted, so the old dirty-gate discard dialog is deleted). Header
+  center = project pill strip + `+` (`MAX_WORKSPACES=3`; 4th open → dialog;
+  no close-pill shipped yet — hovering-✕ is the natural follow-up; a close
+  control MUST re-tag the closure-captured ws indices (outputs/outputs tag
+  the Add-time index) or rebuild the strip — app-review). The persisted
+  `open_projects` is REBUILT from the live strip on every workspace ADD
+  (only growth path — a deleted project's ghost can't evict a live tab;
+  S4's state-open-set-live-truth pins it). All
+  routing is index-tagged (`AppMsg`'s usize first field); `Workspace` holds
+  the per-ws run mirror, snapshot, pending_commit. State: `open_projects`
+  (cap 3, add order) + last_project doubles as the active project; boot
+  reopens the strip then `BootActivate` swings to the remembered one.
   Wayland frame-callback freeze (measured, this stage): after a KWin restart,
   surfaces get no frame callbacks until touched, so GTK allocations FREEZE at
   the startup paint (~0.9-2.2s) — positional/live geometry is unreachable
@@ -35,8 +51,11 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   green unit tests because the bookkeeping is widget-layer. Kill the pane child externally and count resurrections via
   `pgrep -P <app>`; that is the pane-exit path's only live gate.
 - Rust probe envs (PROBE-ONLY chains in app.rs, never run with env unset):
-  `ALPACA_PROBE_S2=<dir>` (workspace chain) and `ALPACA_PROBE_S3=<dir>` (hpane
-  width-step chain + tab strip). S3's wrapper arms a 60ms root `queue_draw`
+  `ALPACA_PROBE_S2=<dir>` (workspace chain), `ALPACA_PROBE_S3=<dir>` (hpane
+  width-step chain + tab strip), `ALPACA_PROBE_S4=<dir>` (multi-workspace
+  chain: 2 opens + switch-survival + cap asserts; wsB/wsC are the passed
+  dir's name-replaced siblings; rig/`XDG_CONFIG_HOME` isolation per note
+  below). S3's wrapper arms a 60ms root `queue_draw`
   damage keeper because an occluded/late-mapped Wayland surface gets no frame
   callbacks and its allocations freeze after the first paint (see S3 row
   above); it prints `PROBE step N`/tick traces, and the probe script kills the
@@ -367,7 +386,11 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   `gtk4-broadwayd :N` (fresh number per run) + `dbus-run-session -- env
   GDK_BACKEND=broadway BROADWAY_DISPLAY=:N ALPACA_PROBE_S2=…` (own session →
   own instance); delete `/run/user/1000/broadway*.socket` between runs;
-  pkill -x broadwayd.
+  pkill -x gtk4-broadwayd (measured: the binary/proc NAME is gtk4-broadwayd —
+  `pkill -x broadwayd` matches NOTHING and orphans daemons, 5 collected in one
+  afternoon). Probe rigs must also isolate state.json: `XDG_CONFIG_HOME=<rig dir>`
+  — probe sessions that open projects write open_projects/last_project, which
+  without isolation would leak into the USER's next startup tab strip.
 - GTK widget pairing laws (all measured 2026-10-13 via broadway probe captures
  + app probe runs): (a) `notify::allocation` NEVER fires on this GTK —
   allocation-notify retries were inert and are gone from diff_link;
@@ -389,6 +412,15 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   the split area's first allocation) and set_position must fire at IDLE: a
   set mid-allocation-cascade is discarded (position property 482 with
   children still at the unset 1|958 compute — the S3 same-step law).
+- Stack-page paned law (measured 2026-10-14, S4): a workspace tab opened
+  HIDDEN (non-current stack page) holds its constructed paned position
+  property (1161) across boot and first map — either unallocated (property
+  intact, allocated_width 0) or clamped at first allocation to
+  `min(1161, allocated_width − 6px separator)` (broadway vfb is narrow —
+  observed 966 at hpane-w 972, the clamp doing its job, NOT a recompute).
+  Asserts must accept both (`pos == 1161.min(hw-6)` when allocated, else
+  `pos == 1161`); a pos unrelated to either under a wide hpane WOULD be the
+  real hidden-page recompute (re-apply set_position at switch).
 - Diff line numbers (Task 4): numbers are the REAL @@-hunk file numbers
   (Hunk.old_start/new_start now parsed, `Sides.old_no/new_no`, 0 = pad/hunk
   gap); text = `diff_num_text` (right-aligned via mono spaces, field =
@@ -431,5 +463,5 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
 ```json
 {"last_project": "/path|null", "recents": ["/path", …cap 10, newest first],
- "projects": {"/path": {"open_tabs": ["rel/path", …], "active_tab": 0}}}
+ "open_projects": ["/path", …cap 3, opened-order], "projects": {"/path": {"open_tabs": ["rel/path", …], "active_tab": 0}}}
 ```
