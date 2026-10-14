@@ -17,6 +17,42 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
 ## Status
 
+- **Workbench save/restore (2026-10-14, step 1 of the workbench phase,
+  workbenches pending):** Ctrl+Shift+S, the menu Save row, the X button and
+  Exit/Ctrl+Q all run `App::save_all` — tabs flush (defeats the 1s
+  debounce), window geom + `last_workbench` into state.json, and the full
+  session into `~/.config/alpaca-code/workbenches/<uuid>.json` (name =
+  `glib::uuid_string_random()` placeholder; new/open-workbench stay no-op
+  stubs). Per live project it saves: paned positions (vpane now STORED on
+  `Workspace`), dominant language (`filetree::dominant_language` =
+  scan_project ext tally → top ext → `LanguageManager::guess_language` id;
+  store-only, no display), filetree open set (abs) + gitview closed set
+  (rel) via the getters `GitPanel::tree_state()` (model access = the
+  `panes.model().live_pids()` law), and the ACTIVE file's scroll
+  (`Editor::scroll_state()` reads the page's vadj live — no mirror,
+  diff pages → None). Save-time reads only; nothing mirrors in App.
+  Restore: `Workspace::new` takes `sess: Option<ProjectSession>` — paned
+  `set_position(saved > 0)` AT CONSTRUCTION (S4 hidden-page clamp law:
+  asserts accept `min(saved, allocated−6)`), gitview closed rides
+  `GitViewMsg::SetClosed` + fill()'s replay, filetree rides the EXISTING
+  `FileTreeMsg::RestoreTree` via `GitPanelMsg::SetTreeState`/`RestoreTree`
+  — the tree half forwards IDLE-DEFERRED. At boot that's belt only (the
+  search entry is EMPTY so SetRoot's `entry.set_text("")` is a no-op —
+  no wipe is queued); the deferral matters for a future re-root with
+  entry text, where the ~150ms search-delay `EntryChanged("")` wipe would
+  land AFTER a direct idle forward and erase it. Editor `Restore` grew the scroll arg — applied via `restore_frac` ONLY
+  when the active page's rel matches the saved rel (clamped-active
+  must not spray). Close path: `connect_close_request` → guarded
+  `input_sender().send(AppMsg::SaveThenClose)` → `Propagation::Stop`
+  ALWAYS (Proceed lets GTK destroy before the queued msg runs), handler
+  saves then `root.destroy()` (destroy ≠ close: no re-emission); quit
+  action → `SaveAndQuit` → save + `main_application().quit()`. Window
+  geom: size+maximized saved, restore clamps like the default and
+  `maximize()` is best-effort; POSITION is impossible on GTK4/Wayland.
+  Probe: `ALPACA_PROBE_WB_SAVE` + `ALPACA_PROBE_WB_RESTORE` (same rig
+  XDG config across the two runs) — save run ends with the real
+  `root.close()`; restore asserts hpane/vpane/scroll/tabs/open-set.
+
 - **Header menu row swap (2026-10-14, workbenches pending):** the
   File/Edit/Window/Help label buttons are GONE — one icon-mode chevron
   MenuButton (`chevron-down.svg` as custom child) at the header's left opens
@@ -110,7 +146,12 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   dir's name-replaced siblings — each rig dir needs its letter file
   (a.txt/b.txt, plus wsB/b2.txt = the re-tag proof's OpenFile target);
   rig/`XDG_CONFIG_HOME` isolation per note
-  below). S3's wrapper arms a 60ms root `queue_draw`
+  below), `ALPACA_PROBE_WB_SAVE=<wsA dir>` +
+  `ALPACA_PROBE_WB_RESTORE=<wsA dir>` (workbench pair: SAVE builds a
+  session, saves, greps the written files, ends with the real `root.close()`;
+  RESTORE boots on the SAME config dir and asserts the restored paneds/
+  scroll/tabs/open-set — rig: a.txt needs ~300 lines so the scroll span > 0;
+  row 1 = "sub" dir). S3's wrapper arms a 60ms root `queue_draw`
   damage keeper because an occluded/late-mapped Wayland surface gets no frame
   callbacks and its allocations freeze after the first paint (see S3 row
   above); it prints `PROBE step N`/tick traces, and the probe script kills the
@@ -534,5 +575,19 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
 ```json
 {"last_project": "/path|null", "recents": ["/path", …cap 10, newest first],
- "open_projects": ["/path", …cap 3, opened-order], "projects": {"/path": {"open_tabs": ["rel/path", …], "active_tab": 0}}}
+ "open_projects": ["/path", …cap 3, opened-order], "projects": {"/path": {"open_tabs": ["rel/path", …], "active_tab": 0}},
+ "last_workbench": "<uuid>|null", "window": {"width": 1586, "height": 992, "maximized": false}}
+```
+
+`~/.config/alpaca-code/workbenches/<uuid>.json` (per workbench, workbench
+step 2026-10-14; name = `glib::uuid_string_random()` placeholder; tolerant
+`parse_workbench` never raises):
+
+```json
+{"name": "<uuid>", "projects": {"/abs/project": {
+  "language": "rust|null",            // GtkSourceView id from the top ext tally
+  "vpane": 592, "hpane": 1161,        // 0/neg = not saved → built-in default
+  "scroll": {"rel": "src/main.rs", "frac": 0.37},  // ACTIVE file only; diff pages → null
+  "expanded": ["/abs/project/sub"],   // filetree open set (abs dirs)
+  "changes_closed": ["src"]}}}        // gitview closed set (rel dirs; fill() replays)
 ```

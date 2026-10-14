@@ -15,12 +15,55 @@ pub struct State {
     /// exercised (load_from goes through serde_json::Value), absent keys on
     /// old files are fine.
     pub open_projects: Vec<String>,
+    /// workbench step (2026-10-14): the last saved workbench's uuid + the
+    /// window geometry, both additive/lenient (parse reads them per-key; the
+    /// derive's Deserialize must default them for old files).
+    #[serde(default)]
+    pub last_workbench: Option<String>,
+    #[serde(default)]
+    pub window: Option<WindowGeom>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct WindowGeom {
+    pub width: i32,
+    pub height: i32,
+    pub maximized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct ProjectTabs {
     pub open_tabs: Vec<String>,
     pub active_tab: i64,
+}
+
+/// One workbench file — ~/.config/alpaca-code/workbenches/<name>.json.
+/// The app mints `name` (uuid placeholder); `projects` keys are ABS roots.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct WorkbenchFile {
+    pub name: String,
+    pub projects: HashMap<String, ProjectSession>,
+}
+
+/// Per-project session state inside a workbench file. vpane/hpane are plain
+/// positions (0/negative means "not saved" → built-in default at restore, no
+/// Option: a real GTK paned clamps its own minimums above 0).
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct ProjectSession {
+    pub language: Option<String>,
+    pub vpane: i32,
+    pub hpane: i32,
+    pub scroll: Option<ScrollPos>,
+    /// filetree's open set — ABS dir paths
+    pub expanded: Vec<String>,
+    /// gitview's closed set — REL dir paths
+    pub changes_closed: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct ScrollPos {
+    pub rel: String,
+    pub frac: f64,
 }
 
 impl<'de> serde::Deserialize<'de> for ProjectTabs {
@@ -87,6 +130,10 @@ fn parse(v: &serde_json::Value) -> State {
                 recents,
                 projects,
                 open_projects,
+                // workbench-step keys: lenient per-key, absent on old files —
+                // must never feed the wholesale default gate above
+                last_workbench: get("last_workbench").as_str().map(str::to_owned),
+                window: parse_window(get("window")),
             }
         }
         _ => State::default(),
@@ -115,6 +162,124 @@ fn parse_project_entry(v: &serde_json::Value) -> ProjectTabs {
         _ => 0,
     };
     ProjectTabs { open_tabs, active_tab }
+}
+
+/// The saved window geometry, or None (missing/wrong shape). Both extents
+/// must coerce — a half-geometry is no geometry.
+fn parse_window(v: &serde_json::Value) -> Option<WindowGeom> {
+    let obj = v.as_object()?;
+    let num = |k: &str| {
+        match obj.get(k).unwrap_or(&serde_json::Value::Null) {
+            serde_json::Value::Number(n) => n.as_f64().map(|f| f as i32),
+            serde_json::Value::String(s) => s.trim().parse::<i32>().ok(),
+            _ => None,
+        }
+    };
+    let maximized = match obj.get("maximized").unwrap_or(&serde_json::Value::Null) {
+        serde_json::Value::Bool(b) => *b,
+        _ => false,
+    };
+    Some(WindowGeom { width: num("width")?, height: num("height")?, maximized })
+}
+
+/// One workbench file, tolerant: non-object top-level → None (the caller's
+/// "was there ever a file" signal), non-object session entries dropped,
+/// everything else coerced like parse_project_entry. Never raises.
+pub fn parse_workbench(v: &serde_json::Value) -> Option<WorkbenchFile> {
+    let root = v.as_object()?;
+    let name = root.get("name").and_then(|n| n.as_str()).unwrap_or("").to_owned();
+    let projects = root
+        .get("projects")
+        .and_then(|p| p.as_object())
+        .unwrap_or(&serde_json::Map::new())
+        .iter()
+        .filter(|(_k, v)| v.is_object())
+        .filter_map(|(k, v)| parse_session(v).map(|s| (k.clone(), s)))
+        .collect();
+    Some(WorkbenchFile { name, projects })
+}
+
+fn parse_session(v: &serde_json::Value) -> Option<ProjectSession> {
+    let obj = v.as_object()?;
+    let num = |k: &str| -> i32 {
+        match obj.get(k).unwrap_or(&serde_json::Value::Null) {
+            serde_json::Value::Number(n) => n.as_f64().map(|f| f as i32).unwrap_or(0),
+            serde_json::Value::String(s) => s.trim().parse::<i32>().unwrap_or(0),
+            serde_json::Value::Bool(b) => *b as i32,
+            _ => 0,
+        }
+    };
+    let strs = |k: &str| -> Vec<String> {
+        obj.get(k)
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str()).map(str::to_owned).collect())
+            .unwrap_or_default()
+    };
+    let scroll = obj.get("scroll").and_then(parse_scroll);
+    Some(ProjectSession {
+        language: obj.get("language").and_then(|v| v.as_str()).map(str::to_owned),
+        vpane: num("vpane"),
+        hpane: num("hpane"),
+        scroll,
+        expanded: strs("expanded"),
+        changes_closed: strs("changes_closed"),
+    })
+}
+
+/// {rel: str, frac: number} — anything else → None (never an error value).
+fn parse_scroll(v: &serde_json::Value) -> Option<ScrollPos> {
+    let obj = v.as_object()?;
+    let rel = obj.get("rel")?.as_str()?;
+    let frac = obj.get("frac")?.as_f64()?;
+    Some(ScrollPos { rel: rel.to_owned(), frac })
+}
+
+/// ~/.config/alpaca-code/workbenches/ — same XDG branch as state_path().
+pub fn workbenches_dir() -> PathBuf {
+    if let Some(mut dir) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
+        && dir.is_absolute() {
+            dir.push("alpaca-code");
+            return dir.join("workbenches");
+        }
+    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+        .join(".config/alpaca-code/workbenches")
+}
+
+/// <dir>/<name>.json. The name is app-minted (uuid), but the path is built
+/// from it — sanitize to bare hex/dashes so nothing else can ride in.
+pub fn workbench_path(name: &str) -> PathBuf {
+    let clean: String = name
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit() || *c == '-')
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    workbenches_dir().join(format!("{clean}.json"))
+}
+
+/// Load a workbench file from an arbitrary path. Absent/corrupt → None
+/// (the "was there ever a file" signal) — the never-brick contract.
+pub fn load_workbench_from(path: &Path) -> Option<WorkbenchFile> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    parse_workbench(&v)
+}
+
+/// Atomic tmp+rename write for a workbench file (save_to's shape).
+pub fn save_workbench_to(wb: &WorkbenchFile, path: &Path) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("json.tmp");
+    let text = serde_json::to_string_pretty(wb).unwrap_or_else(|e| {
+        unreachable!("WorkbenchFile serializes by construction: {e}")
+    });
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
+pub fn load_workbench(name: &str) -> Option<WorkbenchFile> {
+    load_workbench_from(&workbench_path(name))
 }
 
 pub fn load_from(path: &Path) -> State {
@@ -277,6 +442,82 @@ mod tests {
         save_to(&s, &p);
         assert_eq!(load_from(&p), s);
         std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn state_additive_keys() {
+        // workbench-step addition (2026-10-14): last_workbench + window are
+        // additive — an old file without them must NOT lose anything and must
+        // NOT hit the wholesale default gate.
+        let old = parse(&json!({"last_project": "/a", "recents": ["/a"], "projects": {}}));
+        assert_eq!(old.last_workbench, None);
+        assert_eq!(old.window, None);
+        assert_eq!(old.recents, vec!["/a".to_string()]);
+        // lenient per-key reads: wrong types → None, right types → Some
+        let s = parse(&json!({"recents": [], "projects": {},
+                              "last_workbench": 5,
+                              "window": {"width": "x", "height": 992, "maximized": false}}));
+        assert_eq!(s.last_workbench, None);
+        assert_eq!(s.window, None);
+        let s = parse(&json!({"recents": [], "projects": {},
+                              "last_workbench": "abc-123",
+                              "window": {"width": 1586, "height": 992.0, "maximized": true}}));
+        assert_eq!(s.last_workbench.as_deref(), Some("abc-123"));
+        assert_eq!(s.window, Some(WindowGeom { width: 1586, height: 992, maximized: true }));
+        // window Null → None (not an error)
+        let s = parse(&json!({"recents": [], "projects": {}, "window": null}));
+        assert_eq!(s.window, None);
+    }
+
+    #[test]
+    fn workbench_roundtrip_and_corrupt() {
+        let p = tmp("wb.json");
+        let mut wb = WorkbenchFile { name: "deadbeef-1234".into(), projects: Default::default() };
+        wb.projects.insert(
+            "/w".into(),
+            ProjectSession {
+                language: Some("rust".into()),
+                vpane: 592,
+                hpane: 1161,
+                scroll: Some(ScrollPos { rel: "src/main.rs".into(), frac: 0.37 }),
+                expanded: vec!["/w/src".into()],
+                changes_closed: vec!["docs".into()],
+            },
+        );
+        save_workbench_to(&wb, &p);
+        assert_eq!(load_workbench_from(&p), Some(wb));
+        std::fs::write(&p, "not json at all").unwrap();
+        assert_eq!(load_workbench_from(&p), None); // corrupt → None, never panic
+        std::fs::write(&p, "[]").unwrap();
+        assert_eq!(load_workbench_from(&p), None); // non-object top level
+        // name sanitization on the path helper: only [0-9a-f-] survive
+        let q = workbench_path("a/b?c");
+        assert!(q.to_string_lossy().contains("bc"));
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn workbench_entry_coercion() {
+        // hand-corruptible per-session shape: read must never raise
+        let v = json!({"name": "n", "projects": {
+            "/w1": {"language": "rust", "vpane": "592", "hpane": 592.9, "scroll": null,
+                    "expanded": ["/w/src", 5, null], "changes_closed": "nope"},
+            "/w2": {"vpane": -3, "scroll": {"rel": "a", "frac": "0.5"}},
+            "/w3": 3,
+        }});
+        let wb = parse_workbench(&v).unwrap();
+        assert_eq!(wb.name, "n");
+        let s1 = wb.projects.get("/w1").unwrap();
+        assert_eq!(s1.language.as_deref(), Some("rust"));
+        assert_eq!(s1.vpane, 592); // string parsed
+        assert_eq!(s1.hpane, 592); // float truncated toward 0 (592.9 → 592)
+        assert_eq!(s1.scroll, None);
+        assert_eq!(s1.expanded, vec!["/w/src".to_string()]);
+        assert_eq!(s1.changes_closed, Vec::<String>::new());
+        let s2 = wb.projects.get("/w2").unwrap();
+        assert_eq!(s2.vpane, -3);
+        assert_eq!(s2.scroll, None); // wrong-typed frac → None, not an error
+        assert!(wb.projects.get("/w3").is_none()); // non-object entry dropped
     }
 
     #[test]

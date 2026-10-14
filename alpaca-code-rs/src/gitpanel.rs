@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use relm4::gtk::{self, gio, glib, pango, prelude::*};
 use relm4::prelude::*;
+use relm4::component::ComponentController;
 
 use crate::branchmenu::{BranchMenu, BranchMenuMsg, BranchMenuOutput};
 use crate::filetree::{FileTree, FileTreeMsg, FileTreeOutput};
@@ -21,6 +22,9 @@ use crate::gitview::{ChangesView, GitViewMsg, GitViewOutput};
 #[derive(Debug)]
 pub enum ProbeChild {
     Changes(GitViewMsg),
+    /// probe drives the filetree directly (WB save-run's expand step; each
+    /// value sent once, no Clone)
+    Tree(FileTreeMsg),
 }
 
 #[derive(Debug)]
@@ -54,6 +58,15 @@ pub enum GitPanelMsg {
     /// PROBE-ONLY (ALPACA_PROBE_S3) — filetree min-width assert; production
     /// never sends it
     TreeMin,
+    /// boot restore (workbench step): saved tree-open dirs (abs) + changes
+    /// closed dirs (rel). Workspace::new sends it right after SetRoot.
+    SetTreeState {
+        expanded: Vec<String>,
+        closed: Vec<String>,
+    },
+    /// the DEFERRED replay of the tree half — the idle hops past SetRoot's
+    /// queued EntryChanged("") (its Search("") wipe), see the handler
+    RestoreTree(Vec<String>),
 }
 
 #[derive(Debug)]
@@ -364,7 +377,40 @@ impl Component for GitPanel {
             }
             GitPanelMsg::ProbeChild(pc) => match pc {
                 ProbeChild::Changes(m) => self.changes.emit(m),
+                ProbeChild::Tree(m) => self.ft.emit(m),
             },
+            GitPanelMsg::SetTreeState { expanded, closed } => {
+                // gitview half lands NOW: `closed` replays from fill()'s
+                // expand pass on every later changes-mode fill, and gitview's
+                // own SetRoot (queued before this, FIFO) has already cleared
+                // its stale set
+                self.changes.emit(GitViewMsg::SetClosed(closed));
+                // filetree half must NOT forward directly, as belt for the
+                // re-root-with-entry-text case: set_root's
+                // entry.set_text("") is a NO-OP on the boot's empty entry
+                // (identical text emits nothing), so no wipe is queued
+                // today — but any future path that re-roots a panel whose
+                // entry holds text would queue EntryChanged("") → ft
+                // Search("") → populate_root (clears store+open) ~150ms
+                // later (search-delay), AFTER an idle direct forward, and
+                // erase it. The deferred idle keeps the restore past any
+                // such wipe (the same sequencing filetree's own search-clear
+                // restore uses).
+                let snd = sender.clone();
+                glib::idle_add_local_once(move || {
+                    // close law: the idle can outlive the runtime (guarded)
+                    if snd.input_sender().send(GitPanelMsg::RestoreTree(expanded)).is_err() {
+                        // runtime gone — restore dies with the session, fine
+                    }
+                });
+            }
+            GitPanelMsg::RestoreTree(expanded) => {
+                // the wipe has drained by now; RestoreTree reexpands
+                // parents-first with lazy load_children (filetree's own tool)
+                if let Some(root) = self.root.clone() {
+                    self.ft.emit(FileTreeMsg::RestoreTree(root, expanded, 0.0));
+                }
+            }
             // probe-only: typing through the real entry — its delayed
             // search-changed fires the same EntryChanged route a user's
             // keystroke does
@@ -424,6 +470,13 @@ impl Component for GitPanel {
 // ---- git status plumbing ---------------------------------------------------
 
 impl GitPanel {
+    /// Both trees' expansion state as save-time data — filetree's open set
+    /// (abs paths) + gitview's closed set (rel paths). The workbench save
+    /// reads this; model access follows the panes.model().live_pids() law.
+    pub fn tree_state(&self) -> (Vec<String>, Vec<String>) {
+        (self.ft.model().open_dirs(), self.changes.model().closed_dirs())
+    }
+
     /// set_root, step for step.
     fn set_root(&mut self, root: PathBuf, sender: &ComponentSender<Self>) {
         if let Some(m) = self.head_mon.take() {

@@ -13,7 +13,7 @@
 // APIs. One blanket allow; Task 9's sweep re-runs the warning check.
 #![allow(deprecated)]
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -48,6 +48,45 @@ pub fn icon_of(name: &str, is_dir: bool) -> &'static str {
         "md" => "text-x-markdown",
         _ => "text-x-generic-symbolic",
     }
+}
+
+/// Extension tally over relpaths/names — the dominant-language fold. Names
+/// without a '.' never count (a Makefile-heavy tree must not invent
+/// languages), and neither do dotfiles: rsplit('.') makes ".gitignore" ext
+/// "gitignore" (a .*ignore/.env-heavy tree would win the tally with junk).
+/// Ties go to the lexically smallest ext (BTreeMap order keeps it
+/// deterministic).
+fn dominant_ext(names: Vec<String>) -> Option<String> {
+    let mut tally: BTreeMap<String, u64> = BTreeMap::new();
+    for n in names {
+        let base = n.rsplit('/').next().unwrap_or(&n);
+        if !base.contains('.') || base.starts_with('.') {
+            continue;
+        }
+        let e = ext_of(base);
+        if e.is_empty() {
+            continue;
+        }
+        *tally.entry(e).or_insert(0) += 1;
+    }
+    let mut best: Option<(String, u64)> = None;
+    for (e, n) in tally {
+        if best.as_ref().map(|(_, bn)| n > *bn).unwrap_or(true) {
+            best = Some((e, n));
+        }
+    }
+    best.map(|(e, _)| e)
+}
+
+/// The project's dominant language as a GtkSourceView language id ("rust",
+/// "python", …) or None. ponytail: file-count tally via scan_project's
+/// SKIP_DIRS walk — no .gitignore/byte weighting or vendored heuristics;
+/// upgrade when it misfires on a real repo.
+pub fn dominant_language(root: &Path) -> Option<String> {
+    let ext = dominant_ext(scan_project(root, "", 100_000))?;
+    sourceview5::LanguageManager::default()
+        .guess_language(Some(&format!("x.{ext}")), None)
+        .map(|l| l.id().to_string())
 }
 
 pub fn scan_dir(path: &Path) -> Vec<(String, bool)> {
@@ -154,6 +193,28 @@ mod tests {
         assert_eq!(got, vec!["src/main.rs".to_string()]); // node_modules pruned
         let n = scan_project(&root, "", 100_000).len();
         assert_eq!(n, 2); // count path also skips junk
+    }
+
+    #[test]
+    fn dominant_ext_fold() {
+        // workbench language tally (2026-10-14): count extensions, only names
+        // containing '.', lexically-smallest ext wins ties
+        let got = dominant_ext(vec![
+            "a.rs".into(), "src/b.rs".into(), "c/py/x.py".into(), "d.rs".into(), "e.py".into(),
+        ]);
+        assert_eq!(got.as_deref(), Some("rs"));
+        // extensionless names never feed the tally (Makefile/docker trees stay sane)
+        assert_eq!(dominant_ext(vec!["Makefile".into(), "x".into()]), None);
+        // tie: 2 vs 2 → smallest ext
+        let tie = dominant_ext(vec!["z.rs".into(), "a.py".into()]);
+        assert_eq!(tie.as_deref(), Some("py"));
+        // dotfiles never count: rsplit('.') makes ".gitignore" ext
+        // "gitignore" — a .*ignore-heavy tree must not invent a language
+        assert_eq!(
+            dominant_ext(vec![".gitignore".into(), "src/.env".into(), ".editorconfig".into()]),
+            None
+        );
+        assert_eq!(dominant_ext(Vec::new()), None);
     }
 
     #[test]
@@ -382,6 +443,12 @@ const PATH: i32 = 1;
 const IS_DIR: i32 = 2;
 
 impl FileTree {    // ---- store helpers ---------------------------------------------------------
+
+    /// The `open` set as save-time data (abs dir paths) — the workbench save
+    /// reads this through gitpanel. Same truth source restore_tree replays.
+    pub fn open_dirs(&self) -> Vec<String> {
+        self.open.iter().cloned().collect()
+    }
 
     fn row_str(&self, it: &gtk::TreeIter, col: i32) -> String {
         self.store.get_value(it, col).get::<String>().unwrap_or_default()

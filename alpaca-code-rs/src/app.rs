@@ -16,6 +16,7 @@ use relm4::component::ComponentController;
 use relm4::{Component, ComponentParts, ComponentSender};
 
 use crate::editor::{Editor, EditorMsg, EditorOutput};
+use crate::filetree::FileTreeMsg;
 use crate::gitpanel::{GitPanel, GitPanelMsg, GitPanelOutput, ProbeChild};
 use crate::gitview::GitViewMsg;
 use crate::panes::{Panes, PanesMsg, PanesOutput, kill_tree};
@@ -47,6 +48,13 @@ pub enum AppMsg {
     RunPressed,
     StopPressed,
     FlushTabs,
+    /// Ctrl+Shift+S / menu Save Workbench → the full explicit save
+    SaveWorkbench,
+    /// X-close: close-request already STOPPED the close; save, then destroy
+    /// the window (`destroy()` does not re-emit close-request — no loop)
+    SaveThenClose,
+    /// Exit menu / Ctrl+Q → save, then quit the application
+    SaveAndQuit,
     /// open-recent target no longer exists → info dialog
     RecentMissing(String),
     /// CHANGES row → editor diff page (tagged)
@@ -89,6 +97,14 @@ pub enum AppMsg {
     ProbeS4(PathBuf),
     /// PROBE-ONLY (ALPACA_PROBE_S4) — the step-chain driver
     ProbeS4Step,
+    /// PROBE-ONLY (ALPACA_PROBE_WB_SAVE) — workbench save-run chain: build a
+    /// session, save, exercise the real close-request path
+    ProbeWBSave(PathBuf),
+    ProbeWBStep,
+    /// PROBE-ONLY (ALPACA_PROBE_WB_RESTORE) — boot-restore asserts on the
+    /// same rig config the SAVE run wrote
+    ProbeWBRestore(PathBuf),
+    ProbeWBRStep,
 }
 
 thread_local! {
@@ -153,6 +169,9 @@ pub struct Workspace {
     root: PathBuf,
     /// the card assembly (hpaned → [editor | panes-vpaned, gitpanel]) — one GtkStack page
     hpane: gtk::Paned,
+    /// editor | panes split — stored for the workbench save (the paned
+    /// positions are the per-project layout lines)
+    vpane: gtk::Paned,
     /// the header-strip pill (the close ✕ rides INSIDE its child box —
     /// one band covers label + ✕, user image #17)
     btn: gtk::Button,
@@ -171,9 +190,11 @@ pub struct Workspace {
 impl Workspace {
     /// Build the whole per-project UI. `ws` = the index this instance will
     /// occupy in App's vec; component outputs are tagged with it so App
-    /// routes back into THIS workspace regardless of the active one.
-    fn new(path: PathBuf, ws: usize, app_out: ComponentSender<App>) -> Self {
+    /// routes back into THIS workspace regardless of the active one. `sess`
+    /// = the saved per-project session (workbench restore; None → defaults).
+    fn new(path: PathBuf, ws: usize, app_out: ComponentSender<App>, sess: Option<state::ProjectSession>) -> Self {
         let path_str = path.to_string_lossy().into_owned();
+        let sess = sess.unwrap_or_default();
 
         // Task 6 (editor card) — the component carries its own alpaca-card
         let editor_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -203,6 +224,12 @@ impl Workspace {
         vpane.set_end_child(Some(&panes_slot));
         // design: editor card 56..649 (593) − pane handle overlap
         vpane.set_position(592);
+        // workbench restore (S4 hidden-page law): a saved position is set at
+        // CONSTRUCTION — the property survives the page's first allocation
+        // (GTK clamps to min(saved, allocated−6) when undersized)
+        if sess.vpane > 0 {
+            vpane.set_position(sess.vpane);
+        }
 
         // git panel card (the hpane end child)
         let app_in = app_out.clone();
@@ -229,6 +256,9 @@ impl Workspace {
         // NOT re-applied at switch (the position property must survive the
         // hidden page's first allocation — the S4 probe asserts exactly that).
         hpane.set_position(1161);
+        if sess.hpane > 0 {
+            hpane.set_position(sess.hpane);
+        }
 
         // Requirement 2: the pill's idle look IS the old title look
         // (.alpaca-projbtn mirrors .alpaca-wintitle); hover = the branch pill's.
@@ -286,16 +316,27 @@ impl Workspace {
         // tree first, then panes, editor Restore LAST (the old set_workspace
         // order — restore must ride after the re-roots it reads back)
         gitpanel.emit(GitPanelMsg::SetRoot(path.clone()));
+        if !sess.expanded.is_empty() || !sess.changes_closed.is_empty() {
+            // boot restore: gitpanel forwards the tree half DEFERRED (belt
+            // for a future re-root with entry text — at boot the entry is
+            // empty so set_text("") is a no-op; see gitpanel's SetTreeState)
+            gitpanel.emit(GitPanelMsg::SetTreeState {
+                expanded: sess.expanded.clone(),
+                closed: sess.changes_closed.clone(),
+            });
+        }
         panes.emit(PanesMsg::SetRoot(path.clone()));
         editor.emit(EditorMsg::Restore(
             path.clone(),
             tabs.open_tabs.clone(),
             tabs.active_tab,
+            sess.scroll.as_ref().map(|s| (s.rel.clone(), s.frac)),
         ));
 
         Self {
             root: path,
             hpane,
+            vpane,
             btn,
             editor,
             panes,
@@ -333,6 +374,16 @@ struct App {
     /// PROBE-ONLY (ALPACA_PROBE_S4) — step chain (workspace, step index);
     /// production never constructs it (env unset)
     probe_s4: Option<(PathBuf, usize)>,
+    /// PROBE-ONLY (ALPACA_PROBE_WB_SAVE/_RESTORE) — the two workbench-run
+    /// step chains; production never constructs them (env unset)
+    probe_wb: Option<(PathBuf, usize)>,
+    probe_wbr: Option<(PathBuf, usize)>,
+    /// the session's workbench (workbench step 2026-10-14): the LAST saved
+    /// file, source of preserve-lists on the next save; None until first boot
+    /// with a saved workbench
+    wb: Option<state::WorkbenchFile>,
+    /// the minted workbench name (uuid placeholder) — stable once saved
+    wb_name: Option<String>,
 }
 
 #[relm4::component]
@@ -480,10 +531,19 @@ impl Component for App {
         let send = sender.clone();
         stop_btn.connect_clicked(move |_b| send.input(AppMsg::StopPressed));
 
-        // clamped AFTER construction, same numbers
+        // clamped AFTER construction, same numbers; saved geometry wins
+        // over the default (workbench step), clamped identically; maximized
+        // is best-effort (Wayland honours are compositor-side)
         let widgets = view_output!();
-        let (w, h) = default_size();
+        let st = state::load();
+        let (w, h) = st
+            .window
+            .map(|g| clamp_to_monitor(g.width, g.height))
+            .unwrap_or_else(|| clamp_to_monitor(1586, 992));
         root.set_default_size(w, h);
+        if st.window.as_ref().is_some_and(|g| g.maximized) {
+            root.maximize();
+        }
 
         // The window's content = one stack page per open workspace
         // (requirement 8: transition None = instant, like browser tabs).
@@ -506,6 +566,10 @@ impl Component for App {
             probe_ws: None,
             probe_s3: None,
             probe_s4: None,
+            probe_wb: None,
+            probe_wbr: None,
+            wb: st.last_workbench.as_deref().and_then(state::load_workbench),
+            wb_name: st.last_workbench.clone(),
         };
 
         register_actions(&relm4::main_application(), &root, sender.clone());
@@ -517,10 +581,21 @@ impl Component for App {
             in_active.input(AppMsg::WindowActive)
         });
 
+        // X-button save point (workbench step 2026-10-14). Close law: this can
+        // fire at (or after) shutdown → guarded send. Stop ALWAYS — returning
+        // Proceed lets GTK destroy the window before the queued AppMsg runs
+        // (the relm4 input()-after-shutdown panic); SaveThenClose ends in
+        // root.destroy(), which unlike close() does not re-emit close-request.
+        let snd_close = sender.clone();
+        root.connect_close_request(move |_| {
+            let _ = snd_close.input_sender().send(AppMsg::SaveThenClose);
+            glib::Propagation::Stop
+        });
+
         // startup: reopen last session's strip (open_projects; old files
         // coerce to [last_project] via the fallback), then swing active to the
         // remembered one. BootActivate must ride the SAME queue as the opens.
-        let st = state::load();
+        // (st was hoisted above for the model's workbench fields)
         let mut opens: Vec<PathBuf> = state::open_projects(&st)
             .iter()
             .map(PathBuf::from)
@@ -553,6 +628,13 @@ impl Component for App {
         // PROBE-ONLY (ALPACA_PROBE_S4) — never runs in production (env unset)
         if let Ok(dir) = std::env::var("ALPACA_PROBE_S4") {
             sender.input(AppMsg::ProbeS4(PathBuf::from(dir)));
+        }
+        // PROBE-ONLY (ALPACA_PROBE_WB_SAVE/_RESTORE) — never in production
+        if let Ok(dir) = std::env::var("ALPACA_PROBE_WB_SAVE") {
+            sender.input(AppMsg::ProbeWBSave(PathBuf::from(dir)));
+        }
+        if let Ok(dir) = std::env::var("ALPACA_PROBE_WB_RESTORE") {
+            sender.input(AppMsg::ProbeWBRestore(PathBuf::from(dir)));
         }
 
         ComponentParts { model, widgets }
@@ -590,6 +672,15 @@ impl Component for App {
                         glib::ControlFlow::Break
                     });
                 }
+            }
+            AppMsg::SaveWorkbench => self.save_all(root),
+            AppMsg::SaveThenClose => {
+                self.save_all(root);
+                root.destroy(); // close-request already stopped; no re-emission
+            }
+            AppMsg::SaveAndQuit => {
+                self.save_all(root);
+                relm4::main_application().quit();
             }
             AppMsg::FlushTabs => {
                 let mut st = state::load();
@@ -964,6 +1055,185 @@ impl Component for App {
                     });
                 }
             }
+            AppMsg::ProbeWBSave(dir) => {
+                // PROBE-ONLY (ALPACA_PROBE_WB_SAVE) — never runs in production
+                self.probe_wb = Some((dir, 0));
+                root.present();
+                let snd = sender.clone();
+                glib::timeout_add(std::time::Duration::from_millis(PROBE_WB_SAVE_MS[0]), move || {
+                    snd.input(AppMsg::ProbeWBStep);
+                    glib::ControlFlow::Break
+                });
+            }
+            AppMsg::ProbeWBStep => {
+                let Some((ws_dir, step)) = self.probe_wb.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                    return;
+                };
+                let say = |name: &str, ok: bool| {
+                    println!("PROBE assert: {name}: {}", if ok { "PASS" } else { "FAIL" })
+                };
+                match step {
+                    0 => {
+                        self.open_workspace(ws_dir.as_path(), root, sender.clone());
+                        let i = self.active;
+                        sender.input(AppMsg::OpenFile(i, ws_dir.join("a.txt")));
+                        // a REAL layout for the vfb before the paned steps (the
+                        // S3 floor-then-set law: set_position garbles against a
+                        // stale allocation)
+                        root.set_size_request(1586, 992);
+                    }
+                    1 => {
+                        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else { return };
+                        w.vpane.set_position(650);
+                        w.hpane.set_position(900);
+                        // expand rig row 1 = "sub" (scan_dir sorts dirs first:
+                        // [other, sub, a.txt]) — row_expanded inserts the row's
+                        // abs PATH into `open`, the save's truth source
+                        w.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Tree(
+                            FileTreeMsg::RowExpanded(gtk::TreePath::from_string("1").unwrap()),
+                        )));
+                    }
+                    2 => {
+                        if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
+                            w.editor.emit(EditorMsg::ProbeScroll(0.75));
+                            let sc = w.editor.model().scroll_state();
+                            println!("PROBE scroll_state: {:?}", sc);
+                        }
+                    }
+                    3 => sender.input(AppMsg::SaveWorkbench), // the real funnel
+                    4 => {
+                        // disk truth: the workbench file + state.json extras.
+                        // The uuid name is unknowable here — read the dir's one
+                        // workbenches/<uuid>.json (S4's grep-on-disk style)
+                        sender.spawn_command(move |_| {
+                            let dir = crate::state::workbenches_dir();
+                            let mut got: Option<String> = None;
+                            if let Ok(rd) = std::fs::read_dir(&dir) {
+                                for e in rd.flatten() {
+                                    if e.path().extension().is_some_and(|x| x == "json") {
+                                        got = std::fs::read_to_string(e.path()).ok();
+                                        println!("PROBE workbench file = {}", e.path().display());
+                                    }
+                                }
+                            }
+                            let wb = got.unwrap_or_default();
+                            let st = std::fs::read_to_string(crate::state::state_path())
+                                .unwrap_or_default();
+                            let ok = wb.contains("\"vpane\": 650")
+                                && wb.contains("\"hpane\": 900")
+                                && wb.contains("\"language\": \"rust\"")
+                                && wb.contains("\"rel\": \"a.txt\"")
+                                && wb.contains("sub")
+                                && st.contains("\"last_workbench\": \"")
+                                && st.contains("\"window\": {");
+                            say("wb-save-disk", ok);
+                            println!("PROBE state last_workbench={:?}",
+                                     st.split("\"last_workbench\": ").nth(1)
+                                       .and_then(|s| s.split(',').next()).or(Some("<none>")));
+                            println!("PROBE workbench.json = {}", wb.trim());
+                        });
+                        // in-process readback of the live sources behind it
+                        if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
+                            let (open, closed) = w.gitpanel.model().tree_state();
+                            say("wb-open-has-sub", open.iter().any(|d| d.ends_with("/sub")));
+                            say("wb-closed-empty", closed.is_empty());
+                            println!(
+                                "PROBE hpane pos={} vpane pos={}",
+                                w.hpane.position(),
+                                w.vpane.position()
+                            );
+                        }
+                    }
+                    5 => {
+                        println!("PROBE WB SAVE DONE");
+                        self.probe_wb = None;
+                        // the REAL X path: close-request → guarded send →
+                        // SaveThenClose (also proves Stop-first ordering)
+                        root.close();
+                        return;
+                    }
+                    _ => {}
+                }
+                if let Some(next) = PROBE_WB_SAVE_MS.get(step + 1) {
+                    self.probe_wb.as_mut().unwrap().1 = step + 1;
+                    let snd = sender.clone();
+                    glib::timeout_add(std::time::Duration::from_millis(*next), move || {
+                        snd.input(AppMsg::ProbeWBStep);
+                        glib::ControlFlow::Break
+                    });
+                }
+            }
+            AppMsg::ProbeWBRestore(dir) => {
+                // PROBE-ONLY (ALPACA_PROBE_WB_RESTORE) — same XDG rig config
+                // as the SAVE run (its state.json + workbenches/ feed boot)
+                self.probe_wbr = Some((dir, 0));
+                root.present();
+                let snd = sender.clone();
+                glib::timeout_add(std::time::Duration::from_millis(PROBE_WB_RESTORE_MS[0]), move || {
+                    snd.input(AppMsg::ProbeWBRStep);
+                    glib::ControlFlow::Break
+                });
+            }
+            AppMsg::ProbeWBRStep => {
+                let Some((ws_dir, step)) = self.probe_wbr.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                    return;
+                };
+                let say = |name: &str, ok: bool| {
+                    println!("PROBE assert: {name}: {}", if ok { "PASS" } else { "FAIL" })
+                };
+                match step {
+                    0 => {
+                        // boot restored the strip: 1 live ws + active swing
+                        say("r-strip", self.live_len() == 1 && self.active == 0);
+                        if let Some(w) = self.ws.get(0).and_then(|o| o.as_ref()) {
+                            say("r-tabs", w.snapshot.open_tabs == vec!["a.txt".to_string()]);
+                            // paned restore, S4's pinned law: an allocated page
+                            // clamps at save vs alloc−6; unallocated holds the
+                            // property. ws_dir kept for the compiler only.
+                            let _ = &ws_dir;
+                            let hp = w.hpane.position();
+                            let ha = w.hpane.allocated_width();
+                            let vp = w.vpane.position();
+                            let vh = w.vpane.allocated_height();
+                            say(
+                                "r-hpane",
+                                ha <= 0 && hp == 900 || ha > 0 && hp == (900).min(ha - 6),
+                            );
+                            say(
+                                "r-vpane",
+                                vh <= 0 && vp == 650 || vh > 0 && vp == (650).min(vh - 6),
+                            );
+                            // editor scroll: saved (rel, frac); restore_frac
+                            // re-applied on the adj bounds change — frac is
+                            // scale-free, >0.4 tolerates layout drift
+                            let sc = w.editor.model().scroll_state();
+                            say(
+                                "r-scroll",
+                                sc.as_ref().map(|(r, f)| r == "a.txt" && *f > 0.4)
+                                    .unwrap_or(false),
+                            );
+                            println!("PROBE restore hpane {hp}/{ha} vpane {vp}/{vh} scroll {sc:?}");
+                            // the deferred RestoreTree replayed the open set
+                            let (open, _closed) = w.gitpanel.model().tree_state();
+                            say("r-open-has-sub", open.iter().any(|d| d.ends_with("/sub")));
+                        }
+                    }
+                    1 => {
+                        println!("PROBE WB RESTORE DONE");
+                        self.probe_wbr = None;
+                        return;
+                    }
+                    _ => {}
+                }
+                if let Some(next) = PROBE_WB_RESTORE_MS.get(step + 1) {
+                    self.probe_wbr.as_mut().unwrap().1 = step + 1;
+                    let snd = sender.clone();
+                    glib::timeout_add(std::time::Duration::from_millis(*next), move || {
+                        snd.input(AppMsg::ProbeWBRStep);
+                        glib::ControlFlow::Break
+                    });
+                }
+            }
             AppMsg::ProbeS3(dir) => {
                 // PROBE-ONLY (ALPACA_PROBE_S3) — never runs in production
                 // (env unset); step chain start: schedule step 0 with the
@@ -1091,6 +1361,11 @@ const PROBE_S3_STEP_MS: [u64; 7] = [500, 700, 700, 700, 600, 600, 600];
 //     pill classes, WM title) · 3 = open wsC → cap-full asserts
 //     (3 open, "+" disabled) · 4 = re-open wsA → must SWITCH not add → DONE
 const PROBE_S4_STEP_MS: [u64; 8] = [500, 700, 700, 700, 700, 500, 700, 700];
+
+/// PROBE-ONLY (ALPACA_PROBE_WB_SAVE) — gap[i] = ms delay before step i
+const PROBE_WB_SAVE_MS: [u64; 6] = [500, 700, 700, 700, 700, 700];
+/// PROBE-ONLY (ALPACA_PROBE_WB_RESTORE)
+const PROBE_WB_RESTORE_MS: [u64; 2] = [800, 700];
 
 /// epoch ms for the probe's step trace (the wrapper correlates app ts with
 /// the git-shim log's ts)
@@ -1322,7 +1597,12 @@ impl App {
             AddDecision::Switch(i) => self.switch_to(open_slots[i], root_win),
             AddDecision::Add => {
                 let i = self.ws.len(); // next slot (slots grow, never reuse)
-                let ws = Workspace::new(path.to_path_buf(), i, sender.clone());
+                let sess = self
+                    .wb
+                    .as_ref()
+                    .and_then(|w| w.projects.get(path.to_string_lossy().as_ref()))
+                    .cloned();
+                let ws = Workspace::new(path.to_path_buf(), i, sender.clone(), sess);
                 // stack page name: unique — open paths are deduped
                 self.stack
                     .add_named(&ws.hpane, Some(&ws.root.to_string_lossy()));
@@ -1390,6 +1670,65 @@ impl App {
     /// live workspaces (tombstones skipped) — cap checks, FlushTabs, "+" gate
     fn live_len(&self) -> usize {
         self.ws.iter().flatten().count()
+    }
+
+    /// The ONE workbench save (2026-10-14): tabs flush (defeats the 1s
+    /// debounce — its last event before quit is lost), window geometry, the
+    /// workbenches/<uuid>.json session file, then state.json extras.
+    /// Best-effort throughout — the state contract means it never raises.
+    fn save_all(&mut self, root_win: &gtk::ApplicationWindow) {
+        let mut st = state::load();
+        for w in self.ws.iter().flatten() {
+            st = state::set_tabs(
+                st,
+                w.root.to_string_lossy().as_ref(),
+                w.snapshot.open_tabs.clone(),
+                w.snapshot.active_tab,
+            );
+        }
+        st.window = Some(state::WindowGeom {
+            width: root_win.width(),
+            height: root_win.height(),
+            maximized: root_win.is_maximized(),
+        });
+        let name = self
+            .wb_name
+            .get_or_insert_with(|| glib::uuid_string_random().to_string())
+            .clone();
+        let mut wb = state::WorkbenchFile {
+            name: name.clone(),
+            projects: Default::default(),
+        };
+        // sessions survive a project CLOSE this session: previous entries are
+        // the base, live ones insert-overwrite (stale entries on never-reopened
+        // projects harm nothing — boot filters by p.is_dir())
+        if let Some(old) = self.wb.take() {
+            wb.projects = old.projects;
+        }
+        for w in self.ws.iter().flatten() {
+            // live read, no mirror: gitpanel forwards both trees, the editor
+            // model carries the active file's scroll (panes.model() precedent)
+            let (expanded, closed) = w.gitpanel.model().tree_state();
+            wb.projects.insert(
+                w.root.to_string_lossy().into_owned(),
+                state::ProjectSession {
+                    language: crate::filetree::dominant_language(&w.root),
+                    vpane: w.vpane.position(),
+                    hpane: w.hpane.position(),
+                    scroll: w
+                        .editor
+                        .model()
+                        .scroll_state()
+                        .map(|(rel, frac)| state::ScrollPos { rel, frac }),
+                    expanded,
+                    changes_closed: closed,
+                },
+            );
+        }
+        state::save_workbench_to(&wb, &state::workbench_path(&name));
+        st.last_workbench = Some(name);
+        state::save(&st);
+        self.wb = Some(wb); // next save's preservation base
     }
 
     /// live slot numbers in strip order — slots are append-only, so slot
@@ -1504,18 +1843,18 @@ fn py_basename(s: &str) -> String {
     t.rsplit('/').find(|c| !c.is_empty()).unwrap_or(t).to_owned()
 }
 
-/// 1586×992 clamped to the monitor (−40 top/side pad, −140
-/// vertical incl. panel); a too-tall default opens half-offscreen. ponytail: monitor 0.
-fn default_size() -> (i32, i32) {
+/// (w,h) clamped to the monitor (−40 top/side pad, −140 vertical incl.
+/// panel); a too-tall default opens half-offscreen. ponytail: monitor 0.
+fn clamp_to_monitor(w: i32, h: i32) -> (i32, i32) {
     if let Some(disp) = gdk::Display::default() {
         let mons = disp.monitors();
         if mons.n_items() > 0
             && let Some(mon) = mons.item(0).and_downcast::<gdk::Monitor>() {
                 let g = mon.geometry();
-                return (1586.min(g.width() - 40), 992.min(g.height() - 140));
+                return (w.min(g.width() - 40), h.min(g.height() - 140));
             }
     }
-    (1586, 992)
+    (w, h)
 }
 
 /// The one header menu: workbench actions. Sections between groups are
@@ -1647,17 +1986,26 @@ fn register_actions(
 
     let quit = gio::SimpleAction::new("quit", None);
     {
-        let app = app.clone();
-        quit.connect_activate(move |_a, _p| app.quit());
+        // workbench step: quit saves the session first (Ctrl+Q + the menu's
+        // Exit row both target app.quit)
+        let sender = sender.clone();
+        quit.connect_activate(move |_a, _p| sender.input(AppMsg::SaveAndQuit));
     }
     app.add_action(&quit);
 
     // no-op stubs until workbenches land (they'll be the superproject layer
     // loading the up-to-3 projects): the rows must look enabled and do
-    // nothing yet — these three become the wiring slots then.
-    for name in ["new-workbench", "open-workbench", "save-workbench"] {
+    // nothing yet.
+    for name in ["new-workbench", "open-workbench"] {
         let a = gio::SimpleAction::new(name, None);
         a.connect_activate(|_a, _p| {});
+        app.add_action(&a);
+    }
+    {
+        // Save Workbench (menu row + Ctrl+Shift+S) → the full explicit save
+        let sender = sender.clone();
+        let a = gio::SimpleAction::new("save-workbench", None);
+        a.connect_activate(move |_a, _p| sender.input(AppMsg::SaveWorkbench));
         app.add_action(&a);
     }
 
@@ -1694,8 +2042,10 @@ fn register_actions(
 
     let close = gio::SimpleAction::new("close", None);
     {
-        let w = root_win.clone();
-        close.connect_activate(move |_a, _p| w.destroy());
+        // the X button's exact path (close-request → guarded send → stop) —
+        // one exit behavior for accelerator and programmatic callers
+        let sender = sender.clone();
+        close.connect_activate(move |_a, _p| sender.input(AppMsg::SaveThenClose));
     }
     app.add_action(&close);
 
@@ -1730,6 +2080,7 @@ fn register_actions(
     app.add_action(&recents);
 
     app.set_accels_for_action("app.quit", &["<Control>q"]);
+    app.set_accels_for_action("app.save-workbench", &["<Control><Shift>s"]);
 }
 
 /// Launch entry: the component's Widgets struct is macro-private, so the
