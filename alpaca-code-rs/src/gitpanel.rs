@@ -76,6 +76,19 @@ pub enum GitPanelOutput {
 pub enum GitPanelCommand {
     ProbeLanded {
         root: String,
+        /// branch_of moved INTO the flight (it's a `.git/HEAD` read, not a
+        /// subprocess — was recomputed sync on the UI thread at every landing)
+        branch: Option<String>,
+        raw: Option<Rows>,
+        ahead: usize,
+    },
+    /// the sync path's flight (set_root, HEAD monitor, pulse end, window
+    /// focus): python ran one blocking `git status` + `ahead` here; a slow or
+    /// hung git no longer freezes focus-in / mode entry. A workspace switch
+    /// mid-flight drops the landing (the probe's root guard).
+    StatusLanded {
+        root: String,
+        branch: Option<String>,
         raw: Option<Rows>,
         ahead: usize,
     },
@@ -350,7 +363,7 @@ impl Component for GitPanel {
 
     fn update_cmd(&mut self, cmd: GitPanelCommand, sender: ComponentSender<Self>, _root: &Self::Root) {
         match cmd {
-            GitPanelCommand::ProbeLanded { root, raw, ahead } => {
+            GitPanelCommand::ProbeLanded { root, branch, raw, ahead } => {
                 self.probe_busy = false;
                 // python _git_landed guard — same three terms; root compares as
                 // String vs Option: map the stored path first
@@ -358,12 +371,33 @@ impl Component for GitPanel {
                 if cur.as_deref() != Some(root.as_str()) || self.git_busy || self.changes_busy {
                     return;
                 }
-                self.paint_status(gitstatus::branch_of(&root).as_deref(), raw.as_ref().map(|r| r.len()));
+                self.paint_status(branch.as_deref(), raw.as_ref().map(|r| r.len()));
                 // python 351-355 order: paint, then the hook, then the open view
                 if let Some(raw) = raw {
                     let _ = sender.output(GitPanelOutput::GitChanged(raw.clone()));
                     if self.mode == "changes" {
                         self.changes.emit(GitViewMsg::Apply { raw: Some(raw), ahead, keep: true });
+                    }
+                }
+            }
+            GitPanelCommand::StatusLanded { root, branch, raw, ahead } => {
+                // workspace switched mid-flight → drop (the probe landing's root
+                // guard; python serialized everything so this couldn't happen)
+                let cur = self.root.as_ref().map(|p| p.to_string_lossy().into_owned());
+                if cur.as_deref() != Some(root.as_str()) {
+                    return;
+                }
+                self.paint_status(branch.as_deref(), raw.as_ref().map(|r| r.len()));
+                // git_busy NOT a drop condition: paint_status silently keeps the
+                // flight-owned row while the outputs still fire (sync parity)
+                if let Some(raw) = raw {
+                    let _ = sender.output(GitPanelOutput::GitChanged(raw.clone()));
+                    if self.mode == "changes" {
+                        self.changes.emit(GitViewMsg::Apply {
+                            raw: Some(raw),
+                            ahead,
+                            keep: true,
+                        });
                     }
                 }
             }
@@ -435,9 +469,13 @@ impl GitPanel {
             if std::env::var("ALPACA_PROBE_S2").is_ok() {
                 println!("PROBE probe-flight: root={root} ts={}", crate::app::epoch_ms());
             }
+            // old-probe order restored: changes()/ahead() fired regardless of
+            // branch_of — a detached-HEAD repo still yields rows + GitChanged
+            // (gating on branch would silently drop those repos' diffs)
             let raw = gitstatus::changes(&root); // snapshot: a workspace switch mid-flight drops it (guard in ProbeLanded)
             let ahead = if raw.is_some() { gitstatus::ahead(&root) } else { 0 };
-            out.emit(GitPanelCommand::ProbeLanded { root, raw, ahead });
+            let branch = gitstatus::branch_of(&root);
+            out.emit(GitPanelCommand::ProbeLanded { root, branch, raw, ahead });
         });
     }
 
@@ -488,28 +526,22 @@ impl GitPanel {
         }
     }
 
-    /// Sync path (set_root, HEAD monitor, pulse, focus hook): one git call,
-    /// paints via paint_status and feeds the diff-tab hook + open changes view
-    /// (SYNC git on the UI thread — python parity).
+    /// Sync path (set_root, HEAD monitor, pulse end, window focus) as a
+    /// command flight — python ran one blocking `git status` (10s) + `ahead`
+    /// (5s) on the UI thread here; the shape is the probe flight's. (No seq
+    /// token: two overlapping refreshes may land out of order — the row
+    /// self-heals on the next 2s probe, and python's serialize-everything
+    /// ordering bought that at a full UI freeze.)
     fn refresh_status(&mut self, sender: &ComponentSender<Self>) {
-        let root_str = self.root.as_ref().map(|p| p.to_string_lossy().into_owned());
-        let branch = root_str.as_deref().map(gitstatus::branch_of).flatten();
-        let raw = match branch {
-            Some(_) => gitstatus::changes(root_str.as_ref().unwrap()),
-            None => None,
+        let Some(root) = self.root.as_ref().map(|p| p.to_string_lossy().into_owned()) else {
+            return;
         };
-        self.paint_status(branch.as_deref(), raw.as_ref().map(|r| r.len()));
-        if let Some(raw) = &raw {
-            let _ = sender.output(GitPanelOutput::GitChanged(raw.clone()));
-            if self.mode == "changes" {
-                // branch Some ⇒ root Some
-                self.changes.emit(GitViewMsg::Apply {
-                    raw: Some(raw.clone()),
-                    ahead: gitstatus::ahead(root_str.as_ref().unwrap()),
-                    keep: true,
-                });
-            }
-        }
+        sender.spawn_command(move |out| {
+            let raw = gitstatus::changes(&root);
+            let ahead = if raw.is_some() { gitstatus::ahead(&root) } else { 0 };
+            let branch = gitstatus::branch_of(&root);
+            out.emit(GitPanelCommand::StatusLanded { root, branch, raw, ahead });
+        });
     }
 
     /// Statusbar rendering only — git data comes in from callers (the sync

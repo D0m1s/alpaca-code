@@ -223,6 +223,9 @@ pub enum EditorMsg {
     /// and report which side it lands on (python _edit_op's focus route);
     /// production never sends it
     ProbeClip,
+    /// PROBE-ONLY (ALPACA_PROBE_S2) — diff-page scrollbar-policy + dual-axis
+    /// scroll-pairing asserts; production never sends it (no chain)
+    ProbeDiffScroll,
     // internal
     /// post-emission re-stamp: fires after switch-page lands, when current_page()
     /// is already the new index (the staleness window is inside the emission only)
@@ -259,6 +262,16 @@ const DIFF_DEL_BG: &str = "#25181c";
 const DIFF_ADD_BG: &str = "#15261d";
 const DIFF_HDR_FG: &str = "#5a6375";
 
+/// per-direction, per-axis scroll-pairing dedupe: the adjustment each axis
+/// last linked to. Belt-only now — hooking is single-shot at open (the
+/// pairing-law comment at the machinery); the identity guard just makes a
+/// stray second diff_link on the same pair a no-op.
+#[derive(Default)]
+struct LinkedAxes {
+    v: Option<gtk::Adjustment>,
+    h: Option<gtk::Adjustment>,
+}
+
 /// both diff sides' scroll pairing state: the widgets the live renewal
 /// refills, plus each view's linked-adjustment dedupe (python `_linked`
 /// attrs — one per direction). `v_r` stays so the refill can retarget the
@@ -272,8 +285,22 @@ struct DiffWidgets {
     sw_r: gtk::ScrolledWindow,
     v_r: sourceview5::View,
     diff_text: Option<String>,
-    linked_l: Rc<RefCell<Option<gtk::Adjustment>>>,
-    linked_r: Rc<RefCell<Option<gtk::Adjustment>>>,
+    linked_l: Rc<RefCell<LinkedAxes>>,
+    linked_r: Rc<RefCell<LinkedAxes>>,
+    /// the resizable b/a divider (the paned widget is retained across
+    /// renewals — only buffers swap)
+    paned: gtk::Paned,
+    /// the single full-width h bar (Task 3) — bound to sw_r's hadj
+    bar: gtk::Scrollbar,
+    /// number panes (Task 4): one per side, buffers = `diff_num_text` of the
+    /// sides' number rows; each view SHARES its main's vadjustment object
+    /// (lockstep without push races — see probe asserts)
+    num_l: sourceview5::View,
+    num_r: sourceview5::View,
+    /// the panes' own sws: refresh re-stamps their width (a renewed side
+    /// can gain a number digit, 99→100 — the fixed sw would clip mid-glyph)
+    sw_num_l: gtk::ScrolledWindow,
+    sw_num_r: gtk::ScrolledWindow,
 }
 
 struct PageState {
@@ -405,7 +432,7 @@ impl Component for Editor {
                     let flush = self.pages[idx]
                         .path
                         .as_ref()
-                        .map_or(false, |p| paths.contains(p))
+                        .is_some_and(|p| paths.contains(p))
                         && self.pages[idx].buf.is_modified();
                     if flush {
                         let _ = self.write_page(idx);
@@ -502,11 +529,10 @@ impl Component for Editor {
             EditorMsg::Copy => self.clip_op("copy-clipboard"),
             EditorMsg::Paste => self.clip_op("paste-clipboard"),
             EditorMsg::SelectAll => {
-                if let Some(idx) = self.active() {
-                    if let Some(w) = self.op_target(idx) {
+                if let Some(idx) = self.active()
+                    && let Some(w) = self.op_target(idx) {
                         let _ = w.activate_action("select-all", Some(&true.to_variant()));
                     }
-                }
             }
             EditorMsg::Switched => {
                 self.refresh_restamps(&sender);
@@ -542,6 +568,72 @@ impl Component for Editor {
                     "PROBE clip-target: {}",
                     if hit { "right-view" } else { "left-or-wrong" }
                 );
+            }
+            // PROBE-ONLY diff scroll/policy asserts — NOT ProbeClip's job: the
+            // step-4 (+400ms post-open) timing is racy on a live display
+            // (measured 2026-10-13: vertical span still 0 and h values
+            // unsettled on some runs with the SAME binary — the pairing is
+            // not, the measurement is). The chain's PRE-SWITCH window runs
+            // 5-11 (step 12's SetWorkspace closes every page), so the assert
+            // rides step 9 — ~2s post-open, both sides' allocations and the
+            // pairing long settled, still wsA.
+            EditorMsg::ProbeDiffScroll => {
+                let Some(idx) = self.active() else {
+                    println!("PROBE assert: diff-presence: FAIL (no active page)");
+                    return;
+                };
+                if let Some(dw) = self.pages[idx].diff.as_ref() {
+                    let swept = PROBE_DIFF_SWEEP.with(|c| c.get());
+                    probe_diff_scroll_asserts(dw, &self.pages[idx].view.clone());
+                    if swept {
+                        // post-renewal re-run: every assert above printed
+                        // against a page whose buffers were swapped by the
+                        // refresh_diff flight (an open tab + a git tick — the
+                        // frequently-run path). PASS line here = asserts held
+                        // across renewal: no flap, share + links survived.
+                        println!("PROBE renewal-assert: PASS");
+                    }
+                } else {
+                    println!("PROBE assert: diff-presence: FAIL (not a diff page)");
+                }
+                // arm once (probe-only): mutate the fixture + drive the
+                // renewal directly
+                if !PROBE_DIFF_SWEEP.with(|c| c.get()) {
+                    PROBE_DIFF_SWEEP.with(|c| c.set(true));
+                    let mut mutated = false;
+                    // belt: the append must be a PROBE fixture, never a user
+                    // workspace (the message is probe-only, but the chain's
+                    // fixture conventions live at root = wsA)
+                    if let Some(root) = &self.root
+                        && root.file_name() == Some(std::ffi::OsStr::new("wsA"))
+                    {
+                        let f = root.join("a.txt");
+                        if let Ok(mut fh) = std::fs::OpenOptions::new().append(true).open(&f) {
+                            use std::io::Write;
+                            let _ = write!(fh, "\nprobe renewal tick line\n");
+                            mutated = true;
+                        }
+                    }
+                    if mutated
+                        && let Some(root) = self.root.clone()
+                    {
+                        // the flight refetches; the fresh (non-identical) diff
+                        // defeats the byte-identical dedupe, so refresh_diff
+                        // RUNS on the open page; 500ms = flight + landing
+                        sender.input(EditorMsg::RefreshDiffs {
+                            root,
+                            letters: vec![("a.txt".into(), "M".into())],
+                        });
+                        let snd = sender.clone();
+                        glib::timeout_add_local(
+                            std::time::Duration::from_millis(500),
+                            move || {
+                                snd.input(EditorMsg::ProbeDiffScroll);
+                                glib::ControlFlow::Break
+                            },
+                        );
+                    }
+                }
             }
             EditorMsg::FsEvent(path) => {
                 self.arm_settle(path, &sender);
@@ -791,7 +883,7 @@ impl Editor {
             slot.append(&gtk::Image::from_pixbuf(Some(&want)));
         }
         let index = self.nb.append_page(&page_box, Some(&head));
-        self.nb.set_current_page(Some(index as u32)); // append does not switch; a new tab must take focus
+        self.nb.set_current_page(Some(index)); // append does not switch; a new tab must take focus
         // resolve the (possibly shifted) index at click time via the page widget
         let nb2 = self.nb.clone();
         let pg_widget = page_box.clone();
@@ -866,11 +958,10 @@ impl Editor {
             while let Some(c) = pg.badge_slot.first_child() {
                 pg.badge_slot.remove(&c);
             }
-            if let Some(path) = &pg.path {
-                if let Some(want) = badges::pixbuf_for(&basename(path), false) {
+            if let Some(path) = &pg.path
+                && let Some(want) = badges::pixbuf_for(&basename(path), false) {
                     pg.badge_slot.append(&gtk::Image::from_pixbuf(Some(&want)));
                 }
-            }
         }
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
@@ -956,8 +1047,10 @@ impl Editor {
 
     /// python `_diff_side`'s buffer half — fresh GtkSource buffer (scheme +
     /// lang), bg tint over the marked lines, header fg, `set_modified` AFTER
-    /// the tags ("diff tabs never dirty"). Shared by the page build and the
-    /// refresh refill.
+    /// the tags ("diff tabs never dirty"). Full syntax highlighting both
+    /// sides — the '=' rows get NO fg tag (user reversal 2026-10-14: the
+    /// Rider-dim tag out-specced the scheme's token colors). Shared by the
+    /// page build and the refresh refill.
     fn diff_buf(
         &self,
         lines: &[String],
@@ -966,7 +1059,7 @@ impl Editor {
         hexcol: &str,
         lang: Option<&sourceview5::Language>,
     ) -> sourceview5::Buffer {
-        let buf = sourceview5::Buffer::builder().text(&lines.join("\n")).build();
+        let buf = sourceview5::Buffer::builder().text(lines.join("\n")).build();
         if let Some(scheme) = &self.scheme {
             buf.set_style_scheme(Some(scheme));
         }
@@ -988,7 +1081,7 @@ impl Editor {
                 continue;
             }
             if let Some(a) = buf.iter_at_line(i as i32) {
-                let mut b = a.clone();
+                let mut b = a;
                 b.forward_to_line_end();
                 buf.apply_tag(&tag, &a, &b);
             }
@@ -998,7 +1091,7 @@ impl Editor {
                 continue;
             }
             if let Some(a) = buf.iter_at_line(i as i32) {
-                let mut b = a.clone();
+                let mut b = a;
                 b.forward_to_line_end();
                 buf.apply_tag(&fg, &a, &b);
             }
@@ -1052,23 +1145,151 @@ impl Editor {
         let (v_l, b_l) = self.diff_side(&sides.old, &sides.del, &sides.hdr, DIFF_DEL_BG, lang.as_ref());
         let (v_r, _b_r) = self.diff_side(&sides.new, &sides.add, &sides.hdr, DIFF_ADD_BG, lang.as_ref());
 
+        // before side ships chrome-free (user ruling 2026-10-13): the after
+        // side hosts the ONLY v bar and the ONLY h bar. Hiding rides the
+        // widget layer (hide_scrollbars below): PolicyType::Never UNCLAMPS the
+        // child's natural size on this build (measured via the S2 diff asserts
+        // the day this landed: viewport grew to the full 1740px content
+        // height, upper==page_size on both axes, nothing scrollable anywhere),
+        // and css `display` is NOT a property here (theme parser rejects it —
+        // probe13-19 logs: "No property named display"; the rule was a no-op).
+        // Widget-visibility keeps the viewport clamped + pairing live.
         let sw_l = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .hexpand(true)
             .child(&v_l)
             .build();
+        hide_scrollbars(&sw_l, &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical]);
         let sw_r = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .hexpand(true)
             .child(&v_r)
             .build();
-        let sep = gtk::Box::builder().css_classes(["alpaca-diffsep"]).build();
-        let pair = gtk::Box::builder()
+        // single full-width h bar (user ruling 2026-10-13): the panes' own
+        // h bars hidden, ONE Scrollbar under the paned pair bound to sw_r's
+        // hadj — the sw owns its adjustments and refresh_diff never
+        // re-children, so a one-time bind is stable (adj identity
+        // persists — the pairing law comment). sw_r's v bar stays.
+        hide_scrollbars(&sw_r, &[gtk::Orientation::Horizontal]);
+        let hbar = gtk::Scrollbar::new(gtk::Orientation::Horizontal, Some(&sw_r.hadjustment()));
+        // style-match the standalone bar (user 2026-10-14: "its style differs
+        // from the vertical scroll bar"): the panes' in-sw bars are styled by
+        // the classes the sw's overlay machinery puts on them; a standalone
+        // Scrollbar carries only `horizontal` and Breeze paints its classic
+        // light trough. Inherit the reference bar's classes (sw_r's kept v
+        // bar — the ONLY visible one), orientation swapped.
+        let ref_cls: Vec<glib::GString> = {
+            let mut c = sw_r.first_child();
+            loop {
+                match c {
+                    Some(w) => {
+                        if let Some(sb) = w.downcast_ref::<gtk::Scrollbar>()
+                            && sb.orientation() == gtk::Orientation::Vertical
+                        {
+                            break sb.css_classes();
+                        }
+                        c = w.next_sibling();
+                    }
+                    None => break Vec::new(),
+                }
+            }
+        };
+        let mut cls: Vec<String> = ref_cls.iter().map(|s| s.to_string())
+            .filter(|c| c != "vertical")
+            .collect();
+        cls.push("horizontal".into());
+        if !cls.iter().any(|c| c == "alpaca-diffhbar") {
+            cls.push("alpaca-diffhbar".into()); // css hook for capture-law tuning
+        }
+        hbar.set_css_classes(&cls.iter().map(String::as_str).collect::<Vec<_>>());
+        // number panes (Task 4): the line-number columns. Same line-box
+        // params as the mains (alpaca-mono + pixels_above_lines(2)) so row
+        // heights match 1:1; fixed-width panes (see the size_request below —
+        // hug-natural does NOT work under an hexpand'd sibling); focusable
+        // (false) keeps clipboard ops on the content side. Buffers are
+        // swapped on renewal exactly like the mains' — one shared adjustment
+        // per side below means one set_buffer-law reset event, and
+        // restore_frac on that same object re-applies once.
+        let num_l = diff_num_view(&sides.old_no);
+        let num_r = diff_num_view(&sides.new_no);
+        let sw_num_l = gtk::ScrolledWindow::builder().child(&num_l).build();
+        hide_scrollbars(&sw_num_l, &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical]);
+        let sw_num_r = gtk::ScrolledWindow::builder().child(&num_r).build();
+        hide_scrollbars(&sw_num_r, &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical]);
+        // pane widths: an sw's natural width for a SCROLLABLE child is ~its
+        // minimum (measured r3 red28: number panes collapsed to 0px — the
+        // hexpand'd mains ate everything; even the hug-natural assumption was
+        // wrong there). Fixed floors from the RENDERED field width — the old
+        // view.measure() at open-time under-reported the mono field and the
+        // hidden h bar let it clip digits mid-glyph (2026-10-14 clip fix);
+        // ONE shared width so the two number columns line up.
+        let numw = diff_num_pane_width(&sides.old_no, &num_l)
+            .max(diff_num_pane_width(&sides.new_no, &num_r));
+        sw_num_l.set_size_request(numw, -1);
+        sw_num_r.set_size_request(numw, -1);
+        // lockstep law: the num view's vadjustment IS its main's object — so
+        // the num pane's own wheel drives the SAME adj the main scrolls; no
+        // push race, no extra linked cells. The set MUST ride AFTER the num
+        // sw's set_child AND after the MAIN sw's set_child — the
+        // ScrolledWindow installs its own adjustments onto its child at
+        // child-set (measured r2 green20: a pre-set_child share was
+        // clobbered; dbg22: a share taken pre-sw_r bound to v_r's
+        // pre-clobber own adj — set_child rewired v_r and left num_r
+        // stranded. POST-child-set, the sw's adjustment-watcher rebinds its
+        // bars to the child's new adj — measured on the left side). The h
+        // axis stays private: the panes' page sizes differ, and one
+        // adjustment can't hold two.
+        if let Some(va) = v_l.vadjustment() {
+            num_l.set_vadjustment(Some(&va));
+        }
+        if let Some(va) = v_r.vadjustment() {
+            num_r.set_vadjustment(Some(&va));
+        }
+        // resizable split (user ruling 2026-10-13): the 1px alpaca-diffsep
+        // Box becomes a paned divider (app.css's paned > separator 6px rule
+        // makes the knob grabbable; no wide_handle — this stays compact).
+        // GTK4 paned's OWN unset position is UNRELIABLE here (measured r2:
+        // start child collapsed to its 1px minimum with text-view children),
+        // and no allocation-notify exists — the one-shot 50% rides the sw's
+        // hadjustment 'changed' (the same allocation-adjacent event
+        // restore_frac legally uses: page_size lands when the split area
+        // first allocates; the set lands before the user can touch it).
+        let sw_l_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        sw_l_wrap.append(&sw_num_l); // numbers LEFT of the before side
+        sw_l_wrap.append(&sw_l);
+        let sw_r_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        sw_r_wrap.append(&sw_num_r); // numbers at the after pane's left edge
+        sw_r_wrap.append(&sw_r);
+        let paned = gtk::Paned::builder()
             .orientation(gtk::Orientation::Horizontal)
+            .vexpand(true)
+            .hexpand(true)
+            .css_classes(["alpaca-diffpaned"]) // hairline separator paint (app.css)
+            .start_child(&sw_l_wrap)
+            .end_child(&sw_r_wrap)
             .build();
-        pair.append(&sw_l);
-        pair.append(&sep);
-        pair.append(&sw_r);
+        let paned_pos = Rc::new(Cell::new(false));
+        {
+            let p2 = paned.clone();
+            let pos_flag = paned_pos.clone();
+            sw_l.hadjustment().connect_changed(move |adj| {
+                if pos_flag.get() || adj.page_size() <= 0.0 {
+                    return;
+                }
+                let w = p2.allocated_width();
+                if w > 0 {
+                    pos_flag.set(true);
+                    // set_position fired MID-CASCADE is discarded by the
+                    // paned's own allocation (S3's same-step law: "the split
+                    // never applied") — readback was 482 with children still
+                    // at the 1|958 unset compute; the set must land at idle,
+                    // after the cascade, where it re-allocates for real
+                    let pw = w / 2;
+                    let p3 = p2.clone();
+                    glib::idle_add_local_once(move || p3.set_position(pw));
+                }
+            });
+        }
 
         let page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -1080,7 +1301,8 @@ impl Editor {
             .css_classes(["alpaca-breadcrumb"])
             .build();
         page.append(&crumb);
-        page.append(&pair);
+        page.append(&paned);
+        page.append(&hbar);
 
         // tab head: letter chip slot FIRST, name, close — and no dirty dot.
         // python builds a dot anyway but never appends it (diff tabs never
@@ -1123,7 +1345,7 @@ impl Editor {
             .build();
 
         let index = self.nb.append_page(&page, Some(&head));
-        self.nb.set_current_page(Some(index as u32)); // append does not switch; a new tab must take focus
+        self.nb.set_current_page(Some(index)); // append does not switch; a new tab must take focus
         // resolve the (possibly shifted) index at click time via the page widget
         let nb2 = self.nb.clone();
         let pg_widget = page.clone();
@@ -1140,12 +1362,20 @@ impl Editor {
             sw_r: sw_r.clone(),
             v_r: v_r.clone(),
             diff_text: Some(text.to_string()),
-            linked_l: Rc::new(RefCell::new(None)),
-            linked_r: Rc::new(RefCell::new(None)),
+            linked_l: Rc::new(RefCell::new(LinkedAxes::default())),
+            linked_r: Rc::new(RefCell::new(LinkedAxes::default())),
+            paned: paned.clone(),
+            bar: hbar.clone(),
+            num_l: num_l.clone(),
+            num_r: num_r.clone(),
+            sw_num_l: sw_num_l.clone(),
+            sw_num_r: sw_num_r.clone(),
         };
-        // wire takes two VIEWS — the dst is captured at wire time
-        wire_diff(&v_l, &v_r, &diff.linked_l);
-        wire_diff(&v_r, &v_l, &diff.linked_r);
+        // linking hooks once at wire time (views own their adjustments from
+        // construction — pairing law comment at the machinery); dst captured
+        // so the handler pushes into THIS page's opposite side
+        diff_link(&v_l, &v_r, &diff.linked_l);
+        diff_link(&v_r, &v_l, &diff.linked_r);
 
         self.pages.push(PageState {
             path: None,
@@ -1199,12 +1429,29 @@ impl Editor {
             self.diff_buf(&sides.new, &sides.add, &sides.hdr, DIFF_ADD_BG, lang.as_ref()),
         );
         {
-            let (sw_l, sw_r, v_r) = {
+            let (sw_l, sw_r, sw_num_l, sw_num_r, v_r, num_l, num_r) = {
                 let dw = self.pages[idx].diff.as_ref().unwrap();
-                (dw.sw_l.clone(), dw.sw_r.clone(), dw.v_r.clone())
+                (dw.sw_l.clone(), dw.sw_r.clone(), dw.sw_num_l.clone(), dw.sw_num_r.clone(), dw.v_r.clone(), dw.num_l.clone(), dw.num_r.clone())
             };
             self.pages[idx].view.set_buffer(Some(&b_l)); // left view kept
             v_r.set_buffer(Some(&b_r)); // right view kept
+            // number panes ride along (Task 4): fresh sides' numbers, same
+            // set_buffer shape — their vadj IS the main's (shared object),
+            // so the reset happens once per side and restore_frac re-applies
+            num_l.set_buffer(Some(&sourceview5::Buffer::builder()
+                .text(gitstatus::diff_num_text(&sides.old_no))
+                .build()));
+            num_r.set_buffer(Some(&sourceview5::Buffer::builder()
+                .text(gitstatus::diff_num_text(&sides.new_no))
+                .build()));
+            // refreshed sides can GAIN a number digit (99→100 lines) — the
+            // fixed sw would clip the widened field mid-glyph again (the h
+            // bar here is hidden). Re-derive, same shape as open_diff. The
+            // re-stamp rides AFTER the buffers: pango needs the fields only.
+            let numw = diff_num_pane_width(&sides.old_no, &num_l)
+                .max(diff_num_pane_width(&sides.new_no, &num_r));
+            sw_num_l.set_size_request(numw, -1);
+            sw_num_r.set_size_request(numw, -1);
             self.pages[idx].buf = b_l;
             self.pages[idx].diff.as_mut().unwrap().diff_text = Some(text.to_string());
             restore_frac(&sw_l, frac_l);
@@ -1252,11 +1499,10 @@ impl Editor {
     }
 
     fn clip_op(&self, op: &str) {
-        if let Some(idx) = self.active() {
-            if let Some(w) = self.op_target(idx) {
+        if let Some(idx) = self.active()
+            && let Some(w) = self.op_target(idx) {
                 let _ = w.activate_action(op, None);
             }
-        }
     }
 
     // ---- live file changes: no popups, disk is the truth ----------------------
@@ -1468,14 +1714,14 @@ fn discard_dialog(win: &gtk::Window, text: &str) -> gtk::MessageDialog {
     d
 }
 
-/// fracs at renewal — measured law: the ScrolledWindow swaps the view's
-/// placeholder adjustment for its own at the page's first allocation, WITHOUT
-/// any property notify (notify::vadjustment never fires on view or sw). All
-/// linking therefore dedupes by adjustment identity (Adjustment PartialEq) and
-/// retries on allocation notify.
-///
-/// Also python `_diff_resync`'s idle retry — cover a post-emit swap in the
-/// same frame.
+// diff-page pairing law (2026-10-13, replaces the python-era "placeholder
+// swap at first allocation" story): a View owns BOTH its adjustments from
+// construction; the ScrolledWindow binds those very objects to its
+// scrollbars (adjtrace: view-getter == sw-getter — identity measured held
+// across refresh_diff renewals — the only-buffer-swap contract); GTK's
+// notify::allocation NEVER fires on this build, so linking hooks ONCE at
+// open (LinkedAxes dedupe) and never retries — the python-era notify/idle
+// retries were measured inert and deleted.
 
 /// python `_rgba` — fresh Gdk.RGBA() (transparent) that parse() fills in
 /// place; a bad hex stays transparent (an invisible tag, not a panic)
@@ -1521,55 +1767,276 @@ fn restore_frac(sw: &gtk::ScrolledWindow, frac: f64) {
     });
 }
 
-/// python `_diff_link` — drive `dst`'s scroll from `v`'s. True = a NEW link
-/// was made (equal-value set_value fires no changed signal → no loop, so the
-/// destination never needs a guard).
+/// hide a ScrolledWindow's scrollbar WIDGETS while keeping the viewport
+/// clamped and scrollable — filtered to the given orientations. NOT
+/// PolicyType::Never (unclamps the child — window grew to the content
+/// height, measured 2026-10-13) and NOT css `display: none` (this GTK has no
+/// `display` property — the theme parser rejects it, measured in the
+/// probe13-19 logs), both attempted and rolled back same day.
+/// Widget-visibility walk = the menu-button-arrow walk pattern (CLAUDE.md).
+/// GTK's overlay reveal is css-class/opacity machinery, not set_visible, so a
+/// one-shot hide sticks — the ProbeDiffScroll asserts re-check AFTER driving
+/// the scroll for exactly that.
+fn hide_scrollbars(sw: &gtk::ScrolledWindow, axes: &[gtk::Orientation]) {
+    let mut c = sw.first_child();
+    while let Some(w) = c {
+        let nxt = w.next_sibling();
+        if let Some(sb) = w.downcast_ref::<gtk::Scrollbar>()
+            && axes.contains(&sb.orientation())
+        {
+            w.set_visible(false);
+        }
+        c = nxt;
+    }
+}
+
+/// PROBE-ONLY (ALPACA_PROBE_S2, chain step 9 — ~2s post-open, PRE-switch:
+/// step 12's SetWorkspace closes every page and step 4 was measured racy on
+/// the live display, 2026-10-13): the before side's scrolled window is truly
+/// chrome-free (its internal GtkScrollbar widgets walked to !visible AFTER
+/// the pairing drives below — GTK's overlay reveal must not resurrect them),
+/// its policies still Automatic (Never would unclamp — see open_diff), and
+/// BOTH pairing directions settle at equal values per axis.
+fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
+    let ok = |name: String, got: bool| {
+        println!("PROBE assert: diff-{name}: {}", if got { "PASS" } else { "FAIL" });
+    };
+    let bars = |sw: &gtk::ScrolledWindow| -> Vec<gtk::Scrollbar> {
+        let mut out = Vec::new();
+        let mut c = sw.first_child();
+        while let Some(w) = c {
+            if let Some(sb) = w.downcast_ref::<gtk::Scrollbar>() {
+                out.push(sb.clone());
+            }
+            c = w.next_sibling();
+        }
+        out
+    };
+    // sw's inherent getters are non-Option (the real adjs); the pairing hooks
+    // the same objects through the views. Assert the settled value, not the
+    // set target: the narrower side caps both (feedback settles = equal).
+    // Skip an axis when EITHER side can't span (vacuous equalities mask a
+    // dead pairing); drive and check r→l AND l→r — the user wheels either.
+    for (axis, src, dst) in [
+        ("v", dw.sw_r.vadjustment(), dw.sw_l.vadjustment()),
+        ("h", dw.sw_r.hadjustment(), dw.sw_l.hadjustment()),
+    ] {
+        let span = (src.upper() - src.page_size()).max(0.0);
+        let dspan = (dst.upper() - dst.page_size()).max(0.0);
+        if span <= 0.0 || dspan <= 0.0 {
+            println!("PROBE assert: diff-sync-{axis}: SKIPPED (no span)");
+            continue;
+        }
+        src.set_value(span.min(60.0));
+        ok(format!("sync-{axis}-rl"), (src.value() - dst.value()).abs() < 0.5);
+        dst.set_value(dspan.min(60.0));
+        ok(format!("sync-{axis}-lr"), (src.value() - dst.value()).abs() < 0.5);
+    }
+    // bar visibility AFTER the drives (overlay reveal resurrection check) —
+    // ≥2 on each side so an unexpected GTK child-shape change reads FAIL, not
+    // a vacuous pass.
+    let bars_l = bars(&dw.sw_l);
+    ok(
+        "bars-l".into(),
+        bars_l.len() >= 2 && bars_l.iter().all(|b| !b.is_visible()),
+    );
+    ok("policy-v".into(), dw.sw_l.vscrollbar_policy() == gtk::PolicyType::Automatic);
+    ok("policy-h".into(), dw.sw_l.hscrollbar_policy() == gtk::PolicyType::Automatic);
+    // merged bar (Task 3): one Scrollbar under the pair, bound to sw_r's
+    // (stable-identity) hadj — the bind is checked by identity so a detached
+    // adjustment (the placeholder RED build) reads FAIL, and the drive below
+    // proves the whole chain bar→sw_r→(pairing)→sw_l. gtk4-rs' adjustment()
+    // getter is non-Option: an unbound bar carries a fresh default adj.
+    let badj = dw.bar.adjustment();
+    let dr = dw.sw_r.hadjustment();
+    ok("bar-adj".into(), format!("{badj:?}") == format!("{dr:?}"));
+    // bars-r: h hidden (merged bar replaced it), v kept
+    let bars_r = bars(&dw.sw_r);
+    let r_h = bars_r
+        .iter()
+        .find(|b| b.orientation() == gtk::Orientation::Horizontal);
+    let r_v = bars_r
+        .iter()
+        .find(|b| b.orientation() == gtk::Orientation::Vertical);
+    ok(
+        "bars-r".into(),
+        r_h.map(|b| !b.is_visible()).unwrap_or(false)
+            && r_v.map(|b| b.is_visible()).unwrap_or(false),
+    );
+    // the standalone h bar's styling classes (capture rig: it must inherit
+    // the reference v bar's set — see open_diff)
+    println!(
+        "PROBE classes: ref-v={:?} bar={:?}",
+        r_v.map(|b| b.css_classes()),
+        dw.bar.css_classes()
+    );
+    // driving the MERGED bar must carry BOTH panes (h via the bar's bound adj)
+    let span = (badj.upper() - badj.page_size()).max(0.0);
+    if span > 0.0 {
+        badj.set_value(span.min(60.0));
+        ok(
+            "bar-drive".into(),
+            (dr.value() - dw.sw_l.hadjustment().value()).abs() < 0.5,
+        );
+    } else {
+        println!("PROBE assert: diff-bar-drive: SKIPPED (no span/unbound)");
+    }
+    // paned divider (Task 2): assert the one-shot 50% init (rides the sw's
+    // hadj 'changed' → idle set) landed and holds: position ≈ half of the
+    // paned's live allocation.
+    let pw = dw.paned.allocated_width() as f64;
+    ok(
+        "paned-50".into(),
+        pw > 0.0 && (dw.paned.position() as f64 - pw / 2.0).abs() <= 4.0,
+    );
+    // number panes (Task 4): row counts 1:1 + the shared-vadjustment lockstep
+    // law — the num view's vadjustment IS its main's object (GTK's sw adopts
+    // the child's adj objects; sharing the OBJECT is lockstep with no push
+    // races and restore_frac keeps working on the one shared adj). Row
+    // height parity rides the views' own naturals: same line-box params
+    // must give the same total height, or the numbers point at wrong rows.
+    ok(
+        "num-rows".into(),
+        dw.num_l.buffer().line_count() == view_l.buffer().line_count()
+            && dw.num_r.buffer().line_count() == dw.v_r.buffer().line_count(),
+    );
+    // full-file sides (Task 1 2026-10-14): huge-ctx diff covers the entire
+    // file, so the first data row IS file line 1 (the old -U3 hunks started
+    // at 2+ on this fixture) — sentinel that the -U switch stays put
+    let buf_l = dw.num_l.buffer();
+    let t = buf_l.text(&buf_l.start_iter(), &buf_l.end_iter(), true);
+    ok(
+        "num-filestart".into(),
+        t.split('\n').nth(1).map(str::trim) == Some("1"),
+    );
+    // number panes' widths (measured 2026-10-14 live-render bug, user shot:
+    // an sw's natural for a scrollable child ≈ its MINIMUM → under hexpand'd
+    // siblings the columns collapsed to 0px and no digits painted — the old
+    // asserts counted rows and compared adj identity, never width). NOW the
+    // pane is stamped from the pango-rendered widest field, so the LIVE
+    // allocation must cover field px + the view's left margin (the old floor
+    // 20 passed while digits were clipped mid-glyph; the h bar is hidden —
+    // an under-measure here can't be recovered by hand-scrolling).
+    let field_w = |v: &sourceview5::View| -> i32 {
+        let buf = v.buffer();
+        let n = buf
+            .text(&buf.start_iter(), &buf.end_iter(), true)
+            .split('\n')
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(2)
+            .max(2);
+        let (px, _) = v.create_pango_layout(Some(&"0".repeat(n))).pixel_size();
+        px + 4 // + left_margin(4)
+    };
+    ok(
+        "num-width".into(),
+        dw.num_l.allocated_width() >= field_w(&dw.num_l)
+            && dw.num_r.allocated_width() >= field_w(&dw.num_r),
+    );
+    let (nat_l, nat_r) = (view_l.measure(gtk::Orientation::Vertical, -1).1, dw.v_r.measure(gtk::Orientation::Vertical, -1).1);
+    let (nnum_l, nnum_r) = (dw.num_l.measure(gtk::Orientation::Vertical, -1).1, dw.num_r.measure(gtk::Orientation::Vertical, -1).1);
+    ok("num-height".into(), nat_l > 0 && (nat_l - nnum_l).abs() <= 2
+        && nat_r > 0 && (nat_r - nnum_r).abs() <= 2);
+    match (dw.num_l.vadjustment(), view_l.vadjustment()) {
+        (Some(na), Some(ma)) => ok("num-adj-l".into(), format!("{na:?}") == format!("{ma:?}")),
+        _ => println!("PROBE assert: diff-num-adj-l: FAIL (adj None)"),
+    }
+    match (dw.num_r.vadjustment(), dw.v_r.vadjustment()) {
+        (Some(na), Some(ma)) => {
+            ok("num-adj-r".into(), format!("{na:?}") == format!("{ma:?}"));
+            ok("num-sync".into(), (na.value() - ma.value()).abs() < 0.01);
+        }
+        _ => println!("PROBE assert: diff-num-adj-r: FAIL (adj None)"),
+    }
+}
+
+/// python `_wire_diff_scroll`... — the number-column side (Task 4): a
+/// non-editable, unfocusable, fixed-narrow source view over the side's
+/// per-row file numbers; line-box params MUST track diff_side's (row 1:1).
+fn diff_num_view(no: &[u32]) -> sourceview5::View {
+    let buf = sourceview5::Buffer::builder()
+        .text(gitstatus::diff_num_text(no))
+        .build();
+    sourceview5::View::builder()
+        .buffer(&buf)
+        .show_line_numbers(false)
+        .editable(false)
+        .focusable(false)
+        .wrap_mode(gtk::WrapMode::None)
+        .pixels_above_lines(2)
+        .left_margin(4)
+        .css_classes(["alpaca-mono", "alpaca-diffnum"])
+        .build()
+}
+
+/// the fixed number pane's width, from the RENDERED field width (2026-10-14
+/// clip fix, user shot: a digit was cut mid-glyph at the pane's clip edge —
+/// the sw's h bar is hidden so nothing recovers). The old view.measure() at
+/// open time under-reported the mono field; a pango layout over the widest
+/// padded field reads the view's css-resolved font (.alpaca-mono) directly.
+/// Used at open AND on renewal (a refreshed side can grow a digit).
+/// ponytail: relies on the css font resolving at measure time — probe
+/// assert `num-width` fails loudly if it ever drifts (see the chain).
+fn diff_num_pane_width(no: &[u32], view: &sourceview5::View) -> i32 {
+    let probe = "0".repeat(gitstatus::diff_num_field_width(no)); // mono digits uniform
+    let (px, _) = view.create_pango_layout(Some(&probe)).pixel_size();
+    (px + 4 + 4).max(24) // left_margin 4 + antialias slack 4
+}
+
+/// python `_diff_link` + `_wire_diff_scroll` merged — drive `dst`'s scroll
+/// from `v`'s, BOTH axes. True = a NEW link was made on either axis
+/// (equal-value set_value fires no changed signal → no loop, so the
+/// destination never needs a guard). Each axis links independently (see
+/// LinkedAxes). MEASURED 2026-10-13 (broadway python probes + app probe runs
+/// on broadway AND the real display): a View owns BOTH its adjustments from
+/// construction — hooks land at open_diff's wire time, the sw binds those
+/// very objects to its scrollbars (adjtrace: view-getter == sw-getter,
+/// identity held across refresh_diff renewals), and GTK's notify::allocation
+/// NEVER fires for widgets here — the python-era allocation-notify retry +
+/// `_diff_resync` idle were measured inert and are gone. `linked` keeps the
+/// identity-dedup so a stray second call can't double-hook. Closed page:
+/// v → handler → dst is a DAG (no cycle); ownership frees the chain.
 fn diff_link(
     v: &sourceview5::View,
     dst: &sourceview5::View,
-    linked: &Rc<RefCell<Option<gtk::Adjustment>>>,
-) -> bool {
-    // a pre-allocation View owns NO adjustment at all on this build (vadjustment
-    // is Option) — return unlinked, the allocation-notify retry covers it
-    let Some(va) = v.vadjustment() else { return false };
-    if *linked.borrow() == Some(va.clone()) {
-        return false; // already on the live adj
-    }
-    *linked.borrow_mut() = Some(va.clone());
-    let dst2 = dst.clone();
-    va.connect_value_changed(move |a| {
-        // dst's ScrollableExt getter is Option (pre-allocation None — the
-        // placeholder law); equal-value set_value fires nothing anyway
-        if let Some(dadj) = dst2.vadjustment() {
-            dadj.set_value(a.value());
-        }
-    });
-    true
-}
-
-/// python `_wire_diff_scroll` — link once, then retry the link on every
-/// allocation change (deduped — no re-link, no signal loop) + one idle retry
-/// covering a post-emit swap. Strong refs, python-exact (`lambda a, o=dst`):
-/// v → handler → dst is a DAG (no cycle) — a closed page frees the chain.
-fn wire_diff(
-    view: &sourceview5::View,
-    dst: &sourceview5::View,
-    linked: &Rc<RefCell<Option<gtk::Adjustment>>>,
+    linked: &Rc<RefCell<LinkedAxes>>,
 ) {
-    diff_link(view, dst, linked);
-    let v2 = view.clone();
-    let dst2 = dst.clone();
-    let l2 = linked.clone();
-    view.connect_notify_local(Some("allocation"), move |_, _| {
-        if diff_link(&v2, &dst2, &l2) {
-            let v3 = v2.clone();
-            let d3 = dst2.clone();
-            let l3 = l2.clone();
-            glib::idle_add_local_once(move || {
-                diff_link(&v3, &d3, &l3);
+    let mut l = linked.borrow_mut();
+    if let Some(va) = v.vadjustment() {
+        if l.v.as_ref() != Some(&va) {
+            l.v = Some(va.clone());
+            let dst2 = dst.clone();
+            va.connect_value_changed(move |a| {
+                // view adjustments exist from construction (measured r2); the
+                // ScrollableExt getter merely RETURNS Option on this API;
+                // equal-value set_value fires nothing anyway
+                if let Some(dadj) = dst2.vadjustment() {
+                    dadj.set_value(a.value());
+                }
             });
         }
-    });
+    }
+    if let Some(ha) = v.hadjustment() {
+        if l.h.as_ref() != Some(&ha) {
+            l.h = Some(ha.clone());
+            let dst2 = dst.clone();
+            ha.connect_value_changed(move |a| {
+                if let Some(dadj) = dst2.hadjustment() {
+                    dadj.set_value(a.value());
+                }
+            });
+        }
+    }
+}
+
+// PROBE-ONLY (ALPACA_PROBE_S2) — ProbeDiffScroll's first run arms the
+// renewal sweep: mutate the fixture on disk, drive RefreshDiffs directly
+// (deterministic landing — the 2s git-tick phase would be racy), then
+// re-assert on the settled page: covers refresh_diff's buffer+number swap
+// on a LIVE page (the frequently-run path: an open diff tab + a git tick).
+thread_local! {
+    static PROBE_DIFF_SWEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]

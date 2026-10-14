@@ -26,9 +26,11 @@ struct PixbufBytes {
     h: i32,
 }
 
-static SVG_CACHE: std::sync::LazyLock<
-    Mutex<HashMap<(String, i32), Option<PixbufBytes>>>,
-> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// (icon name, px size) → rasterized RGBA bytes (None = rasterize failed)
+type BadgeCache = HashMap<(String, i32), Option<PixbufBytes>>;
+
+static SVG_CACHE: std::sync::LazyLock<Mutex<BadgeCache>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static CHIP_CACHE: std::sync::LazyLock<Mutex<HashMap<String, Option<PixbufBytes>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -53,10 +55,6 @@ pub(crate) fn svg_data(name: &str) -> Option<&'static [u8]> {
         "folder.svg" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/assets/icons/folder.svg"
-        ))),
-        "hash.svg" => Some(include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/hash.svg"
         ))),
         "play.svg" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -102,7 +100,7 @@ fn rasterize(name: &str, size: i32) -> Option<PixbufBytes> {
 
 /// Straight-alpha RGBA copy of a pixbuf's pixel buffer (read-only FFI slice).
 fn pix_bytes(pix: &Pixbuf) -> Vec<u8> {
-    use glib::translate::*;
+    use gtk4::glib::translate::*;
     unsafe {
         let mut len: u32 = 0;
         let p = gdk_pixbuf::ffi::gdk_pixbuf_get_pixels_with_length(pix.to_glib_none().0, &mut len);
@@ -112,7 +110,7 @@ fn pix_bytes(pix: &Pixbuf) -> Vec<u8> {
 
 fn to_pixbuf(b: &PixbufBytes) -> Pixbuf {
     Pixbuf::from_bytes(
-        &glib::Bytes::from_owned(b.rgba.clone()),
+        &gtk4::glib::Bytes::from_owned(b.rgba.clone()),
         Colorspace::Rgb,
         true,
         8,
@@ -183,15 +181,16 @@ fn tile_bg(hexcol: &str) -> String {
 /// Rect with corner arcs. Four 90° sweeps — the old per-corner tuple list used
 /// wrong angle pairs (one spanned 270°) and carved a notch out of filled shapes.
 fn rounded(c: &Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    use std::f64::consts::{FRAC_PI_2, PI};
     c.move_to(x + r, y);
     c.line_to(x + w - r, y);
-    c.arc(x + w - r, y + r, r, -1.5707963267948966, 0.0);
+    c.arc(x + w - r, y + r, r, -FRAC_PI_2, 0.0);
     c.line_to(x + w, y + h - r);
-    c.arc(x + w - r, y + h - r, r, 0.0, 1.5707963267948966);
+    c.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
     c.line_to(x + r, y + h);
-    c.arc(x + r, y + h - r, r, 1.5707963267948966, 3.141592653589793);
+    c.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
     c.line_to(x, y + r);
-    c.arc(x + r, y + r, r, 3.141592653589793, 4.71238898038469);
+    c.arc(x + r, y + r, r, PI, PI + FRAC_PI_2); // 3π/2 — same sweep as the literal
     c.close_path();
 }
 
@@ -323,7 +322,7 @@ mod tests {
         // the chip path actually paints (blue rounded tile under the glyph)
         let chip = render_bytes("TS", "#ffffff", Some("#2f80ed")).unwrap();
         assert!(
-            chip.rgba.chunks_exact(4).any(|px| px[3] > 0),
+            chip.rgba.as_chunks::<4>().0.iter().any(|px| px[3] > 0),
             "chip render painted nothing"
         );
     }

@@ -425,21 +425,19 @@ impl Panes {
     /// panels.set_root: kill live children, clear all bookkeeping, reset all
     /// three terminals, status "Ready", idle ensure_current.
     fn set_root(&mut self, path: PathBuf, sender: ComponentSender<Self>) {
-        if let Some(pid) = self.run.pid {
-            if alive(Some(pid)) {
+        if let Some(pid) = self.run.pid
+            && alive(Some(pid)) {
                 // the out cleanup exit is ignored by _run_child_exited itself
                 kill_tree(pid);
             }
-        }
         self.run.pid = None;
         self.kills_pending.clear();
         for (slot, key) in [(&self.agent, "agent"), (&self.term, "term")] {
-            if let Some(pid) = slot.pid.get() {
-                if alive(Some(pid)) {
+            if let Some(pid) = slot.pid.get()
+                && alive(Some(pid)) {
                     kill_tree(pid);
                     self.kills_pending.insert(key, 1); // that exit event is ours — swallow it
                 }
-            }
         }
         self.spawned.clear();
         self.spawned_at.clear();

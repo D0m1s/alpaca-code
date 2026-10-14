@@ -30,8 +30,16 @@ pub struct TreeRow {
 #[derive(Clone, Debug)]
 pub struct Hunk {
     pub lines: Vec<(char, String)>,
+    /// 1-based file line of the hunk's @@ start, per side (from
+    /// `@@ -a +b @@` — dropped by the python port until the line-number
+    /// columns landed).
+    pub old_start: usize,
+    pub new_start: usize,
 }
 /// editor diff sides — old/new equal-length lines + 0-based tint sets.
+/// old_no/new_no ride the rows 1:1: the 1-based file line each row came
+/// from, 0 where a row has no file position (hunk-gap rows, the OTHER
+/// side of a '<'/'>' pair, pads).
 #[derive(Clone, Debug)]
 pub struct Sides {
     pub old: Vec<String>,
@@ -39,6 +47,8 @@ pub struct Sides {
     pub del: BTreeSet<usize>,
     pub add: BTreeSet<usize>,
     pub hdr: BTreeSet<usize>,
+    pub old_no: Vec<u32>,
+    pub new_no: Vec<u32>,
 }
 /// commit_then_push result: (commit_ok, commit_text, push_ok, push_text);
 /// push fields are (false, "") when no push was attempted. ptext — the
@@ -233,8 +243,8 @@ pub fn parse_unified(text: &str) -> Vec<Hunk> {
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut in_hunk = false;
     for line in text.split('\n') {
-        if let Some(_) = hunk_head(line) {
-            hunks.push(Hunk { lines: Vec::new() });
+        if let Some((a, _an, b, _bn)) = hunk_head(line) {
+            hunks.push(Hunk { lines: Vec::new(), old_start: a, new_start: b });
             in_hunk = true;
             continue;
         }
@@ -253,37 +263,110 @@ pub fn parse_unified(text: &str) -> Vec<Hunk> {
     hunks
 }
 
-/// (old_lines, new_lines, del_idx, add_idx, hdr_idx) — ready-built editor
-/// sides (0-based line indexes for tinting). Equal lengths by construction:
-/// every event feeds exactly one side and pads the other.
+/// pairs one change group (a maximal run of '+'/'-' events between '='
+/// lines): the first min(dels,adds) del/add pairs share ONE row (left del
+/// beside right add, 2026-10-14 user ruling — the changed band must interlock
+/// so unchanged content stays vertically matched as far as the counts allow);
+/// surplus events pad the opposite side ("if impossible to cleanly match,
+/// then don't"). Tints: a paired row is in BOTH del and add.
+fn push_change_group(
+    old: &mut Vec<String>,
+    new: &mut Vec<String>,
+    old_no: &mut Vec<u32>,
+    new_no: &mut Vec<u32>,
+    dels: &[(String, u32)],
+    adds: &[(String, u32)],
+    dl: &mut BTreeSet<usize>,
+    al: &mut BTreeSet<usize>,
+) {
+    let k = dels.len().min(adds.len());
+    for (d, a) in dels.iter().zip(adds.iter()).take(k) {
+        old.push(d.0.clone());
+        old_no.push(d.1);
+        new.push(a.0.clone());
+        new_no.push(a.1);
+        let i = old.len() - 1;
+        dl.insert(i);
+        al.insert(i);
+    }
+    for (t, no) in dels.iter().skip(k) {
+        old.push(t.clone());
+        old_no.push(*no);
+        new.push(String::new());
+        new_no.push(0);
+        dl.insert(old.len() - 1);
+    }
+    for (t, no) in adds.iter().skip(k) {
+        old.push(String::new());
+        old_no.push(0);
+        new.push(t.clone());
+        new_no.push(*no);
+        al.insert(new.len() - 1);
+    }
+}
+
+/// (old_lines, new_lines, del_idx, add_idx, hdr_idx) — ready-built
+/// editor sides (0-based line indexes for tinting). Equal lengths by
+/// construction: each event feeds exactly one side and pads the other.
 pub fn build_sides(hunks: &[Hunk]) -> Sides {
     let (mut old, mut new) = (Vec::new(), Vec::new());
     let (mut dl, mut al, mut hdr) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    let (mut old_no, mut new_no): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
     for hunk in hunks {
+        let (mut o, mut n) = (hunk.old_start as u32, hunk.new_start as u32);
         old.push(HUNK_ROW.to_string());
         new.push(HUNK_ROW.to_string());
+        old_no.push(0);
+        new_no.push(0);
         hdr.insert(old.len() - 1);
+        // change-group buffer: consecutive +/- events pair up (see
+        // push_change_group); each '=' line flushes the group
+        let (mut dels, mut adds): (Vec<(String, u32)>, Vec<(String, u32)>) = (Vec::new(), Vec::new());
         for (kind, txt) in &hunk.lines {
             match kind {
                 '=' => {
+                    push_change_group(&mut old, &mut new, &mut old_no, &mut new_no, &dels, &adds, &mut dl, &mut al);
+                    (dels, adds) = (Vec::new(), Vec::new());
                     old.push(txt.clone());
+                    old_no.push(o);
                     new.push(txt.clone());
+                    new_no.push(n);
+                    // full syntax highlighting both sides (user reversal, same
+                    // day as the dim): '=' rows carry NO fg tag — the scheme
+                    // colors them unperturbed
+                    (o, n) = (o + 1, n + 1);
                 }
                 '<' => {
-                    old.push(txt.clone());
-                    new.push(String::new());
-                    dl.insert(old.len() - 1);
+                    dels.push((txt.clone(), o));
+                    o += 1;
                 }
                 '>' => {
-                    new.push(txt.clone());
-                    old.push(String::new());
-                    al.insert(new.len() - 1);
+                    adds.push((txt.clone(), n));
+                    n += 1;
                 }
                 _ => {}
             }
         }
+        push_change_group(&mut old, &mut new, &mut old_no, &mut new_no, &dels, &adds, &mut dl, &mut al);
     }
-    Sides { old, new, del: dl, add: al, hdr }
+    Sides { old, new, del: dl, add: al, hdr, old_no, new_no }
+}
+
+/// the number column's field width (digits of the widest real number), floor 2 —
+/// one source of truth for diff_num_text and the pane-width stomp below.
+pub fn diff_num_field_width(no: &[u32]) -> usize {
+    no.iter().filter(|n| **n > 0).map(|n| n.to_string().len()).max().unwrap_or(2).max(2)
+}
+
+/// one diff side's number-column text: per row the 1-based file number
+/// (0 = pad/hunk-gap row) right-aligned in a per-side field of width = the
+/// widest number (mono font makes spaces align), floor 2 chars.
+pub fn diff_num_text(no: &[u32]) -> String {
+    let w = diff_num_field_width(no);
+    no.iter()
+        .map(|n| if *n > 0 { format!("{n:>w$}") } else { " ".repeat(w) })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// porcelain v1 -z stdout → rows, path-sorted. Pure (split out of `changes`
@@ -361,20 +444,31 @@ pub fn git_out(root: &str, args: &[&str], timeout_s: u64) -> Option<Vec<u8>> {
 /// Untracked, or a HEAD-less repo (`git diff HEAD` fails): --no-index vs
 /// /dev/null (all-added). Binary files → ("", True). empty root/rel → the
 /// python tuple directly (never None — the Option is the harness shape).
+//
+// huge unified context — Rider-style full-file sides: git emits the WHOLE
+// file as one hunk, every unchanged line rides a '=' row and already gets
+// real numbers on both sides (build_sides needs no structural change).
+// No documented cap (git-diff docs); -U2147483647 parsed full-file on
+// 2.56.0 (measured). A file larger than the value just degrades back to
+// the gap-row shape, numbers stay correct (hunk heads re-seed).
+const DIFF_CTX: &str = "-U999999999"; // the full arg (the -U prefix IS the const)
+// ponytail: RefreshDiffs re-runs this (now whole-file) diff every 2s tick
+// per open diff page; the byte-identical dedupe keeps the UI rebuild-free —
+// fingerprint the porcelain instead if a huge-file page ever lags.
 pub fn diff_for(root: &str, rel: &str, is_untracked: bool) -> Option<(String, bool)> {
     if root.is_empty() || rel.is_empty() {
         return Some((String::new(), false));
     }
     let mut stdout: Option<Vec<u8>> = None;
     if !is_untracked {
-        stdout = git_out(root, &["diff", "HEAD", "--no-color", "-U3", "--", rel], 15);
+        stdout = git_out(root, &["diff", "HEAD", "--no-color", DIFF_CTX, "--", rel], 15);
         if stdout.is_none() {
             // no HEAD: staged files still need seeing
-            stdout = git_out(root, &["diff", "--cached", "--no-color", "-U3", "--", rel], 15);
+            stdout = git_out(root, &["diff", "--cached", "--no-color", DIFF_CTX, "--", rel], 15);
         }
     }
     if stdout.is_none() {
-        stdout = git_out(root, &["diff", "--no-index", "--no-color", "-U3",
+        stdout = git_out(root, &["diff", "--no-index", "--no-color", DIFF_CTX,
                                  "--", "/dev/null", &format!("{root}/{rel}")], 15);
     }
     let text = stdout.map(|b| String::from_utf8_lossy(&b).to_string()).unwrap_or_default();
@@ -489,11 +583,10 @@ pub fn commit_then_push(
     if !cok {
         return FlightOut { cok: false, ctext, pok: false, ptext: String::new() };
     }
-    if !paths.is_empty() {
-        if let Some(phase) = phase {
+    if !paths.is_empty()
+        && let Some(phase) = phase {
             phase("busy");
         }
-    }
     let (pok, ptext) = push(root);
     FlightOut { cok: true, ctext, pok, ptext }
 }
@@ -770,20 +863,76 @@ mod tests {
         assert_eq!(hunks.len(), 1);
         let s = build_sides(&hunks);
         assert_eq!(s.old.len(), s.new.len(), "equal lengths by construction");
-        // hunk row first, then context/remove/add/context
+        // hunk row first, then context/PAIR(context, remove+add rows 2
+        // SHARE a row: 1 del + 1 add pair up; pads only for surplus)
         assert_eq!(s.old[0], HUNK_ROW);
         assert!(s.hdr.contains(&0), "hunk-row index 0 on both sides");
-        // idx1 '=', idx2 '<', idx3 '>', idx4 '='
         assert_eq!(s.old[2], "gone");
-        assert_eq!(s.new[2], "");
-        assert_eq!(s.new[3].clone(), "add");
-        assert_eq!(s.old[3], "");
-        assert!(s.del.contains(&2) && !s.del.contains(&3));
-        assert!(s.add.contains(&3) && !s.add.contains(&2));
+        assert_eq!(s.new[2], "add", "a 1:1 change group pairs on one shared row");
+        assert_eq!(s.old[3], "keep2");
+        assert_eq!(s.new[3], "keep2");
+        assert!(s.del.contains(&2) && s.add.contains(&2), "a paired row tints BOTH sides");
+        assert!(!s.del.contains(&3) && !s.add.contains(&3));
         // no-count form "@@ -1 +1 @@" parses, defaults n=1
         assert_eq!(parse_unified("@@ -5 +9 @@\n a\n").len(), 1);
         assert_eq!(parse_unified("index 123..abc 100644\n").len(), 0); // before first hunk
         assert_eq!(parse_unified("").len(), 0); // never raises
+    }
+
+    #[test]
+    fn sides_numbers_exact() {
+        // mixed del/add/context + a pure-add hunk (a_n=0) and a del-only
+        // hunk (b_n=0). Numbers = the @@ starts, advancing per real row
+        // kind; padding + hunk-gap rows carry 0.
+        let text = "@@ -2,3 +2,4 @@\n ctx\n-del line\n+ADD A\n+ADD B\n ctx2\n@@ -10,0 +10,3 @@\n+pure add 1\n+pure add 2\n@@ -20,2 +23,0 @@\n-del-only 1\n-del-only 2\n";
+        let hunks = parse_unified(text);
+        assert_eq!(hunks[0].old_start, 2);
+        assert_eq!(hunks[0].new_start, 2);
+        assert_eq!(hunks[1].old_start, 10); // pure-add start still parses with a_n=0
+        assert_eq!(hunks[2].new_start, 23);
+        let sides = build_sides(&hunks);
+        // rows: H, ctx, PAIR(del|ADDA), surplus(ADDB), ctx2 | H, add1, add2 | H, del1, del2
+        // 1 del + 2 adds: the first add PAIRS with the del (shared row),
+        // surplus pads the OPPOSITE side. 'ctx' rows advance both sides.
+        assert!(sides.del.contains(&2) && sides.add.contains(&2) && sides.add.contains(&3));
+        assert_eq!(sides.old_no, [0, 2, 3, 0, 4, 0, 0, 0, 0, 20, 21]);
+        assert_eq!(sides.new_no, [0, 2, 3, 4, 5, 0, 10, 11, 0, 0, 0]);
+        assert_eq!(sides.old.len(), sides.old_no.len());
+        assert_eq!(sides.new.len(), sides.new_no.len());
+    }
+
+    #[test]
+    fn diff_num_text_shapes() {
+        // the number column's text: right-align per row in a field as wide
+        // as the widest number (mono spaces), pads → blank lines, floor 2
+        assert_eq!(diff_num_text(&[0, 2, 3]), "  \n 2\n 3");
+        assert_eq!(diff_num_text(&[12, 130, 10]), " 12\n130\n 10");
+        assert_eq!(diff_num_text(&[10000]), "10000");
+        // no ceiling: a 6-digit side widens the WHOLE field (mixed widths
+        // would break the alignment; the pane grows to fit)
+        assert_eq!(diff_num_text(&[10, 100000]), "    10\n100000");
+        assert_eq!(diff_num_text(&[]), "");
+        assert_eq!(diff_num_text(&[0]), "  "); // an all-pad side stays blank
+        // field width = widest number's digits, floor 2 (the width source the
+        // pane stomp uses)
+        assert_eq!(diff_num_field_width(&[0, 2, 3]), 2);
+        assert_eq!(diff_num_field_width(&[12, 130, 10]), 3);
+        assert_eq!(diff_num_field_width(&[]), 2);
+    }
+
+    #[test]
+    fn diff_for_full_context() {
+        // whole-file sides (Task 1): the untouched head/tail must ride the
+        // diff TEXT (huge -U) — pins the DIFF_CTX switch against regression
+        let p = repo("fullctx");
+        w(&p, "f.txt", "a\nb\nc\nd\ne\n");
+        git(&p, &["add", "."]);
+        git(&p, &["commit", "-m", "five", "-q"]);
+        w(&p, "f.txt", "a\nb\nCHANGED\nd\ne\n");
+        let (t, _b) = diff_for(p.to_str().unwrap(), "f.txt", false).unwrap();
+        assert!(t.contains(" e\n"), "tail line rides the output: {t}");
+        assert!(t.contains(" a\n"), "head line rides the output: {t}");
+        assert!(t.contains("+CHANGED"));
     }
 
     #[test]
@@ -804,7 +953,7 @@ mod tests {
     #[test]
     fn diff_for_binary_sniff() {
         let p = repo("bin");
-        std::fs::write(p.join("blob.bin"), &[0x00u8, 1, 2, 3]).unwrap();
+        std::fs::write(p.join("blob.bin"), [0x00u8, 1, 2, 3]).unwrap();
         git(&p, &["add", "."]);
         let (t, b) = diff_for(p.to_str().unwrap(), "blob.bin", false).unwrap();
         assert!(b && t.is_empty(), "binary flagged by markers, got: {t}");

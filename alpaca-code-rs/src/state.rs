@@ -28,12 +28,11 @@ impl<'de> serde::Deserialize<'de> for ProjectTabs {
 
 /// ~/.config/alpaca-code/state.json — the SHARED file (spec §2).
 pub fn state_path() -> PathBuf {
-    if let Some(mut dir) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from) {
-        if dir.is_absolute() {
+    if let Some(mut dir) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
+        && dir.is_absolute() {
             dir.push("alpaca-code");
             return dir.join("state.json");
         }
-    }
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
         .join(".config/alpaca-code/state.json")
 }

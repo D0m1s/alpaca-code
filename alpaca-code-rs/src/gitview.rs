@@ -152,6 +152,11 @@ pub enum GitViewOutput {
 pub enum GitViewCommand {
     Phase,
     Landed(FlightOut),
+    /// the refresh flight's landing (python `refresh` was sync on the UI
+    /// thread — a slow/hung git no longer freezes CHANGES-mode entry or
+    /// commit-land re-sync). seq = newest request wins; root = stale-flight
+    /// drop on a workspace switch.
+    Refreshed { root: PathBuf, seq: u64, raw: Option<Rows>, ahead: usize, keep: bool },
 }
 
 pub struct ChangesView {
@@ -163,6 +168,9 @@ pub struct ChangesView {
     rows: Rows,
     shown: Rows,
     ahead: usize,
+    /// refresh-flight token: the newest request wins (same law as the
+    /// branchmenu hover gens — no SourceId::remove)
+    refresh_seq: u64,
     busy: bool,
     flight: bool,
     tog_w: Cell<Option<i32>>, // toggle slot width, measured lazily once
@@ -335,6 +343,7 @@ impl Component for ChangesView {
             rows: Vec::new(),
             shown: Vec::new(),
             ahead: 0,
+            refresh_seq: 0,
             busy: false,
             flight: false,
             tog_w: Cell::new(None),
@@ -354,11 +363,11 @@ impl Component for ChangesView {
             GitViewMsg::SetRoot(root) => {
                 self.root = Some(root);
                 self.closed.clear(); // new repo: remembered collapses are stale
-                self.refresh(false); // fresh view selects all
+                self.refresh(false, &sender); // fresh view selects all
                 // needle NOT touched here: the panel clears its entry and
                 // routes Filter("") on a root switch (brief-documented port).
             }
-            GitViewMsg::Refresh { keep } => self.refresh(keep),
+            GitViewMsg::Refresh { keep } => self.refresh(keep, &sender),
             GitViewMsg::Apply { raw, ahead, keep } => self.apply(raw, ahead, keep),
             GitViewMsg::Filter(needle) => {
                 // identical-needle guard (the apply guard's twin): mode entry
@@ -409,7 +418,7 @@ impl Component for ChangesView {
                 self.buttons();
                 if out.cok {
                     self.msg.set_text(""); // user ruling: the message dies with the commit
-                    self.refresh(true); // keep_selection=True: committed paths vanish, rest kept
+                    self.refresh(true, &sender); // keep_selection=True: committed paths vanish, rest kept
                 }
                 if !out.cok {
                     let _ = sender.output(GitViewOutput::Status(GitStatusKind::Err, out.ctext));
@@ -422,26 +431,41 @@ impl Component for ChangesView {
                     let _ = sender.output(GitViewOutput::Status(GitStatusKind::Ok, "Pushed ✓".into()));
                 }
             }
+            GitViewCommand::Refreshed { root, seq, raw, ahead, keep } => {
+                // stale flight: workspace switched or a newer refresh fired — drop
+                if self.root.as_ref() != Some(&root) || seq != self.refresh_seq {
+                    return;
+                }
+                self.apply(raw, ahead, keep);
+            }
         }
     }
 }
 
 // ---- data (python gitview.py 118-141, 143-152, 154-165) ----------------------
 impl ChangesView {
-    /// python `refresh` — the git calls run HERE, landing is apply().
-    fn refresh(&mut self, keep: bool) {
-        let root = self.root.clone();
-        let raw = root.as_ref().and_then(|r| gitstatus::changes(&r.to_string_lossy()));
-        let ahead = if raw.is_some() {
-            root.as_ref().map_or(0, |r| gitstatus::ahead(&r.to_string_lossy()))
-        } else {
-            0
+    /// python `refresh` as a command flight — the git calls leave the UI
+    /// thread, the landing is apply() via Refreshed (sync-parity: landing
+    /// order is the flight completion order; the seq token discards leftovers).
+    fn refresh(&mut self, keep: bool, sender: &ComponentSender<Self>) {
+        let Some(root) = self.root.clone() else {
+            self.apply(None, 0, keep); // python: no git results → clean no-op
+            return;
         };
-        self.apply(raw, ahead, keep);
+        self.refresh_seq += 1;
+        let seq = self.refresh_seq;
+        sender.spawn_command(move |out| {
+            let root_str = root.to_string_lossy().into_owned();
+            let raw = gitstatus::changes(&root_str);
+            let ahead = if raw.is_some() { gitstatus::ahead(&root_str) } else { 0 };
+            out.emit(GitViewCommand::Refreshed { root, seq, raw, ahead, keep });
+        });
     }
 
     /// one merged row append; the 12 (col, value) pairs are the python row
-    /// list spelled by index.
+    /// list spelled by index. (16 args on purpose: the python row tuple spread
+    /// across the store's 14 columns — a params struct would just re-widen it.)
+    #[allow(clippy::too_many_arguments)]
     fn insert_row(
         &self,
         parent: Option<&gtk::TreeIter>,
@@ -611,7 +635,7 @@ impl ChangesView {
         while let Some(i) = cur.take() {
             self.sync_row(&i, &st);
             // capture next BEFORE recursion (mutation guard, python _sync)
-            let mut t = i.clone();
+            let mut t = i;
             cur = if self.store.iter_next(&mut t) { Some(t) } else { None };
             self.walk_children(&i, &st);
         }
@@ -622,7 +646,7 @@ impl ChangesView {
         let mut cur = self.store.iter_children(Some(parent));
         while let Some(i) = cur.take() {
             self.sync_row(&i, st);
-            let mut t = i.clone();
+            let mut t = i;
             cur = if self.store.iter_next(&mut t) { Some(t) } else { None };
             self.walk_children(&i, st);
         }
@@ -697,7 +721,7 @@ impl ChangesView {
                 if kind == "d" && !self.closed.contains(&child_rel) {
                     self.view.expand_row(&self.store.path(&i), false);
                 }
-                let mut t = i.clone();
+                let mut t = i;
                 cur = if self.store.iter_next(&mut t) { Some(t) } else { None };
             }
         }
@@ -756,7 +780,7 @@ impl ChangesView {
             return; // guard (python-exact)
         }
         let paths: Vec<String> = self.checked.iter().cloned().collect(); // BTreeSet = sorted
-        if paths.is_empty() && self.ahead <= 0 {
+        if paths.is_empty() && self.ahead == 0 {
             let _ = sender.output(GitViewOutput::Status(
                 GitStatusKind::Err,
                 "No files selected".into(),
@@ -879,9 +903,9 @@ mod tests {
         // svg rasterize FAILS, which is what the symbolic fallback guards.
         // This is the old no-icon bug's inverse: .rs rows now badge themselves.
         assert_eq!(strip_icons("editor.rs", false).1, None);
-        assert_eq!(strip_icons("editor.rs", false).0.is_some(), true);
+        assert!(strip_icons("editor.rs", false).0.is_some());
         assert_eq!(strip_icons("LICENSE", false).1, None); // seti license glyph, not fallback
-        assert_eq!(strip_icons("whatever.zzz", false).0.is_some(), true); // default-white
+        assert!(strip_icons("whatever.zzz", false).0.is_some()); // default-white
         // dirs: folder art → no fallback
         assert_eq!(strip_icons("src", true).1, None);
     }
