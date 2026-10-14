@@ -485,7 +485,12 @@ impl FileTree {    // ---- store helpers ---------------------------------------
                 && sroot == root && !sopen.is_empty() {
                     let snd2 = sender.clone();
                     glib::idle_add_local_once(move || {
-                        snd2.input(FileTreeMsg::RestoreTree(root, sopen.into_iter().collect(), s))
+                        // close law: input() panics on a dropped runtime
+                        let _ = snd2.input_sender().send(FileTreeMsg::RestoreTree(
+                            root,
+                            sopen.into_iter().collect(),
+                            s,
+                        ));
                     });
                 }
             return;
@@ -618,7 +623,11 @@ impl FileTree {    // ---- store helpers ---------------------------------------
         let g = self.count_gen;
         let snd = sender.clone();
         glib::timeout_add_local(Duration::from_millis(300), move || {
-            snd.input(FileTreeMsg::CountTick(g));
+            // close law: input() panics on a dropped runtime — send()
+            // reports; a dead send retires the timer
+            if snd.input_sender().send(FileTreeMsg::CountTick(g)).is_err() {
+                return glib::ControlFlow::Break;
+            }
             glib::ControlFlow::Break
         });
         if !self.open.contains(parent) {

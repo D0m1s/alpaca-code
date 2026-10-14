@@ -46,16 +46,20 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
    (branchbtn law) + explicit label:backdrop states (leak law). The runpill
    sweep first (headerbar buttons' ~16px vertical additive dies ONLY with the
    everything-0 sweep), then the wanted shape re-raised same block. */
-.alpaca-projbtn, .alpaca-projbtn > label,
+.alpaca-projbtn, .alpaca-projbtn > box,
 .alpaca-projadd, .alpaca-projadd > label {
     background: transparent; border: none; border-radius: 6px;
     min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border-spacing: 0px;
 }
-.alpaca-projbtn { color: #4d5666; font-size: 13px; font-weight: 500; padding: 1px 8px; }
+/* the ✕ rides INSIDE the pill (user image #17): one band covers label + ✕ —
+   padding asymmetric (tab law: label 8px in left, ✕ tucked right — right
+   inset measured to MATCH the ink's top inset: 2px pill + 1px ✕ + ~1.5px
+   glyph margin ≈ 4.5 = the img-centered top gap, user image #18 ruling) */
+.alpaca-projbtn { color: #4d5666; font-size: 13px; font-weight: 500; padding: 1px 4px 1px 8px; }
 /* ink law (the .alpaca-tabname fix): the eye anchors the dense ink band and a
    centered label hangs ~1.3-1.8px low — 3px bottom pad re-centers the ink in
    the pill band so the tight hover outline reads optically centred */
-.alpaca-projbtn > label, .alpaca-projadd > label { padding: 0 0 3px 0; }
+.alpaca-projbtn label, .alpaca-projadd > label { padding: 0 0 3px 0; }
 .alpaca-projbtn.alpaca-on { color: #e6e8ee; background: #1c2431; }
 .alpaca-projbtn:hover, .alpaca-projbtn.alpaca-on:hover, .alpaca-projadd:hover,
 .alpaca-branchbtn:hover, .alpaca-branchbtn.alpaca-open { background: #1c2431; color: #e6e8ee; }
@@ -64,6 +68,22 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
 .alpaca-projbtn:hover label:backdrop, .alpaca-projbtn.alpaca-on:hover label:backdrop { color: #e6e8ee; }
 .alpaca-projadd { color: #8a93a6; font-size: 13px; font-weight: 500; padding: 1px 5px; }
 .alpaca-projadd:disabled { color: #3d4454; opacity: 0.35; }
+/* the strip ✕ (close-pill, user image #17): INSIDE the pill — one band
+   covers label + ✕. NOT a button: a Button-in-Button's outer GestureClick
+   claims the press on this build and the ✕ never fires — the ✕ is a plain
+   box node with its own GestureClick claimed on press (innermost gesture in
+   bubble sees it first; the pill click is denied). The additive sweep is
+   kept for the child IMAGE (runpill law). Ink = the baked x-dim stroke
+   (baked-stroke law: css can't recolor); hover = a lighter patch inside
+   the pill band. Image #18 ruling: the patch is a SQUARE 18×18 (img 14 +
+   2×2 pad), not a band-filling bar — min-height 18 + the box valign Center
+   in the 21px pill band → the patch's top inset = its right inset ≈ 4.5. */
+.alpaca-projclose, .alpaca-projclose > box, .alpaca-projclose > image {
+    background: transparent; border: none; border-radius: 4px;
+    min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border-spacing: 0px;
+}
+.alpaca-projclose { color: #4d5666; padding: 0 2px; min-height: 18px; }
+.alpaca-projclose:hover { background: #2b3448; color: #e6e8ee; }
 /* The workbench chevron (the one header MenuButton, 2026-10-14): band =
    interior 32 − 2·margin → margin 4px 0 = 24px tall; width = icon 14 +
    2·5px pad = 24 → a 24×24 SQUARE band (ruling images #14-16: band

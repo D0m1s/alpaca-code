@@ -18,7 +18,7 @@ use relm4::{Component, ComponentParts, ComponentSender};
 use crate::editor::{Editor, EditorMsg, EditorOutput};
 use crate::gitpanel::{GitPanel, GitPanelMsg, GitPanelOutput, ProbeChild};
 use crate::gitview::GitViewMsg;
-use crate::panes::{Panes, PanesMsg, PanesOutput};
+use crate::panes::{Panes, PanesMsg, PanesOutput, kill_tree};
 use crate::{runctl, state, vector};
 
 pub use crate::editor::EditorSnapshot;
@@ -30,6 +30,8 @@ pub enum AppMsg {
     OpenWorkspace(PathBuf),
     /// header-pill click → instant switch (requirement 8)
     SwitchWorkspace(usize),
+    /// strip ✕ → close the tagged workspace (tombstone + swing)
+    CloseWorkspace(usize),
     /// startup: swing to the remembered project after ALL queued opens ran
     BootActivate(PathBuf),
     /// requirement 3: header "+" → the folder picker (shared open path)
@@ -118,6 +120,18 @@ pub fn add_decision(open: &[PathBuf], path: &Path) -> AddDecision {
     AddDecision::Add
 }
 
+/// The slot the active lands on after closing `i`: the next live slot to the
+/// right (browser convention), else the nearest live slot left, else None —
+/// the zero-workspace state. Slots are append-only tombstones (vec never
+/// compacts), so slot order == strip order and the captured `ws` tags on
+/// every component output stay valid forever.
+pub fn close_target(live: &[usize], i: usize) -> Option<usize> {
+    live.iter()
+        .find(|&&s| s > i)
+        .copied()
+        .or_else(|| live.iter().rev().find(|&&s| s < i).copied())
+}
+
 /// Edit-menu ops route by active workspace (the actions now fan out to N
 /// editors; the shared actions can't hold a Sender per editor).
 #[derive(Debug, Clone, Copy)]
@@ -139,7 +153,8 @@ pub struct Workspace {
     root: PathBuf,
     /// the card assembly (hpaned → [editor | panes-vpaned, gitpanel]) — one GtkStack page
     hpane: gtk::Paned,
-    /// the header-strip pill (App places it left of nothing; T3 adds "+" after)
+    /// the header-strip pill (the close ✕ rides INSIDE its child box —
+    /// one band covers label + ✕, user image #17)
     btn: gtk::Button,
     editor: relm4::Controller<Editor>,
     panes: relm4::Controller<Panes>,
@@ -224,7 +239,45 @@ impl Workspace {
         let lbl = gtk::Label::builder().label(py_basename(&path_str)).build();
         lbl.set_ellipsize(pango::EllipsizeMode::End);
         lbl.set_max_width_chars(24); // 3 long names must not blow the strip out
-        btn.set_child(Some(&lbl));
+        // the strip ✕ (close-pill): INSIDE the pill, one band covering label
+        // + ✕ (user image #17). NOT a nested Button — a Button-in-Button's
+        // outer GestureClick claims the press on this build and the ✕ never
+        // fires (measured: user click did nothing; the S4 probe's AppMsg
+        // close worked, so only the click path was dead). A plain box with
+        // its own GestureClick CLAIMED ON PRESS runs first (bubble: innermost
+        // gesture sees the press first) and the pill click never races it.
+        let close = gtk::Box::builder()
+            .css_classes(["alpaca-projclose"])
+            .tooltip_text("Close project")
+            .build();
+        // the patch is 18×18 (img 14 + 2×2 pad), a SQUARE hover band centered
+        // in the pill (image #18 ruling; a patch that fills the 21px band is
+        // a tall bar whose top inset ≠ its right inset)
+        close.set_valign(gtk::Align::Center);
+        if let Some(vec) = vector::icon("x-dim.svg") {
+            let img = gtk::Image::from_paintable(Some(&vec));
+            img.set_pixel_size(14);
+            img.set_valign(gtk::Align::Center);
+            close.append(&img);
+        } else {
+            // art loss (never on a shipped build): text stand-in
+            close.append(&gtk::Label::builder().label("✕").build());
+        }
+        let click = gtk::GestureClick::new();
+        let snd = app_out.clone();
+        click.connect_pressed(move |g, _n, _x, _y| {
+            // claim the sequence NOW: the pill's click gesture is denied for
+            // this press (no switch), the ✕ closes its slot
+            if let Some(seq) = g.current_sequence() {
+                g.set_sequence_state(&seq, gtk::EventSequenceState::Claimed);
+            }
+            snd.input(AppMsg::CloseWorkspace(ws));
+        });
+        close.add_controller(click);
+        let pill_child = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        pill_child.append(&lbl);
+        pill_child.append(&close);
+        btn.set_child(Some(&pill_child));
         btn.set_tooltip_text(Some(&path_str));
         // requirement 6: every pill is clickable → instant switch
         let snd = app_out.clone();
@@ -264,8 +317,12 @@ struct App {
     run_btn: gtk::Button,
     stop_btn: gtk::Button,
     run_row: gtk::Box,
-    ws: Vec<Workspace>,
-    /// valid iff !ws.is_empty() — never read on empty
+    /// live by slot + tombstones: the close ✕ leaves `None` in its slot.
+    /// Slots are NEVER shifted or reused — every component output carries the
+    /// Add-time slot tag, and a shift would misroute them (the re-tag law).
+    /// Slot order == strip order because slots only grow.
+    ws: Vec<Option<Workspace>>,
+    /// valid iff a live slot exists at active — never read when none live
     active: usize,
     /// PROBE-ONLY (ALPACA_PROBE_S2) — step chain (workspace, step index);
     /// production never constructs it (env unset)
@@ -505,23 +562,25 @@ impl Component for App {
         match msg {
             AppMsg::OpenWorkspace(p) => self.open_workspace(&p, root, sender),
             AppMsg::SwitchWorkspace(i) => self.switch_to(i, root),
+            AppMsg::CloseWorkspace(slot) => self.close_workspace(slot, root),
             AppMsg::BootActivate(p) => {
-                if let Some(i) = self.ws.iter().position(|w| w.root.as_path() == p.as_path()) {
+                let p = p.canonicalize().unwrap_or(p);
+                if let Some(i) = self.slot_of(&p) {
                     self.switch_to(i, root);
                 }
             }
             AppMsg::AddProjectDialog => open_project(root, sender),
             AppMsg::OpenFile(ws, p) => {
                 // filetree → editor routing within the tagged workspace
-                if let Some(w) = self.ws.get_mut(ws) {
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
                     w.editor.emit(EditorMsg::OpenFile(p));
                 }
             }
             AppMsg::EditorState(ws, s) => {
-                if let Some(w) = self.ws.get_mut(ws) {
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
                     w.snapshot = s;
                 }
-                if !self.ws.is_empty() {
+                if self.live_len() > 0 {
                     // debounced ≤1s; each event re-arms (stacked timers flush
                     // the LATEST snapshots of EVERY workspace; last event
                     // before quit may be lost — acceptable, as before)
@@ -534,7 +593,7 @@ impl Component for App {
             }
             AppMsg::FlushTabs => {
                 let mut st = state::load();
-                for w in &self.ws {
+                for w in self.ws.iter().flatten() {
                     st = state::set_tabs(
                         st,
                         w.root.to_string_lossy().as_ref(),
@@ -547,7 +606,7 @@ impl Component for App {
             AppMsg::RunStatus(ws, running) => {
                 // the run-status payload is not displayed; the
                 // buttons + pill class follow the workspace's running mirror
-                if let Some(w) = self.ws.get_mut(ws) {
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
                     w.running = running;
                 }
                 if ws == self.active {
@@ -557,7 +616,7 @@ impl Component for App {
                 }
             }
             AppMsg::RunStarting(ws) => {
-                if let Some(w) = self.ws.get_mut(ws) {
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
                     w.running = true;
                 }
                 if ws == self.active {
@@ -567,13 +626,14 @@ impl Component for App {
             }
             AppMsg::RunPressed => {
                 // no workspace yet / live run → noop
-                let running = self.ws.get(self.active).map(|w| w.running).unwrap_or(true);
+                let running = self.ws.get(self.active).and_then(|o| o.as_ref()).map(|w| w.running).unwrap_or(true);
                 if running {
                     return;
                 }
                 let cmd = self
                     .ws
                     .get(self.active)
+                    .and_then(|o| o.as_ref())
                     .and_then(|w| runctl::detect(w.root.as_path()));
                 let Some(cmd) = cmd else {
                     self.run_btn.set_sensitive(false);
@@ -582,7 +642,7 @@ impl Component for App {
                     return;
                 };
                 self.stop_btn.set_sensitive(true);
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.panes.emit(PanesMsg::LaunchRun { argv: cmd.argv });
                 }
                 // run-off + style land with RunStarting (accepted) —
@@ -590,7 +650,7 @@ impl Component for App {
             }
             AppMsg::StopPressed => {
                 // unconditional button sync, then the active workspace's panes
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.panes.emit(PanesMsg::StopRun);
                 }
                 self.stop_btn.set_sensitive(false);
@@ -606,7 +666,7 @@ impl Component for App {
             },
             AppMsg::OpenDiff { ws, rel, letter } => {
                 // the diff open runs within the tagged workspace
-                if let Some(w) = self.ws.get(ws) {
+                if let Some(w) = self.ws.get(ws).and_then(|o| o.as_ref()) {
                     w.editor.emit(EditorMsg::OpenDiff { root: w.root.clone(), rel, letter });
                 }
             }
@@ -617,7 +677,7 @@ impl Component for App {
                 // is the workspace's pending store + the Flushed ack chain.
                 // SaveOpen FIRST (paths by ref), the store move second —
                 // pending_commit takes ownership of the payload tail
-                if let Some(w) = self.ws.get_mut(ws) {
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
                     w.editor.emit(EditorMsg::SaveOpen(
                         paths.iter().map(|rel| root.join(rel)).collect(),
                     ));
@@ -629,7 +689,7 @@ impl Component for App {
                 // FIFO input queue → a sound chain (T5's_save_open ALWAYS
                 // emits Flushed, zero-flushed included — the chain cannot
                 // strand; eager-busy closes the duplicate-click window)
-                if let Some(w) = self.ws.get_mut(ws)
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut())
                     && let Some((root, paths, msg)) = w.pending_commit.take() {
                         w.gitpanel.emit(GitPanelMsg::StartCommit { root, paths, msg });
                     }
@@ -639,19 +699,19 @@ impl Component for App {
                 // across WORKSPACE switches does not exist anymore — each
                 // workspace's editor carries its own diffs; restore rebuilds
                 // ONLY path pages for the boot path)
-                if let Some(w) = self.ws.get(ws) {
+                if let Some(w) = self.ws.get(ws).and_then(|o| o.as_ref()) {
                     let letters = rows.iter().map(|(rel, letter)| (rel.clone(), letter.clone())).collect();
                     w.editor.emit(EditorMsg::RefreshDiffs { root: w.root.clone(), letters });
                 }
             }
             AppMsg::WindowActive => {
                 // window focus re-syncs the ACTIVE workspace's git
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::RefreshGit);
                 }
             }
             AppMsg::EditOp(kind) => {
-                if let Some(w) = self.ws.get_mut(self.active) {
+                if let Some(w) = self.ws.get_mut(self.active).and_then(|o| o.as_mut()) {
                     w.editor.emit(match kind {
                         EditKind::Undo => EditorMsg::Undo,
                         EditKind::Redo => EditorMsg::Redo,
@@ -725,7 +785,7 @@ impl Component for App {
                     2 => {
                         println!("PROBE step 2: ts={}", epoch_ms());
                         self.switch_to(0, root);
-                        say("two-open", self.ws.len() == 2);
+                        say("two-open", self.ws.len() == 2 && self.live_len() == 2);
                         // THE feature asserts, live: state survives the flip.
                         // GObject PartialEq compares memory addresses
                         // (verified in glib-0.22 object.rs) — Widget vs Paned
@@ -734,20 +794,20 @@ impl Component for App {
                             "stack-visible-is-wsA",
                             self.stack
                                 .visible_child()
-                                .is_some_and(|v| v == self.ws[0].hpane),
+                                .is_some_and(|v| v == self.ws[0].as_ref().unwrap().hpane),
                         );
                         say(
                             "editor-tabs-preserved",
                             // snapshot open_tabs are RELPATHS (editor emit_state)
-                            self.ws[0].snapshot.open_tabs == vec!["a.txt".to_string()],
+                            self.ws[0].as_ref().unwrap().snapshot.open_tabs == vec!["a.txt".to_string()],
                         );
                         // the paned's first-allocation law: the position clamps
                         // to max = allocated_width − 6px separator — a narrow
                         // virtual display (broadway vfb) reads BELOW 1161 by
                         // exactly that clamp; assert the constructed position
                         // survived (no recompute/collapse), clamp included
-                        let hw = self.ws[0].hpane.allocated_width();
-                        let pos = self.ws[0].hpane.position();
+                        let hw = self.ws[0].as_ref().unwrap().hpane.allocated_width();
+                        let pos = self.ws[0].as_ref().unwrap().hpane.position();
                         println!("PROBE hpane-pos reads pos={pos} hpane-w={hw}");
                         // hw==0 → never allocated yet by assert time (racy on
                         // the frame clock): the property must read 1161.
@@ -756,8 +816,8 @@ impl Component for App {
                         say("hpane-pos-1161", ok);
                         say(
                             "on-class-wsA",
-                            self.ws[0].btn.has_css_class("alpaca-on")
-                                && !self.ws[1].btn.has_css_class("alpaca-on"),
+                            self.ws[0].as_ref().unwrap().btn.has_css_class("alpaca-on")
+                                && !self.ws[1].as_ref().unwrap().btn.has_css_class("alpaca-on"),
                         );
                         // polish task: the pill band must FLOAT —
                         // stretched-to-the-bar is the image-#8 regression
@@ -768,7 +828,7 @@ impl Component for App {
                         // rerun; never tune CSS off a 0.
                         let bh = self.proj_box.allocated_height();
                         let bands: Vec<i32> =
-                            self.ws.iter().map(|w| w.btn.allocated_height()).collect();
+                            self.ws.iter().flatten().map(|w| w.btn.allocated_height()).collect();
                         println!("PROBE strip: proj_box-h={} pill-band-heights={:?}", bh, bands);
                         let ok = bh > 0
                             && bands.len() == 2
@@ -785,13 +845,13 @@ impl Component for App {
                         say(
                             "title-is-basename",
                             root.title().as_deref()
-                                == Some(self.ws[0].root.file_name().unwrap().to_str().unwrap()),
+                                == Some(self.ws[0].as_ref().unwrap().root.file_name().unwrap().to_str().unwrap()),
                         );
                     }
                     3 => {
                         let ws_c = ws_dir.to_string_lossy().replace("wsA", "wsC");
                         self.open_workspace(std::path::Path::new(&ws_c), root, sender.clone());
-                        say("three-open", self.ws.len() == 3);
+                        say("three-open", self.ws.len() == 3 && self.live_len() == 3);
                         say("add-btn-disabled", !self.add_btn.is_sensitive());
                         // state.json's open set must mirror the LIVE strip:
                         // the rig seeds a ghost dir (GONE, deleted) — boot
@@ -823,7 +883,72 @@ impl Component for App {
                     // add_decision dedupe), never duplicate the strip pill
                     4 => {
                         self.open_workspace(ws_dir.as_path(), root, sender.clone());
-                        say("re-open-wsA-switches", self.ws.len() == 3 && self.active == 0);
+                        say("re-open-wsA-switches", self.live_len() == 3 && self.active == 0);
+                    }
+                    // CLOSE-pill step: wsA (slot 0) dies under the real ✕
+                    // path — tombstone + active swing right (slot 0 of
+                    // [0,1,2] → 1 = wsB), strip unit gone, "+" re-armed
+                    5 => {
+                        self.close_workspace(0, root);
+                        // wsB (slot 1) + wsC (slot 2) stay live; slots never
+                        // compact: 3,0-tombstone,1,2
+                        say("close-live-2", self.live_len() == 2 && self.ws.len() == 3);
+                        say("close-slot-0-tombstone", self.ws[0].is_none());
+                        say(
+                            "close-swing-wsB",
+                            self.active == 1
+                                && self
+                                    .stack
+                                    .visible_child()
+                                    .is_some_and(|v| v == self.ws[1].as_ref().unwrap().hpane),
+                        );
+                        // wsB's pill carries the active class; wsA's unit LEFT
+                        say(
+                            "close-pill-class",
+                            self.ws[1].as_ref().unwrap().btn.has_css_class("alpaca-on"),
+                        );
+                        // strip = [wsB unit | wsC unit | +]
+                        say("close-pill-rm", self.proj_box.observe_children().n_items() == 3);
+                        say("close-reopen-plus", self.add_btn.is_sensitive());
+                        // state: wsA pruned from the open set (live-truth law)
+                        let wsb = ws_dir.to_string_lossy().replace("wsA", "wsB");
+                        let wsb_state = wsb.clone(); // closure gets its own copy
+                        let wsc = ws_dir.to_string_lossy().replace("wsA", "wsC");
+                        sender.spawn_command(move |_| {
+                            let st = std::fs::read_to_string(crate::state::state_path())
+                                .unwrap_or_default();
+                            let ops = st
+                                .split("\"open_projects\": [")
+                                .nth(1)
+                                .unwrap_or_default()
+                                .split(']')
+                                .next()
+                                .unwrap_or_default()
+                                .to_string();
+                            let ok = ops.contains(&wsb_state)
+                                && ops.contains(&wsc)
+                                && !ops.contains("wsA");
+                            println!("PROBE assert: close-open-set-pruned: {}",
+                                     if ok { "PASS" } else { "FAIL" });
+                            println!("PROBE state open_projects=[{}]", ops.trim());
+                        });
+                        // THE re-tag proof — a component output must still
+                        // route into slot 1's workspace after slot 0 died
+                        // (a shifted vec would miss it). b2.txt is rig-only.
+                        sender.input(AppMsg::OpenFile(
+                            1,
+                            PathBuf::from(&wsb).join("b2.txt"),
+                        ));
+                        // tombstone-safe routing: a message aimed at slot 0
+                        // must no-op (no panic — the guard IS the assert)
+                        sender.input(AppMsg::OpenFile(0, ws_dir.join("a.txt")));
+                    }
+                    6 => {
+                        let w = self.ws[1].as_ref().unwrap();
+                        say(
+                            "close-retag-proof",
+                            w.snapshot.open_tabs.iter().any(|t| t == "b2.txt"),
+                        );
                         println!("PROBE S4 DONE");
                         self.probe_s4 = None;
                         return;
@@ -879,7 +1004,7 @@ impl Component for App {
                         }
                     }
                     1 => {
-                        let Some(w) = self.ws.get(self.active) else { return };
+                        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else { return };
                         let checks = [
                             ("window", root.measure(gtk::Orientation::Horizontal, -1).0, 560),
                             ("editor", w.editor.widget().measure(gtk::Orientation::Horizontal, -1).0, 300),
@@ -901,16 +1026,16 @@ impl Component for App {
                         // readback came back 1568, the split never applied)
                         root.set_size_request(1586, 992);
                     }
-                    3 => if let Some(w) = self.ws.get(self.active) { w.hpane.set_position(900); },
+                    3 => if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) { w.hpane.set_position(900); },
                     4 => {
-                        let Some(w) = self.ws.get(self.active) else { return };
+                        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else { return };
                         println!("PROBE hpane pos={} w={} at wide-trace",
                                  w.hpane.position(), w.hpane.allocated_width());
                         w.editor.emit(EditorMsg::ProbeTrace("wide".into()));
                     }
-                    5 => if let Some(w) = self.ws.get(self.active) { w.hpane.set_position(850); },
+                    5 => if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) { w.hpane.set_position(850); },
                     6 => {
-                        if let Some(w) = self.ws.get(self.active) {
+                        if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                             w.editor.emit(EditorMsg::ProbeTrace("narrow".into()));
                         }
                         println!("PROBE S3 DONE");
@@ -965,7 +1090,7 @@ const PROBE_S3_STEP_MS: [u64; 7] = [500, 700, 700, 700, 600, 600, 600];
 // 2 = switch BACK to wsA + live asserts (stack identity, tabs, paned pos,
 //     pill classes, WM title) · 3 = open wsC → cap-full asserts
 //     (3 open, "+" disabled) · 4 = re-open wsA → must SWITCH not add → DONE
-const PROBE_S4_STEP_MS: [u64; 6] = [500, 700, 700, 700, 700, 500];
+const PROBE_S4_STEP_MS: [u64; 8] = [500, 700, 700, 700, 700, 500, 700, 700];
 
 /// epoch ms for the probe's step trace (the wrapper correlates app ts with
 /// the git-shim log's ts)
@@ -1007,13 +1132,13 @@ impl App {
                 }
             }
             1 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ModeChanges);
                 }
             }
             // commit_clicked rejects an empty entry — fill the real entry
             2 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Changes(
                         GitViewMsg::ProbeMsg(PROBE_MSG.into()),
                     )));
@@ -1027,7 +1152,7 @@ impl App {
                 letter: "M".into(),
             }),
             4 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.editor.emit(EditorMsg::ProbeClip);
                 }
             }
@@ -1037,22 +1162,22 @@ impl App {
             // its stall straddles the next typing step's timer — deltas ≈
             // 150ms delay + shim sleep (green ≈ the 400ms gap).
             5 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeEntry("alpha".into()));
                 }
             }
             6 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabet".into()));
                 }
             }
             7 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabetZ".into()));
                 }
             }
             8 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabetZx".into()));
                 }
             }
@@ -1062,7 +1187,7 @@ impl App {
             // step 12's open closes nothing — it ADDS wsB, so the pre-switch
             // window is the settled slot)
             9 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeEntry("".into()));
                     w.editor.emit(EditorMsg::ProbeDiffScroll);
                 }
@@ -1073,7 +1198,7 @@ impl App {
             // twice (off→on) so the live toggle path runs and the state ends
             // all-checked.
             10 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     let mast = || GitPanelMsg::ProbeChild(ProbeChild::Changes(
                         GitViewMsg::RowToggled(gtk::TreePath::from_string("0").unwrap()),
                     ));
@@ -1084,7 +1209,7 @@ impl App {
             // the FULL production chain: validate → eager busy → Commit out
             // → App Commit → SaveOpen → Flushed → panel StartCommit → flight
             11 => {
-                if let Some(w) = self.ws.get(self.active) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Changes(
                         GitViewMsg::CommitClicked,
                     )));
@@ -1179,28 +1304,38 @@ impl App {
         root_win: &gtk::ApplicationWindow,
         sender: ComponentSender<Self>,
     ) {
-        let open: Vec<PathBuf> = self.ws.iter().map(|w| w.root.clone()).collect();
-        match add_decision(&open, path) {
+        // canonical spelling (fix): a trailing-/ or `..` variant of an open
+        // project must SWITCH, not open a duplicate strip page — add_decision
+        // and BootActivate compare spellings. Missing dir → raw fallback.
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        // live slots in strip order parallel the decision's indices (tombstones
+        // skip — Switch(i) maps through open_slots, not the vec position)
+        let open_slots: Vec<usize> = self.live_slots();
+        let open: Vec<PathBuf> = open_slots
+            .iter()
+            .filter_map(|s| self.ws[*s].as_ref().map(|w| w.root.clone()))
+            .collect();
+        match add_decision(&open, &path) {
             AddDecision::Full => {
                 error_dialog(root_win, "Maximum of 3 projects open", "");
             }
-            AddDecision::Switch(i) => self.switch_to(i, root_win),
+            AddDecision::Switch(i) => self.switch_to(open_slots[i], root_win),
             AddDecision::Add => {
-                let i = self.ws.len();
+                let i = self.ws.len(); // next slot (slots grow, never reuse)
                 let ws = Workspace::new(path.to_path_buf(), i, sender.clone());
                 // stack page name: unique — open paths are deduped
                 self.stack
                     .add_named(&ws.hpane, Some(&ws.root.to_string_lossy()));
-                self.ws.push(ws);
+                self.ws.push(Some(ws));
                 // requirement 4: appended to the right of the previous one;
                 // title_widget centers the strip as one entity (requirement 7).
                 // the + rides LAST (strip order [pill … pill | +]): re-append
                 // moves it back behind the fresh pill
                 self.proj_box.remove(&self.add_btn);
-                self.proj_box.append(&self.ws[i].btn);
+                self.proj_box.append(&self.ws[i].as_ref().unwrap().btn);
                 self.proj_box.append(&self.add_btn);
                 // requirement 5: the cap kills "+" (menu paths still report it)
-                self.add_btn.set_sensitive(self.ws.len() < MAX_WORKSPACES);
+                self.add_btn.set_sensitive(self.live_len() < MAX_WORKSPACES);
                 let path_str = path.to_string_lossy();
                 // persistence: the live strip IS the open set — rebuilt after
                 // the push, it caps by construction (never exceeds it) and
@@ -1212,6 +1347,7 @@ impl App {
                 st.open_projects = self
                     .ws
                     .iter()
+                    .flatten()
                     .map(|w| w.root.to_string_lossy().into_owned())
                     .collect();
                 state::save(&st);
@@ -1220,35 +1356,121 @@ impl App {
         }
     }
 
-    /// Header-pill click / an open's activation: flip the stack page — state
-    /// carries over because NOTHING is re-rooted (the feature's core).
+    /// Header-pill click / an open's activation / a close's active-swing:
+    /// flip the stack page — state carries over because NOTHING is re-rooted
+    /// (the feature's core). Tombstone slots guard-return.
     fn switch_to(&mut self, i: usize, root: &gtk::ApplicationWindow) {
-        if i >= self.ws.len() {
+        let Some(w) = self.ws.get(i).and_then(|o| o.as_ref()) else {
             return;
-        }
-        self.stack.set_visible_child(&self.ws[i].hpane);
+        };
+        let path_str = w.root.to_string_lossy().into_owned();
+        let hpane = w.hpane.clone(); // owned ref — no borrow into the mutations
+        self.stack.set_visible_child(&hpane);
         self.active = i;
-        let path_str = self.ws[i].root.to_string_lossy().into_owned();
         // requirement 1: only the project name, in the WM title as well
         root.set_title(Some(&py_basename(&path_str)));
         state::save(&state::remember(state::load(), &path_str));
         for (j, w) in self.ws.iter().enumerate() {
-            if j == i {
-                w.btn.add_css_class("alpaca-on");
-            } else {
-                w.btn.remove_css_class("alpaca-on");
+            if let Some(w) = w.as_ref() {
+                if j == i {
+                    w.btn.add_css_class("alpaca-on");
+                } else {
+                    w.btn.remove_css_class("alpaca-on");
+                }
             }
         }
         // the shared header pills track the NEW workspace's run state
         self.sync_run_buttons();
         // a switch re-syncs git once (the set-root refresh's law, reused)
-        self.ws[i].gitpanel.emit(GitPanelMsg::RefreshGit);
+        if let Some(w) = self.ws.get(i).and_then(|o| o.as_ref()) {
+            w.gitpanel.emit(GitPanelMsg::RefreshGit);
+        }
+    }
+
+    /// live workspaces (tombstones skipped) — cap checks, FlushTabs, "+" gate
+    fn live_len(&self) -> usize {
+        self.ws.iter().flatten().count()
+    }
+
+    /// live slot numbers in strip order — slots are append-only, so slot
+    /// order == strip order; parallel to add_decision's open indices
+    fn live_slots(&self) -> Vec<usize> {
+        self.ws
+            .iter()
+            .enumerate()
+            .filter_map(|(s, w)| w.is_some().then_some(s))
+            .collect()
+    }
+
+    /// the live slot holding `path` (canonical spelling) — BootActivate +
+    /// the dedupe lookup; position() counts VEC items, tombstones included,
+    /// so the result IS the slot number
+    fn slot_of(&self, path: &Path) -> Option<usize> {
+        self.ws
+            .iter()
+            .position(|w| w.as_ref().is_some_and(|w| w.root.as_path() == path))
+    }
+
+    /// The strip ✕: tombstone the slot (indices are Add-time and never shift
+    /// — the tags every component output carries stay valid), kill this
+    /// workspace's pane children via the real Stop/kill paths, drop the
+    /// assembly, remove the stack page + strip unit, swing the active (next
+    /// live slot right, else nearest left, else zero-workspace), then
+    /// rebuild the persisted open set from the LIVE strip (same live-truth
+    /// law as Add — and the closed project's per-project tabs entry STAYS so
+    /// a reopen restores its pages).
+    fn close_workspace(&mut self, slot: usize, root: &gtk::ApplicationWindow) {
+        let Some(w) = self.ws.get_mut(slot).and_then(|o| o.take()) else {
+            return;
+        };
+        // kill every pane child SYNCHRONOUSLY before the drop (agent/term are
+        // session leaders — they outlive the component drop otherwise). The
+        // kill rides the model's own pids: relm4's shutdown branch races
+        // queued messages in futures::select! and can drop them, so no
+        // PanesMsg round-trip here.
+        for pid in w.panes.model().live_pids() {
+            kill_tree(pid);
+        }
+        self.stack.remove(&w.hpane);
+        self.proj_box.remove(&w.btn);
+        drop(w); // controllers drop → component runtimes shut down
+        // active swing: the tombstone is already in place, so live_slots()
+        // sees the post-close strip
+        if slot == self.active {
+            match close_target(&self.live_slots(), slot) {
+                Some(next) => self.switch_to(next, root),
+                None => {
+                    // zero workspaces: the fresh-install state — no title, no
+                    // run pills, and boot's open_projects fallback must NOT
+                    // resurrect the closed project (open_projects = [] below)
+                    self.active = 0;
+                    root.set_title(None);
+                    let mut st = state::load();
+                    st.last_project = None;
+                    st.open_projects = Vec::new();
+                    state::save(&st);
+                }
+            }
+        }
+        self.add_btn.set_sensitive(self.live_len() < MAX_WORKSPACES);
+        // live remain → the persisted open set is the live strip (the
+        // zero-live case wrote its [] in the swing arm above)
+        if !self.live_slots().is_empty() {
+            let mut st = state::load();
+            st.open_projects = self
+                .ws
+                .iter()
+                .flatten()
+                .map(|w| w.root.to_string_lossy().into_owned())
+                .collect();
+            state::save(&st);
+        }
     }
 
     /// Run/Stop pills + tooltip follow the active workspace (its own run
     /// mirror + the per-root detect). Called on switch (and from RunStatus).
     fn sync_run_buttons(&mut self) {
-        let Some(w) = self.ws.get(self.active) else {
+        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else {
             self.run_btn.set_sensitive(false);
             self.stop_btn.set_sensitive(false);
             self.refresh_run_style();
@@ -1267,7 +1489,7 @@ impl App {
 
     /// the running class rides the pill row — the ACTIVE workspace's mirror
     fn refresh_run_style(&self) {
-        let running = self.ws.get(self.active).map(|w| w.running).unwrap_or(false);
+        let running = self.ws.get(self.active).and_then(|o| o.as_ref()).map(|w| w.running).unwrap_or(false);
         if running {
             self.run_row.set_css_classes(&["alpaca-runpill", "running"]);
         } else {
@@ -1527,6 +1749,22 @@ mod tests {
 
     fn pb(s: &str) -> PathBuf {
         PathBuf::from(s)
+    }
+
+    #[test]
+    fn close_target_swings_right_then_left() {
+        // next live slot right (browser convention), else leftmost live, else
+        // None = zero-workspace state. Slots are append-only tombstones, so
+        // the live list is in strip order and never reused.
+        assert_eq!(close_target(&[0, 1], 0), Some(1));
+        assert_eq!(close_target(&[0, 1], 1), Some(0));
+        assert_eq!(close_target(&[0, 1, 2], 1), Some(2));
+        assert_eq!(close_target(&[0, 1, 2], 2), Some(1));
+        // tombstoned slots never reuse: live list only
+        assert_eq!(close_target(&[1, 3], 1), Some(3));
+        assert_eq!(close_target(&[1, 3], 3), Some(1));
+        // the last one standing → close-to-empty
+        assert_eq!(close_target(&[2], 2), None);
     }
 
     #[test]

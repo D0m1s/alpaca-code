@@ -249,7 +249,11 @@ impl Component for BranchMenu {
         let snd = sender.clone();
         root.connect_clicked(move |_| snd.input(BranchMenuMsg::OpenMenu));
         let snd = sender.clone();
-        pop.connect_closed(move |_| snd.input(BranchMenuMsg::Closed));
+        pop.connect_closed(move |_| {
+            // close law: a tear-down popover can emit closed into a dead
+            // runtime — input() panics, send() reports
+            let _ = snd.input_sender().send(BranchMenuMsg::Closed);
+        });
         let snd = sender.clone();
         let e2 = entry.clone();
         entry.connect_activate(move |_e| {
@@ -356,7 +360,11 @@ impl Component for BranchMenu {
                 let g = self.open_gen;
                 let snd = sender.clone();
                 glib::timeout_add(Duration::from_millis(80), move || {
-                    snd.input(BranchMenuMsg::SubOpen(g));
+                    // close law: input() panics on a dropped runtime — send()
+                    // reports; a dead send retires the timer
+                    if snd.input_sender().send(BranchMenuMsg::SubOpen(g)).is_err() {
+                        return glib::ControlFlow::Break;
+                    }
                     glib::ControlFlow::Break
                 });
             }
@@ -407,7 +415,11 @@ impl BranchMenu {
         let g = self.close_gen;
         let snd = sender.clone();
         glib::timeout_add(Duration::from_millis(250), move || {
-            snd.input(BranchMenuMsg::SubClose(g));
+            // close law: input() panics on a dropped runtime — send()
+            // reports; a dead send retires the timer
+            if snd.input_sender().send(BranchMenuMsg::SubClose(g)).is_err() {
+                return glib::ControlFlow::Break;
+            }
             glib::ControlFlow::Break
         });
     }

@@ -361,7 +361,10 @@ impl Component for Editor {
 
         let snd = sender.clone();
         nb.connect_switch_page(move |_, _, _| {
-            snd.input(EditorMsg::Switched);
+            // close law: Notebook dispose reselects a page → input() would
+            // panic on the dropped runtime (measured live: S4 close-probe
+            // abort inside drop_glue — EnsureCurrent(Some(0)))
+            let _ = snd.input_sender().send(EditorMsg::Switched);
         });
 
         // Ctrl+S saves the active page
@@ -421,17 +424,25 @@ impl Component for Editor {
             }
             EditorMsg::SaveOpen(paths) => {
                 // commit flow flush: dirty buffers among the named abs paths go
-                // to disk BEFORE the commit runs. Write errors are swallowed
-                // and Flushed ALWAYS fires — rust must not strand T7's
-                // pending-commit chain on an I/O error (eager-busy gate).
+                // to disk BEFORE the commit runs. Flushed ALWAYS fires — the
+                // chain must not strand on an I/O error (eager-busy gate);
+                // a failed write still pops the error dialog so the commit
+                // never lands stale disk content silently.
                 for idx in 0..self.pages.len() {
                     let flush = self.pages[idx]
                         .path
                         .as_ref()
                         .is_some_and(|p| paths.contains(p))
                         && self.pages[idx].buf.is_modified();
-                    if flush {
-                        let _ = self.write_page(idx);
+                    if flush
+                        && let Err(e) = self.write_page(idx)
+                    {
+                        let name = self.pages[idx]
+                            .path
+                            .as_ref()
+                            .map(|p| basename(p))
+                            .unwrap_or_default();
+                        self.error("Couldn't flush", &format!("{name}: {e}"));
                     }
                 }
                 let _ = sender.output(EditorOutput::Flushed);
@@ -622,7 +633,10 @@ impl Component for Editor {
                         glib::timeout_add_local(
                             std::time::Duration::from_millis(500),
                             move || {
-                                snd.input(EditorMsg::ProbeDiffScroll);
+                                // close law: input() panics on a dropped runtime
+                                if snd.input_sender().send(EditorMsg::ProbeDiffScroll).is_err() {
+                                    return glib::ControlFlow::Break;
+                                }
                                 glib::ControlFlow::Break
                             },
                         );
@@ -1529,7 +1543,11 @@ impl Editor {
         // without cancelling.
         let snd = sender.clone();
         glib::timeout_add(std::time::Duration::from_millis(120), move || {
-            snd.input(EditorMsg::FsSettled(path.clone()));
+            // close law: input() panics on a dropped runtime — send()
+            // reports; a dead send retires the timer
+            if snd.input_sender().send(EditorMsg::FsSettled(path.clone())).is_err() {
+                return glib::ControlFlow::Break;
+            }
             glib::ControlFlow::Break
         });
     }

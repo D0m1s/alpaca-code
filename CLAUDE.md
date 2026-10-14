@@ -34,9 +34,51 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   (VTE children, git probes, diff pages keep running per project; NOTHING is
   ever re-rooted, so the old dirty-gate discard dialog is deleted). Header
   center = project pill strip + `+` (`MAX_WORKSPACES=3`; 4th open → dialog;
-  no close-pill shipped yet — hovering-✕ is the natural follow-up; a close
-  control MUST re-tag the closure-captured ws indices (outputs/outputs tag
-  the Add-time index) or rebuild the strip — app-review). The persisted
+  close-pill shipped same day: the ✕ rides INSIDE the pill (image #17: one
+  band covers label + ✕) — pill child box `[label(4px gap)✕]`, pill padding
+  `1px 4px 1px 8px` (tab law: ✕ tucked right, label 8 left; image #18's
+  right-inset tightening was REVERTED same day — the user wanted the right
+  gap back), `.alpaca-projclose`
+  = plain BOX + own GestureClick (C-probe: a nested Button NEVER fires — the
+  outer pill's GestureClick claims the press, measured via CDP real-click on
+  broadway); the ✕'s gesture CLAIMS ON PRESS (`current_sequence()` → Claimed)
+  so the pill click is denied — CDP-click-rig proof: close + active swing +
+  state prune all landed from one real pointer click. Label rule is
+  DESCENDANT `.alpaca-projbtn label` now, x-dim.svg 14px; the ✕'s hover
+  patch = SQUARE 18×18 (`min-height: 18px` + box `valign(Center)` in the
+  21px band — a band-filling patch was a tall bar; image #18 ruling:
+  measured patch insets 4/4/4/4 on the CDP hover rig), color #2b3448. Close =
+  `AppMsg::CloseWorkspace(slot)` → `ws: Vec<Option<Workspace>>` TOMBSTONE:
+  slots are never shifted or reused, so the closure-captured ws tags (the
+  Add-time index every component output carries) stay valid forever — that
+  IS the re-tag law's solution; `close_target` swings the active to the next
+  live slot right else nearest left else zero-workspace (unit test
+  `close_target_swings_right_then_left`). The kill is SYNCHRONOUS: App
+  reads `panes.model().live_pids()` and `kill_tree`s each BEFORE dropping —
+  a queued PanesMsg kill races relm4's shutdown branch in `futures::select!`
+  and can be dropped with it (measured). Per-project `open_tabs` SURVIVE a
+  close (reopen restores pages); closing all clears open_projects +
+  last_project so boot's fallback can't resurrect the closed project. S4
+  probe steps 5–6 assert the whole close (tombstone, swing, state prune,
+  the re-tag proof: an OpenFile output still routes into slot 1 after
+  slot 0 died).
+- **relm4 close law (2026-10-14, measured — the S4 close-probe aborted on
+  it): `ComponentSender::input()` PANICS once the runtime is shut down
+  ("The runtime of the component was shutdown…", relm4 `channel/component.rs`
+  expect) — and two paths fire after a shutdown on every close: (a) glib
+  timers/`spawn_async` callbacks/`idle_add` closures that captured a
+  component sender outlive their own `Controller` drop, (b) relm4's runtime
+  task holds `rt_root`, so the widget tree finalizes INSIDE that task when
+  its shutdown branch returns — `GtkNotebook` dispose reselects a page and
+  emits `switch-page` from inside `drop_glue` (measured backtrace:
+  trampoline mid-`drop_glue::<Box>`). So EVERY closure that can fire without
+  user input (timers, child-exited, spawn-landed, sub-component output
+  bridges, notebook switch-page, popover closed) sends via the guarded form
+  `snd.input_sender().send(msg).is_err() → retire/no-op` instead of
+  `.input()`; `Sender::send`/`.emit` return Options/warnings (never panic)
+  but only `input_sender().send` is checkable from a `ComponentSender`.
+  `#[relm4::component]` does NOT forward a `shutdown` hook (no "shutdown"
+  in relm4-macros 0.11) — cleanup that must be deterministic can't ride it. The persisted
   `open_projects` is REBUILT from the live strip on every workspace ADD
   (only growth path — a deleted project's ghost can't evict a live tab;
   S4's state-open-set-live-truth pins it). All
@@ -63,8 +105,11 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 - Rust probe envs (PROBE-ONLY chains in app.rs, never run with env unset):
   `ALPACA_PROBE_S2=<dir>` (workspace chain), `ALPACA_PROBE_S3=<dir>` (hpane
   width-step chain + tab strip), `ALPACA_PROBE_S4=<dir>` (multi-workspace
-  chain: 2 opens + switch-survival + cap asserts; wsB/wsC are the passed
-  dir's name-replaced siblings; rig/`XDG_CONFIG_HOME` isolation per note
+  chain: 2 opens + switch-survival + cap asserts + a close step (5–6:
+  tombstone/swing/state-prune/re-tag proof); wsB/wsC are the passed
+  dir's name-replaced siblings — each rig dir needs its letter file
+  (a.txt/b.txt, plus wsB/b2.txt = the re-tag proof's OpenFile target);
+  rig/`XDG_CONFIG_HOME` isolation per note
   below). S3's wrapper arms a 60ms root `queue_draw`
   damage keeper because an occluded/late-mapped Wayland surface gets no frame
   callbacks and its allocations freeze after the first paint (see S3 row

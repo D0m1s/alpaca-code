@@ -141,12 +141,17 @@ impl Component for GitPanel {
         // each receiver routes the child's outputs through the panel as real
         // inputs/outputs — the same path real flights take (T8's ProbeChild
         // rides it too)
+        // sub-component bridges. close law: an independent sub-runtime can
+        // outlive this panel's own shutdown by turns (relm4 select! races) —
+        // its late output must not input() into a dead parent channel.
         let snd_ft = sender.clone();
         let ft = FileTree::builder().launch(()).connect_receiver(move |_, out| match out {
             FileTreeOutput::OpenFile(p) => {
                 let _ = snd_ft.output(GitPanelOutput::OpenFile(p));
             }
-            FileTreeOutput::Count(n) => snd_ft.input(GitPanelMsg::Count(n)),
+            FileTreeOutput::Count(n) => {
+                let _ = snd_ft.input_sender().send(GitPanelMsg::Count(n));
+            }
         });
         let snd_ch = sender.clone();
         let changes = ChangesView::builder()
@@ -158,12 +163,18 @@ impl Component for GitPanel {
                 GitViewOutput::Commit { root, paths, msg } => {
                     let _ = snd_ch.output(GitPanelOutput::Commit { root, paths, msg });
                 }
-                GitViewOutput::Status(kind, text) => snd_ch.input(GitPanelMsg::ChildStatus(kind, text)),
-                GitViewOutput::Busy(b) => snd_ch.input(GitPanelMsg::ChildBusy(b)),
+                GitViewOutput::Status(kind, text) => {
+                    let _ = snd_ch.input_sender().send(GitPanelMsg::ChildStatus(kind, text));
+                }
+                GitViewOutput::Busy(b) => {
+                    let _ = snd_ch.input_sender().send(GitPanelMsg::ChildBusy(b));
+                }
             });
         let snd_br = sender.clone();
         let branch = BranchMenu::builder().launch(()).connect_receiver(move |_, out| match out {
-            BranchMenuOutput::Status(kind, text) => snd_br.input(GitPanelMsg::ChildStatus(kind, text)),
+            BranchMenuOutput::Status(kind, text) => {
+                let _ = snd_br.input_sender().send(GitPanelMsg::ChildStatus(kind, text));
+            }
         });
 
         // ---- card chrome
@@ -295,7 +306,13 @@ impl Component for GitPanel {
         // (GitPanelMsg contains TreePath via ProbeChild — unsafe for a
         // cross-thread Sender; the local sources dodge the bound entirely)
         glib::timeout_add_local(Duration::from_millis(2000), move || {
-            snd_tick.input(GitPanelMsg::ProbeTick);
+            // close-shutdown law: relm4's ComponentSender::input PANICS on a
+            // dropped runtime — a workspace close drops this panel while the
+            // source lives. send() reports instead; a dead send retires the
+            // timer (the forever probe's only stop condition).
+            if snd_tick.input_sender().send(GitPanelMsg::ProbeTick).is_err() {
+                return glib::ControlFlow::Break;
+            }
             glib::ControlFlow::Continue
         });
 
@@ -511,7 +528,10 @@ impl GitPanel {
                 let snd = sender.clone();
                 // g is closure-baked from this call — the gen IS the token
                 glib::timeout_add_local(Duration::from_millis(2000), move || {
-                    snd.input(GitPanelMsg::PulseFired(g));
+                    // dead-runtime send PANICS via input() — same close law
+                    if snd.input_sender().send(GitPanelMsg::PulseFired(g)).is_err() {
+                        return glib::ControlFlow::Break;
+                    }
                     glib::ControlFlow::Break
                 });
             }
@@ -553,7 +573,6 @@ impl GitPanel {
         let is_git = branch.is_some();
         self.branch.emit(BranchMenuMsg::Update(branch.map(str::to_string)));
         self.dot.set_visible(is_git);
-        self.spin.set_visible(is_git);
         self.git_label.set_visible(is_git);
         self.spin.set_visible(false); // idle state: the dot, never the spinner
         self.ch_btn.set_visible(is_git);
