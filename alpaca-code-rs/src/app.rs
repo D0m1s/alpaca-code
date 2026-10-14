@@ -682,8 +682,14 @@ impl App {
             6 => self.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabet".into())),
             7 => self.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabetZ".into())),
             8 => self.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabetZx".into())),
-            // clear the needle so the masthead sees the full set again
-            9 => self.gitpanel.emit(GitPanelMsg::ProbeEntry("".into())),
+            // clear the needle so the masthead sees the full set again;
+            // ProbeDiffScroll rides the same PRE-SWITCH step (the diff page is
+            // ~2s old here and settled — step 4 timing is racy, measured;
+            // step 12's SetWorkspace closes every page, so no later step works)
+            9 => {
+                self.gitpanel.emit(GitPanelMsg::ProbeEntry("".into()));
+                self.editor.emit(EditorMsg::ProbeDiffScroll);
+            }
             // select-all via the REAL row-toggle law — but rows arrive
             // PRE-CHECKED (python's "fresh view selects all", gitview SetRoot
             // → refresh(false)): one masthead toggle would DESELECT. Toggle
@@ -755,6 +761,19 @@ impl App {
                 return;
             }
             _ => return,
+        }
+        // PROBE-ONLY capture gate (ALPACA_PROBE_S2_HOLD=N): run steps
+        // 0..=N-1, then park the app with the diff page open — the full
+        // chain's tail closes the page (SetWorkspace wsB), so a staged pixel
+        // capture cannot use it. Production never reads this (env unset).
+        if let Some(n) = std::env::var("ALPACA_PROBE_S2_HOLD")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            && step + 1 >= n
+        {
+            println!("PROBE S2 HOLD: parked after step {step} — window open for capture");
+            self.probe_ws = None;
+            return;
         }
         self.probe_ws.as_mut().unwrap().1 = step + 1;
         let ms = step_ms(step + 1);

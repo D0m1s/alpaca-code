@@ -329,6 +329,112 @@ implements the behaviors.
   out-specced `.alpaca-hint` (0,2,1 vs 0,1,0) → hint rendered bright). Law:
   open/hover text color rides ON the button (label-inherit); every popover child
   label carries its own explicit rule. Breeze paints no popover label colors.
+- Diff-page scrollbar hiding (measured 2026-10-13, two dead approaches first):
+  `PolicyType::Never` is NOT "hide the bar, keep scrolling" — it UNCLAMPS the
+  child, the sw's natural size passes the child's FULL content height through
+  the page/notebook min chain and the window grows until upper==page_size on
+  BOTH axes (nothing scrollable anywhere; measured viewport 1740px == content).
+  And GTK4 css has NO `display` property on this build (`Theme parser error:
+  No property named "display"` — a `display:none` scrollbar rule parses but is
+  dead code, caught only when the probe logs were grepped for parser errors).
+  The working hide = WIDGET visibility: walk the ScrolledWindow's internal
+  `GtkScrollbar` children and `set_visible(false)` (menu-button-arrow walk
+  pattern) — policies stay Automatic, viewport stays clamped, overlay reveal
+  (css-class machinery) does not resurrect it; `editor.rs` `hide_scrollbars`.
+- Diff-page scroll-pair asserts live at S2 chain step 9 (`ProbeDiffScroll`,
+  `diff-*-` asserts at editor.rs `probe_diff_scroll_asserts`): step 4 (+400ms
+  post-open) was racy on the live display (span/values unsettled between runs,
+  same binary), and step 12's SetWorkspace closes every page — the pre-switch
+  window (5-11) is the only settle slot. The diff sides render the WHOLE file
+  (`diff_for` runs `-U999999999` — Rider-style full-file sides 2026-10-14:
+  unchanged lines ride '=' rows with real numbers on both sides and keep FULL
+  syntax highlighting — the same-day ctx-dim tag was taken back out; within a
+  change band the first min(dels,adds) del/add PAIR on one shared row
+  (`push_change_group`, user ruling: "lines match up as much as possible"),
+  surplus pads the opposite side; a tail-append still fits the viewport — no
+  span, asserts SKIP).
+  Fixture law: 50-line base committed, worktree replaces lines 5-44 with long
+  alternating-width lines — the BASE band is long too (both panes must
+  h-overflow or sync-h/bar-drive can't run; ≈51 rows/side under the huge -U);
+  wsB holds ZERO commits; wsA needs
+  origin/main==HEAD (branch main). Each probe run commits wsA's change — full
+  fixture reset before every run (the rigs live out-of-repo like the seti
+  one-shot: build `/tmp/s2probe/` with a_base.txt = the 50-line base,
+  a_new.txt = the long-line modified band, then: `cd /tmp/s2probe && rm -rf
+  wsA/.git wsA_origin && git init -q --bare wsA_origin && git init -q wsA &&
+  git -C wsA config user.email probe@local && git -C wsA config user.name
+  probe && git -C wsA remote add origin /tmp/s2probe/wsA_origin && cp
+  a_base.txt wsA/a.txt && git -C wsA add a.txt && git -C wsA commit -qm
+  baseonly && (git -C wsA branch -m master main) && git -C wsA push -q -u
+  origin main && cp a_new.txt wsA/a.txt` (a partial reset is a BOOBY TRAP: a
+  worktree restore that lands on a HEAD already holding the new content reads
+  CLEAN and the run gets no diff page; the probe's ProbeDiffScroll also
+  self-renews: it appends a line to root/a.txt when it looks wsA — production
+  is env-guarded), and grep probe logs for `parser error` — a dead CSS rule
+  prints one at startup.
+- Probes must NOT assume the user's display is free: the app is single-instance
+  PER DBUS SESSION (round-2 measured: a plain spawn while the user's app is
+  alive forwards to it — env lost, no probe lines). Headless probe runs =
+  `gtk4-broadwayd :N` (fresh number per run) + `dbus-run-session -- env
+  GDK_BACKEND=broadway BROADWAY_DISPLAY=:N ALPACA_PROBE_S2=…` (own session →
+  own instance); delete `/run/user/1000/broadway*.socket` between runs;
+  pkill -x broadwayd.
+- GTK widget pairing laws (all measured 2026-10-13 via broadway python probes
+  + app probe runs): (a) `notify::allocation` NEVER fires on this GTK —
+  python-era allocation-notify retries were inert and are gone from diff_link;
+  a View owns BOTH its adjustments from construction and the sw binds those
+  same objects to its scrollbars (view-getter == sw-getter measured
+  pointer-identical, identity stable across refresh_diff's buffer swaps).
+  (b) A ScrolledWindow CLOBBERS its child's adjustments at set_child — any
+  `set_vadjustment` on a view inside a sw must ride AFTER that child-set (the
+  sw's adjustment-watcher then rebinds its bars to the new adj; a share taken
+  before set_child is flattened; a share reading a main's adj taken before
+  THAT main's sw was built binds a stranded pre-clobber placeholder). Number
+  panes rely on (b): they share their main's vadjustment OBJECT (lockstep, no
+  push races, one restore_frac per side); their h adj stays private (page
+  sizes differ — one adjustment can't hold two).
+- Paned divider gotchas (measured 2026-10-13): the UNSET position with
+  text-view children put the start child at its 1px minimum in-app (the lone
+  python probe's even split does not generalize to wrapped/nested panes) —
+  one-shot 50% rides the sw's hadjustment `changed` (page_size landing =
+  the split area's first allocation) and set_position must fire at IDLE: a
+  set mid-allocation-cascade is discarded (position property 482 with
+  children still at the unset 1|958 compute — the S3 same-step law).
+- Diff line numbers (Task 4): numbers are the REAL @@-hunk file numbers
+  (Hunk.old_start/new_start now parsed, `Sides.old_no/new_no`, 0 = pad/hunk
+  gap); text = `diff_num_text` (right-aligned via mono spaces, field =
+  `diff_num_field_width` = widest number); the number columns are unfocusable
+  views sharing the main's vadj. Rust `\<newline>` string continuations strip
+  the next line's leading whitespace — heredoc-style multiline diff fixtures
+  lose context lines' leading space (`strip_prefix(' ')` then drops them as
+  unknowns); fixtures go in as one line-escaped string.
+- Number-pane width (2026-10-14, user shot: digits cut mid-glyph "23"→"2:"):
+  the open-time `view.measure()` under-reported the mono field (h bar hidden →
+  no recovery) — pane width = pango layout of `0`.repeat(field) via the view's
+  css-resolved font (`diff_num_pane_width`), re-stamped in refresh_diff's
+  renewal path (a refreshed side can gain a digit, 99→100; sw_num_l/r retained
+  in DiffWidgets for it). Assert upgrade: `num-width` = allocated ≥ pango
+  natural (`≥20` passed while clipped); `num-filestart` = first number row
+  reads "1" (sentinel the huge `-U` stays).
+- Diff-page polish (2026-10-14, user shot + broadway capture): untagged
+  text-node areas render the theme's LIGHT default — the number panes carry
+  no style scheme, so both panes painted WHITE; fix = css on the text node
+  (`.alpaca-mono text { background-color: #0d1017 }` — tag tints and scheme
+  styles draw OVER it; digits ride `.alpaca-diffnum` color with a text-node
+  restate, since a theme rule directly on `text` beats node-inherited).
+  The paned divider is `paned.alpaca-diffpaned > separator`: a 2px #2b3448
+  bar centered in the shared 6px grabbable gutter. The standalone merged h
+  bar (Task 3) is styled by INHERITING the reference v bar's css classes
+  (copied at open_diff, "vertical"→"horizontal": the sw's overlay machinery
+  puts `overlay-indicator` on them and Breeze styles by class; a bare
+  Scrollbar paints Breeze's classic light trough). Probe capture rig:
+  `ALPACA_PROBE_S2_HOLD=N` parks the chain after step N-1 with the diff page
+  open (use 5); capture = chromium headless `--screenshot` against
+  gtk4-broadwayd's http port (display+8080) — spectacle 6.7.5 now silently
+  no-ops (rc=0, no file, no output) and KWin's ScreenShot2 is portal-gated
+  (`NoAuthorized`) on this build; `ALPACA_PROBE_S2` must be a wsA-CONTAINING
+  path (wsB = name-replace, not the parent /tmp/s2probe — wrong dir =
+  diff-presence FAIL + zero commits).
 
 ## Persistence schema
 

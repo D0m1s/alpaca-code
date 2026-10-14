@@ -197,7 +197,28 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
 tab .alpaca-tabname.alpaca-deleted, tab:checked .alpaca-tabname.alpaca-deleted {
     font-style: italic; color: #5a6375; }
 /* --- side-by-side diff pages (spec §3) --- */
-.alpaca-diffsep { min-width: 1px; background: #1c2230; }
+/* the panes' unpainted text areas (user 2026-10-14: "the line indicators are
+   white"): the number panes carry no style scheme (plain row-number buffers)
+   and the untagged text-node background paints the theme's light default in
+   both panes. Paint the text node itself — tag tints + scheme styles render
+   OVER it, so only the unpainted regions change. */
+.alpaca-mono text { background-color: #0d1017; }
+/* number columns: dim digits, breadcrumb tone (node + text node: a theme
+   rule directly on `text` beats a node-inherited color) */
+.alpaca-diffnum, .alpaca-diffnum text { color: #5a6375; }
+/* the diff split's divider: the global paned rule paints a 6px TRANSPARENT
+   gutter — invisible between two same-colour panes (user 2026-10-14: "the
+   gap/bar in the middle is gone"). The old 1px alpaca-diffsep look returns
+   as a centred 2px #2b3448 bar (the app's raised hairline tone) over the
+   6px grabbable width. */
+paned.alpaca-diffpaned > separator {
+    background: linear-gradient(to right,
+        transparent 0px, transparent 2px, #2b3448 2px, #2b3448 4px,
+        transparent 4px, transparent 6px);
+}
+/* (the 1px alpaca-diffsep separator box is gone — the split is a GtkPaned
+   now and app.css's global paned > separator rule paints its grabbable 6px
+   gutter; no wide_handle, the diff divider stays compact) */
 .alpaca-diffchipm,.alpaca-diffchipa,.alpaca-diffchipu,.alpaca-diffchipd,.alpaca-diffchipr {
     font-size: 10px; font-weight: 700; }
 .alpaca-diffchipm { color: #f2c94c; }
