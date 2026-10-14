@@ -1,15 +1,15 @@
 // Right panel: search + lazily expanded file tree + status row (file count; git
 // widgets land in S2's GitPanel).
 //
-// Tree invariant (measured on the python build, carried over): never mutate the
+// Tree invariant (measured): never mutate the
 // store under an EXPANDED row — the child fill that used to run inside
 // row-expanded made the view collapse itself. Children load from disk on every
 // activation-expand of a collapsed row, before expand_row fires. Open state
-// lives in `_open` (signal transitions are truthful; the view's row_expanded()
+// lives in `open` (signal transitions are truthful; the view's row_expanded()
 // readback is deprecated and stale after mutations).
 
-// The module's whole API surface is the TreeModel/CellRenderer stack the python
-// app uses — deprecated-since-4.10, functional and unpinned by gtk-rs replacement
+// The module's whole API surface is the TreeModel/CellRenderer stack —
+// deprecated-since-4.10, functional and unpinned by gtk-rs replacement
 // APIs. One blanket allow; Task 9's sweep re-runs the warning check.
 #![allow(deprecated)]
 
@@ -54,14 +54,14 @@ pub fn scan_dir(path: &Path) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let rd = match std::fs::read_dir(path) {
         Ok(rd) => rd,
-        Err(_) => return out, // vanished workspace: empty, like python's OSError swallow
+        Err(_) => return out, // vanished workspace: swallow the error, return empty
     };
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if SKIP_DIRS.contains(&name.as_str()) {
             continue;
         }
-        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false); // OSError → skipped row
+        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false); // stat error → not a dir
         out.push((name, is_dir));
     }
     out.sort_by(|a, b| {
@@ -78,7 +78,7 @@ pub fn scan_project(root: &Path, needle: &str, cap: usize) -> Vec<String> {
     m
 }
 
-// ponytail: full walk; index/cache if trees get huge (matches python's own note)
+// ponytail: full walk; index/cache if trees get huge
 fn walk(base: &Path, root: &Path, needle: &str, cap: usize, m: &mut Vec<String>) {
     let mut dirs = Vec::new();
     let mut files = Vec::new();
@@ -98,12 +98,12 @@ fn walk(base: &Path, root: &Path, needle: &str, cap: usize, m: &mut Vec<String>)
         }
         Err(_) => return,
     }
-    // os.walk order: base's files are matched before the walk descends —
-    // the cap truncates the same subset of matches python's does
+    // files here are matched before the walk descends —
+    // the cap truncates in that same order
     files.sort();
     let lower = needle.to_lowercase();
     for f in files {
-        let contains = f.to_lowercase().contains(&lower); // "" is in everything, like python
+        let contains = f.to_lowercase().contains(&lower); // "" matches everything
         if contains {
             let abs = base.join(&f);
             let rel = abs.strip_prefix(root).unwrap_or(&abs).to_string_lossy().replace('\\', "/");
@@ -166,7 +166,7 @@ mod tests {
     }
 }
 
-// ---- HoverTree (treehover.py) — hover-band TreeView -----------------------
+// ---- HoverTree — hover-band TreeView --------------------------------------
 //
 // GTK4 tree rows expose no :hover state: gtktreeview folds the widget's own
 // state into EVERY row's background paint — a `treeview:hover` CSS rule would
@@ -179,7 +179,7 @@ mod tests {
 use crate::treehover::HoverTree;
 
 
-// ---- FileTree component (filetree.py:64-541 minus git) --------------------
+// ---- FileTree component ----------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirEv {
@@ -226,7 +226,7 @@ pub struct FileTree {
     root: Option<PathBuf>,
     store: gtk::TreeStore,
     view: HoverTree,
-    open: HashSet<String>,       // _open: currently expanded abs paths
+    open: HashSet<String>,       // currently expanded abs paths
     monitors: Vec<gio::FileMonitor>,
     monitored: HashSet<String>,  // dirs with a live monitor (cap)
     saved_tree: Option<(PathBuf, HashSet<String>, f64)>,
@@ -269,13 +269,13 @@ impl Component for FileTree {
         view.set_model(Some(&store));
         view.set_headers_visible(false);
         view.set_activate_on_single_click(true); // single click = open/toggle
-        #[allow(deprecated)] // gtk_tree_view_set_show_expanders deprecated 4.10; python calls it too
+        #[allow(deprecated)] // gtk_tree_view_set_show_expanders deprecated 4.10
         view.set_show_expanders(false);          // our own chevron cell, mock-style
         view.set_tooltip_column(1);              // ellipsized names: hover shows the full path
         view.set_level_indentation(16);          // indent: 8 + 16·depth
         view.set_css_classes(&["alpaca-tree"]);
 
-        // cells packed in python's order (filetree.py:137-161); text cell LAST,
+        // cells packed in this order; text cell LAST,
         // expand=True — pins chevron/badge/icon left against the indentation
         #[allow(deprecated)] // CellRenderers: live, unused-deprecation noise on this build
         let pix_chev = gtk::CellRendererPixbuf::new();
@@ -437,7 +437,7 @@ impl FileTree {    // ---- store helpers ---------------------------------------
     // ---- root / population ---------------------------------------------------
 
     /// store.clear + fresh scan rows; monitor/expansion state resets with the
-    /// rows they pointed at (filetree.py:_populate_root).
+    /// rows they pointed at.
     fn populate_root(&mut self) {
         self.store.clear();
         self.monitored.clear();
@@ -612,8 +612,7 @@ impl FileTree {    // ---- store helpers ---------------------------------------
 
     /// CREATED/DELETED/MOVED only. count first (DEBOUNCED: a burst — cargo
     /// builds churn monitor events — coalesces into one walk; one full walk
-    /// per event sat on the UI thread, python did the same), then the
-    /// collapsed/open gates.
+    /// per event sat on the UI thread), then the collapsed/open gates.
     fn dir_changed(&mut self, parent: &str, file: Option<&PathBuf>, ev: DirEv, sender: &ComponentSender<Self>) {
         self.count_gen += 1;
         let g = self.count_gen;

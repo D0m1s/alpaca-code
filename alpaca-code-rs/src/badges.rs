@@ -1,5 +1,4 @@
-//! Icon pipeline: pixbuf surface for tree cells + cairo text chips (python
-//! `alpaca_code/badges.py` minus `icon()` — vector widgets are the S3 port).
+//! Icon pipeline: pixbuf surface for tree cells + cairo text chips.
 //! WIDGET icons live in vector.rs (VecIcon paintables, S3); TREE-CELL /
 //! tab-badge pixbufs are still rasterized here — CellRendererPixbuf has no
 //! paintable property (CLAUDE.md).
@@ -17,7 +16,7 @@ use std::sync::Mutex;
 
 pub const SIZE: i32 = 16;
 
-/// One rasterization per (name, size), like python's `_SVGS`. Caches the
+/// One rasterization per (name, size). Caches the
 /// straight-alpha RGBA bytes (Pixbuf itself is !Send).
 #[derive(Clone)]
 struct PixbufBytes {
@@ -157,7 +156,7 @@ pub fn blank_pixbuf() -> Pixbuf {
     pix
 }
 
-/// gitview status-letter tile (python badges.py letter_tile) — S2 consumer;
+/// gitview status-letter tile — S2 consumer;
 /// exercised by the test below until S2 lands.
 pub fn letter_pixbuf(letter: &str, hexcol: &str) -> Option<Pixbuf> {
     render(letter, hexcol, Some(&tile_bg(hexcol)))
@@ -198,7 +197,7 @@ fn is_lower(label: &str) -> bool {
     label.chars().any(char::is_lowercase) && !label.chars().any(char::is_uppercase)
 }
 
-/// Chip/glyph render at the exact display size (python badges.py:_render).
+/// Chip/glyph render at the exact display size.
 /// NO supersampling — a 4× supersample crushed back to 16px merged bold
 /// strokes into unreadable mush ("TS" read as "15", probe-measured); Cairo's
 /// own antialiasing at 1:1 keeps the glyphs legible.
@@ -279,7 +278,7 @@ fn unpremultiply(mut surf: ImageSurface) -> PixbufBytes {
         let dst = row * w * 4;
         for i in 0..w {
             let (b, g, r, a) = (src[4 * i], src[4 * i + 1], src[4 * i + 2], src[4 * i + 3]);
-            // premultiplied → straight, clamped (python badges.py:174-176)
+            // premultiplied → straight, clamped
             let scale = |v: u8| ((v as u32 * 255) / a as u32) as u8;
             let (r, g, b) = match a {
                 0 => (0, 0, 0),

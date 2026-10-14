@@ -1,10 +1,10 @@
-//! vector.rs — vector.py port (S3): `data/icons/*.svg` parsed into Gsk paths,
+//! vector.rs (S3) — `data/icons/*.svg` parsed into Gsk paths,
 //! drawn as render nodes through a Gdk.Paintable subclass. One parse per file
 //! (frozen art, single source of truth); intrinsic size = round(viewBox units)
 //! so GtkImage allocates the icon 1:1 to the display grid, and GSK tessellates
 //! per frame in device pixels — no pre-rasterized pixbuf in the widget loop
 //! (the double resample that blurred the old pipeline, CLAUDE.md 2026-10-04).
-//! Tree cells and editor tab badges KEEP pixbuf/Texture (python parity).
+//! Tree cells and editor tab badges KEEP pixbuf/Texture.
 
 use crate::badges;
 use gtk4::gdk;
@@ -15,8 +15,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
-/// One drawable shape after the inherited-attrs walk (python `_walk` tuple:
-/// "paint d, fill, stroke, width, cap, join").
+/// One drawable shape after the inherited-attrs walk
+/// (paint: d, fill, stroke, width, cap, join).
 #[derive(Clone)]
 pub(crate) struct RawShape {
     pub d: String,
@@ -60,8 +60,8 @@ type ParsedIcon = (f32, Vec<RawShape>);
 
 /// Reads `name="value"` pairs starting after the tag name; returns the pairs,
 /// whether the tag self-closed (`/>`), and the index past `>`. Attribute values
-/// are the quoting char that starts them (art is double-quoted; python's ET
-/// accepted both).
+/// are the quoting char that starts them (art is double-quoted; both quote
+/// kinds are accepted).
 fn read_attrs(text: &str, at: usize) -> Option<(Attrs, bool, usize)> {
     let b = text.as_bytes();
     let mut i = at;
@@ -100,26 +100,26 @@ fn read_attrs(text: &str, at: usize) -> Option<(Attrs, bool, usize)> {
     }
 }
 
-/// svg viewBox units + shapes via an inherited-attrs walk (python `_walk`:
-/// per-element overrides of fill/stroke/stroke-width/stroke-linecap/
+/// svg viewBox units + shapes via an inherited-attrs walk (per-element
+/// overrides of fill/stroke/stroke-width/stroke-linecap/
 /// stroke-linejoin, everything below inheriting the merged state).
 ///
-/// Art-only XML subset: svg/g/path/rect/circle. Element semantics match the
-/// python walker over ElementTree (`for child in el` reaches defs children
-/// too — parity; the art has none). `<polygon>` is python-supported but the
-/// art never uses it — unsupported here and SAYS SO (the golden count test
-/// fails visibly if art ever uses it).
+/// Art-only XML subset: svg/g/path/rect/circle. Element semantics follow the
+/// walker's child iteration (defs children are reached too; the art has
+/// none). `<polygon>` is real SVG the art never uses — unsupported here and
+/// SAYS SO (the golden count test fails visibly if art ever uses it).
 ///
 /// Attribute values are double-quoted (frozen-art rule). viewBox read from the
-/// root svg only, exactly python's load(): 4 numbers → units = vb[2], else the
-/// width attr, else default 16. (python's float() would crash loudly on a
-/// "16px" width string; rust degrades to the default — art uses plain numbers.)
+/// root svg only: 4 numbers → units = vb[2], else the
+/// width attr, else default 16. A suffixed width string ("16px") is unparsable
+/// and falls back to the default — art uses plain numbers.
 pub(crate) fn walk(text: &str) -> Option<(f32, Vec<RawShape>)> {
     let b = text.as_bytes();
     let n = b.len();
     let mut shapes: Vec<RawShape> = Vec::new();
     let mut ctx: Vec<Ctx> = vec![Ctx::default()];
-    // (tag, pushed_ctx) — shapes have no children (python recursion scope) but
+    // (tag, pushed_ctx) — shape elements have no children (no inherited ctx
+    // of their own) but
     // a NON-self-closed `<path></path>` still needs its matching close pop; a
     // bare String stack would pop the enclosing group's ctx on that closer and
     // corrupt sibling inheritance
@@ -196,8 +196,8 @@ pub(crate) fn walk(text: &str) -> Option<(f32, Vec<RawShape>)> {
             "rect" => {
                 let (x, y) = (num(&attrs, "x", 0.0), num(&attrs, "y", 0.0));
                 let (w, h) = (num(&attrs, "width", 0.0), num(&attrs, "height", 0.0));
-                // python's `rx or ry` quirk (rrect_d caller): rx="0" falls
-                // through to the ry value
+                // rx="0" falls
+                // through to the ry value (rx-or-ry fallback)
                 let rx = get("rx").and_then(|v| v.trim().parse::<f64>().ok())
                     .filter(|v| *v != 0.0)
                     .unwrap_or_else(|| num(&attrs, "ry", 0.0));
@@ -227,14 +227,14 @@ pub(crate) fn walk(text: &str) -> Option<(f32, Vec<RawShape>)> {
         };
         if _self_closing {
             // shapes already emitted above; a self-closed group has no
-            // children to inherit — track nothing (python: leaf element)
+            // children to inherit — track nothing (leaf element)
         } else if group {
             open.push((name, true));
             ctx.push(merged);
         } else {
             open.push((name, false));
         }
-        // python scope law: shape elements never push inheritance — siblings
+        // scope law: shape elements never push inheritance — siblings
         // of the same group read the GROUP's ctx, which stays on the stack
     }
     Some((units, shapes))
@@ -244,7 +244,7 @@ fn rrect_d(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
     let r = r.min(w / 2.0).min(h / 2.0);
     let k = 0.5523 * r;
     let (x2, y2) = (x + w, y + h);
-    // python chain, positional: M{x+r} {y}L{x2-r} {y}C(x2-r+k) {y} (x2) (y+r-k)
+    // chain, positional: M{x+r} {y}L{x2-r} {y}C(x2-r+k) {y} (x2) (y+r-k)
     // (x2) {y+r}L{x2} {y2-r}C(x2) (y2-r+k) (x2-r+k) {y2} (x2-r) {y2}L{x+r} {y2}
     // C(x+r-k) {y2} (x) (y2-r+k) (x) {y2-r}L{x} {y+r}C(x) (y+r-k) (x+r-k) {y}
     // (x+r) {y}Z — M2 L2 C6 ×4 = 34 numbers
@@ -291,7 +291,7 @@ fn join_of(s: &str) -> gsk::LineJoin {
     match s { "round" => gsk::LineJoin::Round, "bevel" => gsk::LineJoin::Bevel, _ => gsk::LineJoin::Miter }
 }
 
-/// python load's shape-build loop: parse each d, skip unparsable paths and
+/// Shape-build loop: parse each d, skip unparsable paths and
 /// shapes that paint nothing (fill AND stroke both None).
 fn build(name: &str, raw: &[RawShape]) -> Vec<Shape> {
     let mut out = Vec::new();
@@ -355,12 +355,12 @@ impl PaintableImpl for VecIconImp {
         if s <= 0.0 {
             return;
         }
-        // python do_snapshot: aspect-fit — translate so the units box centers
+        // do_snapshot: aspect-fit — translate so the units box centers
         // in the bounds, then scale to fill the shorter side exactly
         let Some(sn) = snapshot.downcast_ref::<gtk4::Snapshot>() else {
             // GTK snapshots ARE Gsk-recording in practice; a non-gsk snapshot
             // cannot draw fill/stroke nodes anyway — same visual as an empty
-            // drawable, no panic (python would AttributeError here)
+            // drawable, no panic
             return;
         };
         sn.translate(&graphene::Point::new((w - s * units) / 2.0, (h - s * units) / 2.0));
@@ -376,7 +376,7 @@ impl PaintableImpl for VecIconImp {
     }
 
     fn flags(&self) -> gdk::PaintableFlags {
-        // python: Gdk.PaintableFlags.SIZE | CONTENTS — same two bits; this
+        // the wanted pair is SIZE | CONTENTS — same two bits; this
         // build's C enum carries only the STATIC_ members (measured:
         // gdkpaintable.h 4.22 — SIZE/CONTENTS no longer exist)
         gdk::PaintableFlags::STATIC_SIZE | gdk::PaintableFlags::STATIC_CONTENTS
@@ -398,7 +398,7 @@ fn load(name: &str) -> Option<(f32, Vec<RawShape>)> {
 }
 
 /// Cached one-time SVG walk for data/icons/name — None on missing/broken
-/// (call sites keep symbolic fallbacks; python parity). The plan's cache held
+/// (call sites keep symbolic fallbacks). The plan's cache held
 /// VecIcon OBJECTS, but glib Object wrappers and gsk::Path are !Send — a
 /// static Mutex can't hold either — so the cache holds the parse instead and
 /// each call builds a fresh (cheap) VecIcon over the same parsed shapes.

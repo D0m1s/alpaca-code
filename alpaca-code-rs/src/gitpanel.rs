@@ -1,5 +1,5 @@
-//! GitPanel card (python filetree.py:29-373 — FileBrowser with git modes):
-//! the file tree, the changes view, the branch pill and a status row behind
+//! GitPanel card — the file browser with git modes: the file tree, the
+//! changes view, the branch pill and a status row behind
 //! one chrome. The tree's chrome was trimmed here (Task 6); this file owns
 //! head/search/mode-tabs/stack/status-row and the git status plumbing.
 
@@ -83,7 +83,7 @@ pub enum GitPanelCommand {
         ahead: usize,
     },
     /// the sync path's flight (set_root, HEAD monitor, pulse end, window
-    /// focus): python ran one blocking `git status` + `ahead` here; a slow or
+    /// focus): this used to be one blocking `git status` + `ahead`; a slow or
     /// hung git no longer freezes focus-in / mode entry. A workspace switch
     /// mid-flight drops the landing (the probe's root guard).
     StatusLanded {
@@ -98,11 +98,11 @@ pub struct GitPanel {
     root: Option<PathBuf>,
     /// the card mode — "tree" | "changes"
     mode: &'static str,
-    /// a commit/push flight owns the row (python _git_busy)
+    /// a commit/push flight owns the row
     git_busy: bool,
     probe_busy: bool,
     changes_busy: bool,
-    /// the status pulse's generation counter (python _pulse_id); SourceId::
+    /// the status pulse's generation counter; SourceId::
     /// remove is forbidden (timer law) and cancel happens BY GENERATION
     pulse_gen: u64,
     head_mon: Option<gio::FileMonitor>,
@@ -166,7 +166,7 @@ impl Component for GitPanel {
             BranchMenuOutput::Status(kind, text) => snd_br.input(GitPanelMsg::ChildStatus(kind, text)),
         });
 
-        // ---- card chrome (python 89-195 values verbatim)
+        // ---- card chrome
         let head = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
@@ -195,7 +195,7 @@ impl Component for GitPanel {
             .margin_bottom(6)
             .build();
         // 30px floor: the entry renders ~36 (Breeze searchentry min, swept to
-        // the floor in main.py CSS) — the request only keeps it honest below that
+        // the floor in the app CSS) — the request only keeps it honest below that
         entry.set_size_request(-1, 30);
         let snd_eg = sender.clone();
         entry.connect_search_changed(move |e| {
@@ -207,7 +207,7 @@ impl Component for GitPanel {
         // text; set_mode moves the `alpaca-on` class as the selection. Full
         // width: the hairline under this strip is the box's own border-bottom —
         // margins sit OUTSIDE the border box (measured breadcrumb gotcha), so
-        // the inset is padding and margin_top only (python comment verbatim).
+        // the inset is padding and margin_top only.
         let btns = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(10)
@@ -235,8 +235,7 @@ impl Component for GitPanel {
 
         // mode host (§1): zero-transition swap between the tree and the changes
         // view. vexpand on the Stack — GtkBox gives non-expanding children only
-        // their minimum, and the card must fill below the tab row (python
-        // comment verbatim)
+        // their minimum, and the card must fill below the tab row
         let stack = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::None)
             .vexpand(true)
@@ -254,7 +253,7 @@ impl Component for GitPanel {
             .margin_bottom(0)
             .css_classes(["alpaca-statusbar"])
             .build();
-        bar.append(branch.widget()); // python appends branchbtn FIRST
+        bar.append(branch.widget()); // branchbtn rides FIRST in the row
         let dot = gtk::Box::builder()
             .css_classes(["alpaca-status-dot"])
             .valign(gtk::Align::Center)
@@ -286,7 +285,7 @@ impl Component for GitPanel {
         root.append(&stack);
         root.append(&bar);
 
-        // ---- live git probe (python _git_tick recurrence; timer law — ms form)
+        // ---- live git probe (2s recurrence; timer law — ms form)
         // every 2s the porcelain status runs in a worker thread and lands on
         // the UI thread — covers agent edits anywhere in the tree (dir monitors
         // only see dirs we've opened). Skipped while a flight owns the row or a
@@ -338,7 +337,7 @@ impl Component for GitPanel {
             GitPanelMsg::PulseFired(g) => {
                 if g == self.pulse_gen {
                     // End of the ok pulse: stop owning the row, re-sync to the
-                    // real state (python _pulse; the gen check discards stale ids)
+                    // real state (the gen check discards stale ids)
                     self.refresh_status(&sender);
                 }
             }
@@ -365,14 +364,14 @@ impl Component for GitPanel {
         match cmd {
             GitPanelCommand::ProbeLanded { root, branch, raw, ahead } => {
                 self.probe_busy = false;
-                // python _git_landed guard — same three terms; root compares as
+                // landing guard — same three terms; root compares as
                 // String vs Option: map the stored path first
                 let cur = self.root.as_ref().map(|p| p.to_string_lossy().into_owned());
                 if cur.as_deref() != Some(root.as_str()) || self.git_busy || self.changes_busy {
                     return;
                 }
                 self.paint_status(branch.as_deref(), raw.as_ref().map(|r| r.len()));
-                // python 351-355 order: paint, then the hook, then the open view
+                // order: paint, then the hook, then the open view
                 if let Some(raw) = raw {
                     let _ = sender.output(GitPanelOutput::GitChanged(raw.clone()));
                     if self.mode == "changes" {
@@ -382,14 +381,14 @@ impl Component for GitPanel {
             }
             GitPanelCommand::StatusLanded { root, branch, raw, ahead } => {
                 // workspace switched mid-flight → drop (the probe landing's root
-                // guard; python serialized everything so this couldn't happen)
+                // guard)
                 let cur = self.root.as_ref().map(|p| p.to_string_lossy().into_owned());
                 if cur.as_deref() != Some(root.as_str()) {
                     return;
                 }
                 self.paint_status(branch.as_deref(), raw.as_ref().map(|r| r.len()));
                 // git_busy NOT a drop condition: paint_status silently keeps the
-                // flight-owned row while the outputs still fire (sync parity)
+                // flight-owned row while the outputs still fire
                 if let Some(raw) = raw {
                     let _ = sender.output(GitPanelOutput::GitChanged(raw.clone()));
                     if self.mode == "changes" {
@@ -405,31 +404,31 @@ impl Component for GitPanel {
     }
 }
 
-// ---- git status plumbing (python 197-356) --------------------------------
+// ---- git status plumbing ---------------------------------------------------
 
 impl GitPanel {
-    /// python set_root (198-215) step for step.
+    /// set_root, step for step.
     fn set_root(&mut self, root: PathBuf, sender: &ComponentSender<Self>) {
         if let Some(m) = self.head_mon.take() {
-            m.cancel(); // python cancels its monitors at set_root top
+            m.cancel(); // monitors cancel at set_root top
         }
         self.root = Some(root.clone());
-        // fires EntryChanged("") queued — python RELIES on that same fire (its
-        // search-changed ran synchronously; the filetree's own queued Search("")
-        // repeats are python parity — see its set_root comment)
+        // fires EntryChanged("") queued — rely on that same fire (the old
+        // search-changed ran synchronously; the filetree's own queued
+        // Search("") repeats match — see its set_root comment)
         self.entry.set_text("");
         self.ft.emit(FileTreeMsg::SetRoot(root.clone())); // populate + count
         self.set_mode("tree"); // a fresh workspace opens on the file tree (spec §1)
         self.changes.emit(GitViewMsg::SetRoot(root.clone()));
-        // python's branchmenu root attr was NEVER fed (latent bug in
-        // branchmenu.py) — T4's fix lands here
+        // fixed latent bug: the branchmenu root input was NEVER fed —
+        // T4's fix lands here
         self.branch.emit(BranchMenuMsg::SetRoot(Some(root.clone())));
         let head = root.join(".git").join("HEAD");
         if head.is_file() {
-            // python _head_mon's changed → _refresh_status; Rust's single
+            // the HEAD monitor's changed → refresh; Rust's single
             // RefreshGit input covers monitor + focus (T7 wires the focus arm)
             // editor's watcher law: absent/unwatchable → no monitor; the 2s
-            // probe keeps the status honest (python would traceback — degrade)
+            // probe keeps the status honest (degrade, never fail)
             if let Ok(mon) = gio::File::for_path(&head)
                 .monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
             {
@@ -441,11 +440,11 @@ impl GitPanel {
         self.refresh_status(sender);
     }
 
-    /// python _on_search routing: tree mode filters the tree; changes mode
-    /// applies the needle to the EXISTING rows — python filetree.py:_on_search
-    /// routes changes.filter(text) only, no re-fetch; the mode-entry refresh
+    /// Search routing: tree mode filters the tree; changes mode
+    /// applies the needle to the EXISTING rows — filter(text) only,
+    /// no re-fetch; the mode-entry refresh
     /// lives in set_mode (review fix-2: a `git status` + `rev-list` sync per
-    /// keystroke on the UI thread is a python-behavioral deviation).
+    /// keystroke on the UI thread is a behavioral deviation).
     fn entry_changed(&mut self, text: &str) {
         if self.mode == "tree" {
             self.ft.emit(FileTreeMsg::Search(text.to_string()));
@@ -454,7 +453,7 @@ impl GitPanel {
         }
     }
 
-    /// python _git_tick gate + probe thread (flight here).
+    /// The probe tick's gate + probe thread (flight here).
     fn probe_tick(&mut self, sender: &ComponentSender<Self>) {
         if self.probe_busy || self.git_busy || self.changes_busy {
             return;
@@ -479,7 +478,7 @@ impl GitPanel {
         });
     }
 
-    /// python show_git_status (221-247): busy → spinner + phase text; ok →
+    /// show_git_status: busy → spinner + phase text; ok →
     /// green dot pulse, the row re-syncs itself after 2s; err → red dot + the
     /// error's first line, full git output as a tooltip. The busy guard keeps
     /// mid-flight refreshes (HEAD monitor, mode switches) from clobbering the
@@ -488,8 +487,8 @@ impl GitPanel {
         self.pulse_gen += 1; // cancel BY GENERATION: a fresh state outranks a stale pulse
         let g = self.pulse_gen;
         self.git_busy = kind == GitStatusKind::Busy;
-        // python's allow = lambda: not self._git_busy re-evaluated per click —
-        // the rust port pushes the value on every status change (busy included,
+        // the gate used to be re-evaluated per click — here it pushes the
+        // value on every status change (busy included,
         // or the gate would stay open mid-flight)
         self.branch.emit(BranchMenuMsg::Gate(!self.git_busy));
         if kind == GitStatusKind::Busy {
@@ -527,11 +526,11 @@ impl GitPanel {
     }
 
     /// Sync path (set_root, HEAD monitor, pulse end, window focus) as a
-    /// command flight — python ran one blocking `git status` (10s) + `ahead`
-    /// (5s) on the UI thread here; the shape is the probe flight's. (No seq
+    /// command flight — this used to be one blocking `git status` (10s) +
+    /// `ahead` (5s) on the UI thread; the shape is the probe flight's. (No seq
     /// token: two overlapping refreshes may land out of order — the row
-    /// self-heals on the next 2s probe, and python's serialize-everything
-    /// ordering bought that at a full UI freeze.)
+    /// self-heals on the next 2s probe; serializing everything would trade
+    /// that risk for a full UI freeze.)
     fn refresh_status(&mut self, sender: &ComponentSender<Self>) {
         let Some(root) = self.root.as_ref().map(|p| p.to_string_lossy().into_owned()) else {
             return;
@@ -566,7 +565,7 @@ impl GitPanel {
         }
         self.git_label.set_tooltip_text(Some("")); // a past err's tooltip must not outlive the row's re-sync
         // count = porcelain rows (untracked listed per-file, -z -uall) — same
-        // number the changes view shows; one git call feeds both (python 305-307)
+        // number the changes view shows; one git call feeds both
         match dirty {
             None => {
                 self.git_label.set_text("");
@@ -585,7 +584,7 @@ impl GitPanel {
         }
     }
 
-    /// python _set_mode (257-282): swap the card between the file tree and the
+    /// set_mode: swap the card between the file tree and the
     /// changes view. Entering CHANGES re-syncs the list (§2 refresh trigger:
     /// view becomes active); the selected tab's css class holds it bright,
     /// hover brightens the idle one.
@@ -611,8 +610,8 @@ impl GitPanel {
             // the shared entry text survives the tab switch (and its view may
             // be displaced by the last search): a needle re-filters the tree, an
             // empty box restores the displaced sheet instead of leaving the
-            // last flat results stuck with no way back (python comments
-            // verbatim; the tree's Search("") = its populate+restore, one input)
+            // last flat results stuck with no way back (the tree's
+            // Search("") = its populate+restore, one input)
             let text = self.entry.text().to_string();
             self.ft.emit(FileTreeMsg::Search(text));
         }

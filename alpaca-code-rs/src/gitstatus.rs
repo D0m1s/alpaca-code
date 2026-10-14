@@ -1,5 +1,5 @@
-//! Git surface — branch/status/porcelain/diff/commit/push, python
-//! `alpaca_code/gitstatus.py` port. Pure (no gi imports): safe to run and test
+//! Git surface — branch/status/porcelain/diff/commit/push. Pure (no gi
+//! imports): safe to run and test
 //! displayless. Every call is `git -C root`; never raises (returns error states).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 pub type Row = (String, String);
 pub type Rows = Vec<Row>;
 
-/// Status-row vocabulary (python's on_status kinds) — consumed by
+/// Status-row vocabulary — consumed by
 /// gitview/branchmenu/gitpanel (S2 landed them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitStatusKind {
@@ -31,8 +31,7 @@ pub struct TreeRow {
 pub struct Hunk {
     pub lines: Vec<(char, String)>,
     /// 1-based file line of the hunk's @@ start, per side (from
-    /// `@@ -a +b @@` — dropped by the python port until the line-number
-    /// columns landed).
+    /// `@@ -a +b @@`).
     pub old_start: usize,
     pub new_start: usize,
 }
@@ -62,7 +61,7 @@ pub struct FlightOut {
 }
 
 // ------------------------------------------------------------------------------
-// subprocess runner — one shared helper, replaces python's six try/except blocks
+// subprocess runner — one shared helper
 // ------------------------------------------------------------------------------
 
 fn has_git(root: &str) -> bool {
@@ -73,7 +72,7 @@ fn clip400(s: &str) -> String {
     s.trim().chars().take(400).collect()
 }
 
-/// python `(stderr or stdout or fallback)` — raw, unstripped.
+/// `stderr or stdout or fallback` — raw, unstripped.
 fn either(r: &std::process::Output, fallback: &str) -> String {
     let se = String::from_utf8_lossy(&r.stderr).to_string();
     if !se.is_empty() {
@@ -86,11 +85,11 @@ fn either(r: &std::process::Output, fallback: &str) -> String {
     fallback.to_string()
 }
 
-/// subprocess.run(["git","-C",root,*args], capture_output, timeout) shape with
+/// Captured-output git -C root run with a timeout, with
 /// the pipe-deadlock fixed: stdout/stderr are drained to Vec on READER THREADS
 /// (plain try_wait polling with piped children fills the 64KiB pipes on big
 /// diffs). env GIT_TERMINAL_PROMPT=0 only when env_prompt (Command::env
-/// merges onto the inherited environ — exactly python's {**os.environ, …}).
+/// merges onto the inherited environ — it never replaces it).
 /// Timeout / spawn failure / kill → None; never panics.
 fn git_run(
     root: &str,
@@ -152,7 +151,7 @@ fn git_run(
 }
 
 // ------------------------------------------------------------------------------
-// branch surface · gitstatus.py 7-73
+// branch surface
 // ------------------------------------------------------------------------------
 
 pub fn branch_of(root: &str) -> Option<String> {
@@ -182,7 +181,7 @@ pub fn branches(root: &str) -> Option<Vec<String>> {
 
 fn _checkout(root: &str, args: &[&str]) -> (bool, String) {
     let Some(r) = git_run(root, args, true, Duration::from_secs(60)) else {
-        // python embeds the TimeoutExpired exception text; stable text here
+        // stable text here — no exception text embedded
         return (false, "git checkout failed: timed out".into());
     };
     if !r.status.success() {
@@ -201,7 +200,7 @@ pub fn switch(root: &str, name: &str) -> (bool, String) {
 
 /// `checkout -b` from HEAD (create + switch, user ruling). Git validates the
 /// name; the leading-dash guard keeps a "-force" request from being parsed as
-/// flags. python create_switch also strips whitespace around the name.
+/// flags. Surrounding whitespace around the name is stripped first.
 pub fn create_switch(root: &str, name: &str) -> (bool, String) {
     let name = name.trim();
     if name.is_empty() || name.starts_with('-') {
@@ -211,10 +210,10 @@ pub fn create_switch(root: &str, name: &str) -> (bool, String) {
 }
 
 // ------------------------------------------------------------------------------
-// changes view ops · gitstatus.py 75-156   (status() is DEAD in python — no port)
+// changes view ops
 // ------------------------------------------------------------------------------
 
-/// ^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ — python re.match, no end
+/// ^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ — match-at-start, no end
 /// anchor: everything after the closing "@@" is ignored.
 fn hunk_head(line: &str) -> Option<(usize, usize, usize, usize)> {
     fn num(s: &str) -> Option<(usize, &str)> {
@@ -384,7 +383,7 @@ pub fn parse_porcelain(stdout: &[u8]) -> Option<Rows> {
             continue;
         }
         let xy = &e[..2];
-        // XY+space are ASCII, so byte slicing [3..] == python code-point [3:]
+        // XY+space are ASCII, so byte slicing [3..] never splits a code point
         let path = &e[3..];
         if xy.as_bytes()[0] == b'R' {
             // -z format: ORIGINAL path is the next record
@@ -409,7 +408,7 @@ pub fn parse_porcelain(stdout: &[u8]) -> Option<Rows> {
         out.push((path.to_string(), chosen));
         i += 1;
     }
-    // python: sorted(set(out), key=lambda t: t[0]) — dedup + path sort
+    // dedup + path sort
     out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     out.dedup();
     Some(out)
@@ -428,7 +427,7 @@ pub fn changes(root: &str) -> Option<Rows> {
 }
 
 // ------------------------------------------------------------------------------
-// diff / commit / push · gitstatus.py 158-273
+// diff / commit / push
 // ------------------------------------------------------------------------------
 
 /// stdout or None; rc 1 counts (no-index/compare returns it on differences).
@@ -442,8 +441,8 @@ pub fn git_out(root: &str, args: &[&str], timeout_s: u64) -> Option<Vec<u8>> {
 
 /// (diff text, binary) for one path: worktree-vs-HEAD == the --only commit.
 /// Untracked, or a HEAD-less repo (`git diff HEAD` fails): --no-index vs
-/// /dev/null (all-added). Binary files → ("", True). empty root/rel → the
-/// python tuple directly (never None — the Option is the harness shape).
+/// /dev/null (all-added). Binary files → ("", True). empty root/rel → a
+/// ("", false) tuple directly (never None — the Option is the harness shape).
 //
 // huge unified context — Rider-style full-file sides: git emits the WHOLE
 // file as one hunk, every unchanged line rides a '=' row and already gets
@@ -489,7 +488,7 @@ pub fn commit(root: &str, paths: &[String], msg: &str) -> (bool, String) {
     // index; a path existing solely as a staged removal (git rm/mv/rename)
     // refuses `git add` (fatal pathspec, rc 128 measured) and needs no add —
     // the pathspec is already staged. Keep the FULL list for --only; add only
-    // what exists (lexists keeps a dangling symlink's typechange addable).
+    // what exists (the symlink_metadata check keeps a dangling symlink's typechange addable).
     let present: Vec<&String> = paths.iter().filter(|p| {
         std::path::Path::new(root).join(*p).symlink_metadata().is_ok()
     }).collect();
@@ -530,7 +529,7 @@ pub fn ahead(root: &str) -> usize {
     if !r.status.success() {
         return 0;
     }
-    // python: int(strip()) with ValueError → 0
+    // trimmed-int parse; unparsable → 0
     String::from_utf8_lossy(&r.stdout).trim().parse::<usize>().unwrap_or(0)
 }
 
@@ -565,6 +564,25 @@ pub fn push(root: &str) -> (bool, String) {
     (false, clip400(&err))
 }
 
+/// `git pull` — the no-upstream case has nothing sensible to bootstrap (a
+/// branch without tracking info may have nothing remote to pull); git's own
+/// error text surfaces. `_name` is ignored: the two-arg shape is the
+/// branchmenu op signature (switch/create/pull all share `start`).
+pub fn pull(root: &str, _name: &str) -> (bool, String) {
+    if !has_git(root) {
+        return (false, "Not a git repository".into());
+    }
+    let Some(r) = git_run(root, &["pull"], true, Duration::from_secs(120)) else {
+        return (false, "git pull failed: timed out".into());
+    };
+    if r.status.success() {
+        // fetch/merge progress output lives on stderr
+        return (true, clip400(&either(&r, "Pulled.")));
+    }
+    let err = either(&r, "").trim().to_string();
+    (false, clip400(&if err.is_empty() { "git pull failed".into() } else { err }))
+}
+
 pub fn commit_then_push(
     root: &str,
     paths: &[String],
@@ -592,7 +610,7 @@ pub fn commit_then_push(
 }
 
 // ------------------------------------------------------------------------------
-// changes tree grouping · gitstatus.py 274-313
+// changes tree grouping
 // ------------------------------------------------------------------------------
 
 struct Lev {
@@ -1011,6 +1029,44 @@ mod tests {
         assert!(ok);
         assert_eq!(ahead(p.to_str().unwrap()), 0);
         assert_eq!(push("/no/such/root"), (false, "Not a git repository".into()));
+    }
+
+    #[test]
+    fn pull_fast_forward_and_errors() {
+        // a repo with an upstream pulls the remote's advance (fast-forward);
+        // no-tracking and not-a-repo surface as (false, text)
+        let p = repo("pull");
+        let mut w2 = scratch("remote4");
+        let out = Command::new("git").arg("init").arg("--bare").arg("-q").arg("-b")
+            .arg("main").arg(w2.join("remote.git")).output().unwrap();
+        assert!(out.status.success());
+        w2 = w2.join("remote.git");
+        w(&p, "a.txt", "one\n");
+        git(&p, &["add", "."]);
+        git(&p, &["commit", "-q", "-m", "c1"]);
+        git(&p, &["remote", "add", "origin", w2.to_str().unwrap()]);
+        git(&p, &["push", "-q", "-u", "origin", "main"]);
+        // advance the remote, then pull it back into a clean clone
+        w(&p, "a.txt", "one\ntwo\n");
+        git(&p, &["commit", "-qam", "c2"]);
+        git(&p, &["push", "-q", "origin", "main"]);
+        let side = scratch("pullside");
+        let out = Command::new("git").arg("clone").arg("-q")
+            .arg(w2.to_str().unwrap()).arg(side.to_str().unwrap()).output().unwrap();
+        assert!(out.status.success());
+        let (ok, text) = pull(side.to_str().unwrap(), "");
+        assert!(ok, "fast-forward pull failed: {text}");
+        assert_eq!(std::fs::read_to_string(side.join("a.txt")).unwrap(), "one\ntwo\n");
+        // branch without tracking info → git's own error text
+        let lone = repo("pulllone");
+        w(&lone, "b.txt", "base\n");
+        git(&lone, &["add", "."]);
+        git(&lone, &["commit", "-q", "-m", "b1"]);
+        let (ok, text) = pull(lone.to_str().unwrap(), "");
+        assert!(!ok, "no-tracking pull must fail");
+        assert!(text.to_lowercase().contains("tracking"),
+                "git's no-tracking text surfaced: {text}");
+        assert_eq!(pull("/no/such/root", ""), (false, "Not a git repository".into()));
     }
 
     #[test]

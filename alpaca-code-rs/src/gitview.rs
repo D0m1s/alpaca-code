@@ -1,8 +1,8 @@
 //! CHANGES view: git-change tree (group_tree rows) with checkboxes and a
-//! commit bar — python gitview.py port. Pure helpers testable displayless;
+//! commit bar. Pure helpers testable displayless;
 //! widget-layer is gated by the T8 probe (S1 precedent).
 //!
-//! The store is REBUILT per refresh (python gitview.py:1-4, the filetree
+//! The store is REBUILT per refresh (the filetree
 //! invariant: value-only updates are safe under expanded rows, structural
 //! mutation collapses them — surgical patching is off the table here).
 
@@ -40,7 +40,7 @@ pub fn strip_icons(name: &str, is_dir: bool) -> (Option<gdk_pixbuf::Pixbuf>, Opt
     (art, fallback)
 }
 
-/// python LETTER_COLOR (gitview.py:17-21) — M amber, A/U green, D red,
+/// Letter colors — M amber, A/U green, D red,
 /// R blue (+T typechange), C conflict red (I1).
 pub fn letter_color(letter: &str) -> &'static str {
     match letter {
@@ -53,7 +53,7 @@ pub fn letter_color(letter: &str) -> &'static str {
     }
 }
 
-/// python _filtered — name/rel substring, case-insensitive; empty needle →
+/// Filter — name/rel substring, case-insensitive; empty needle →
 /// the same Vec (identity).
 pub fn filtered(rows: &Rows, needle: &str) -> Rows {
     let n = needle.trim().to_ascii_lowercase();
@@ -69,7 +69,7 @@ pub fn filtered(rows: &Rows, needle: &str) -> Rows {
         .collect()
 }
 
-/// python _on_toggled's set law, decision-extracted: f flips; d/s use the
+/// Toggle set law, decision-extracted: f flips; d/s use the
 /// visible-descendant law (all-under ⇒ clear, else add-all). Dir with no
 /// visible descendants → |= ∅ (Some, unchanged). Unknown kind → None.
 pub fn toggled_checked(
@@ -107,7 +107,7 @@ pub fn toggled_checked(
     Some(out)
 }
 
-// store column indexes (12 cols — column i = python row list index i)
+// store column indexes (column i = the row layout index i)
 const COL_NAME: i32 = 0;
 const COL_REL: i32 = 1;
 const COL_KIND: i32 = 2;
@@ -152,7 +152,7 @@ pub enum GitViewOutput {
 pub enum GitViewCommand {
     Phase,
     Landed(FlightOut),
-    /// the refresh flight's landing (python `refresh` was sync on the UI
+    /// the refresh flight's landing (the refresh used to run sync on the UI
     /// thread — a slow/hung git no longer freezes CHANGES-mode entry or
     /// commit-land re-sync). seq = newest request wins; root = stale-flight
     /// drop on a workspace switch.
@@ -199,7 +199,7 @@ impl Component for ChangesView {
     }
 
     fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        // python gitview.py:33-42 — store columns, 12 in python; +2 here (rust
+        // store columns — 12 base +2 here (rust
         // only): WORKSPACE's symbolic fallback for artless exts (filetree law)
         let store = gtk::TreeStore::new(&[
             glib::Type::STRING,                // 0 name
@@ -222,7 +222,7 @@ impl Component for ChangesView {
         view.set_model(Some(&store));
         view.set_headers_visible(false);
         view.set_activate_on_single_click(true);
-        view.set_show_expanders(false); // python-exact; our own chevron cell
+        view.set_show_expanders(false); // our own chevron cell draws the affordance
         view.set_level_indentation(16);
         view.set_tooltip_column(1);
 
@@ -232,7 +232,7 @@ impl Component for ChangesView {
             .build();
         root.append(&tree_page);
 
-        // ONE merged column (gitview.py:59-96): all visual cells pack into one
+        // ONE merged column: all visual cells pack into one
         // tree column so level indentation shifts the whole strip together;
         // set_expand(true) on the COLUMN — an ellipsized cell's natural is its
         // minimum, slack must ride the column (spec §29)
@@ -285,7 +285,7 @@ impl Component for ChangesView {
         view.append_column(&col);
         view.set_css_classes(&["alpaca-tree"]);
 
-        // commit bar (python 162-186)
+        // commit bar
         let bar = gtk::Box::new(gtk::Orientation::Vertical, 6);
         bar.set_margin_start(12);
         bar.set_margin_end(12);
@@ -314,7 +314,7 @@ impl Component for ChangesView {
         });
         // the expand-state walker runs on the RowExpanded/RowCollapsed inputs —
         // Activated's dir branch only calls expand/collapse_row and the SIGNAL
-        // owns the bookkeeping (python-exact)
+        // owns the bookkeeping
         let snd = sender.clone();
         view.connect_row_expanded(move |_, _, path| {
             snd.input(GitViewMsg::RowExpanded(path.clone()));
@@ -365,7 +365,7 @@ impl Component for ChangesView {
                 self.closed.clear(); // new repo: remembered collapses are stale
                 self.refresh(false, &sender); // fresh view selects all
                 // needle NOT touched here: the panel clears its entry and
-                // routes Filter("") on a root switch (brief-documented port).
+                // routes Filter("") on a root switch.
             }
             GitViewMsg::Refresh { keep } => self.refresh(keep, &sender),
             GitViewMsg::Apply { raw, ahead, keep } => self.apply(raw, ahead, keep),
@@ -379,7 +379,7 @@ impl Component for ChangesView {
                     return;
                 }
                 // stored AS-GIVEN; filtered() strips+lowercases per use —
-                // _checked untouched (view-only lens, python comment)
+                // checked untouched (view-only lens)
                 self.needle = needle;
                 let shown = filtered(&self.rows, &self.needle);
                 self.fill(&shown);
@@ -412,7 +412,7 @@ impl Component for ChangesView {
                 // review fix-1: the eager CommitClicked busy(true) MUST be
                 // cleared here too — the panel (ChildBusy) can't read this
                 // flag, and a latched true gates its 2s probe forever after
-                // the first commit (python filetree.py reads _busy live)
+                // the first commit
                 let _ = sender.output(GitViewOutput::Busy(false));
                 self.flight = false;
                 self.buttons();
@@ -442,14 +442,14 @@ impl Component for ChangesView {
     }
 }
 
-// ---- data (python gitview.py 118-141, 143-152, 154-165) ----------------------
+// ---- data ----------------------------------------------------------------------
 impl ChangesView {
-    /// python `refresh` as a command flight — the git calls leave the UI
-    /// thread, the landing is apply() via Refreshed (sync-parity: landing
+    /// The refresh as a command flight — the git calls leave the UI
+    /// thread, the landing is apply() via Refreshed (landing
     /// order is the flight completion order; the seq token discards leftovers).
     fn refresh(&mut self, keep: bool, sender: &ComponentSender<Self>) {
         let Some(root) = self.root.clone() else {
-            self.apply(None, 0, keep); // python: no git results → clean no-op
+            self.apply(None, 0, keep); // no git results → clean no-op
             return;
         };
         self.refresh_seq += 1;
@@ -462,8 +462,8 @@ impl ChangesView {
         });
     }
 
-    /// one merged row append; the 12 (col, value) pairs are the python row
-    /// list spelled by index. (16 args on purpose: the python row tuple spread
+    /// one merged row append; the 12 (col, value) pairs are the row
+    /// list spelled by index. (16 args on purpose: the row tuple spread
     /// across the store's 14 columns — a params struct would just re-widen it.)
     #[allow(clippy::too_many_arguments)]
     fn insert_row(
@@ -531,7 +531,7 @@ impl ChangesView {
         self.checked = if keep {
             self.checked.intersection(&fset).cloned().collect()
         } else {
-            fset // fresh view selects all (python: refresh(false))
+            fset // fresh view selects all
         };
         let shown = filtered(&self.rows, &self.needle);
         self.fill(&shown);
@@ -560,7 +560,7 @@ impl ChangesView {
         ); // only toggle-vis col11 true
         // BTreeMap: parents sort before any descendant (prefix < child), so the
         // append-parent lookups and the expand pass below see ancestors before
-        // children — python gets the same from its insertion-ordered dict.
+        // children — the same order an insertion-ordered dict yields.
         let mut iters: BTreeMap<String, gtk::TreeIter> = BTreeMap::new();
         for t in gitstatus::group_tree(shown) {
             let is_dir = t.kind == "d";
@@ -634,7 +634,7 @@ impl ChangesView {
         let mut cur = self.store.iter_first();
         while let Some(i) = cur.take() {
             self.sync_row(&i, &st);
-            // capture next BEFORE recursion (mutation guard, python _sync)
+            // capture next BEFORE recursion (mutation guard)
             let mut t = i;
             cur = if self.store.iter_next(&mut t) { Some(t) } else { None };
             self.walk_children(&i, &st);
@@ -695,7 +695,7 @@ impl ChangesView {
         }
     }
 
-    /// python _on_expand_toggle — wired to RowExpanded/RowCollapsed inputs.
+    /// expand-toggle walker — wired to RowExpanded/RowCollapsed inputs.
     fn expand_toggle(&mut self, tpath: &gtk::TreePath, expanded: bool) {
         let Some(it) = self.store.iter(tpath) else {
             return;
@@ -705,7 +705,7 @@ impl ChangesView {
             return;
         }
         if expanded {
-            self.closed.remove(&rel); // discard-on-expand (python discard/add pair)
+            self.closed.remove(&rel); // discard-on-expand
         } else {
             self.closed.insert(rel.clone());
         }
@@ -735,8 +735,8 @@ impl ChangesView {
         //    + toggle nat) (Review Focus #1)
         let (px, _py) = self.view.press_xy();
         if px >= 0.0 {
-            // python gates on `ca is None`; this binding always fills a rect —
-            // an unallocated cell comes back width 0 → the same reject
+            // `ca is None` gating becomes a width check: this binding always
+            // fills a rect — an unallocated cell comes back width 0 → same reject
             let ca = self.view.cell_area(Some(tpath), Some(&self.col));
             if ca.width() > 0 && toggle_hit(px, ca.x(), self.tog_w()) {
                 sender.input(GitViewMsg::RowToggled(tpath.clone()));
@@ -764,8 +764,8 @@ impl ChangesView {
         if let Some(w) = self.tog_w.get() {
             return w;
         }
-        // python: try get_preferred_width(view)[1] except → 24; a natural of 0
-        // (unrealized view) is that same failure
+        // preferred_width read; a natural/min of 0 (unrealized view) is the
+        // 24-fallback case
         let (min, natural) = self.tog.preferred_width(&self.view);
         let w = if natural > 0 { natural } else if min > 0 { min } else { 24 };
         self.tog_w.set(Some(w));
@@ -777,7 +777,7 @@ impl ChangesView {
 
     fn commit_clicked(&mut self, sender: &ComponentSender<Self>) {
         if self.busy || self.root.is_none() {
-            return; // guard (python-exact)
+            return; // guard
         }
         let paths: Vec<String> = self.checked.iter().cloned().collect(); // BTreeSet = sorted
         if paths.is_empty() && self.ahead == 0 {
@@ -816,12 +816,12 @@ impl ChangesView {
         sender: &ComponentSender<Self>,
     ) {
         if self.flight {
-            return; // one flight at a time (python's thread guard)
+            return; // one flight at a time
         }
         self.flight = true;
         sender.spawn_command(move |out| {
             let out_f = if paths.is_empty() {
-                // push-only: python passes self._phase if paths else None
+                // push-only: no phase callback (Some only when files are checked)
                 gitstatus::commit_then_push(&root.to_string_lossy(), &paths, &msg, None)
             } else {
                 let outp = out.clone();
@@ -872,7 +872,7 @@ mod tests {
         let c = toggled_checked("f", "a/d/m.md", &ck, &vis).unwrap();
         assert!(!c.contains("a/d/m.md") && c.contains("a/c.txt"));
         // dir, none of its (visible) descendants selected → select all under it
-        // (prefix = rel + "/", python gitview.py _on_toggled)
+        // (prefix = rel + "/")
         let ck2 = BTreeSet::from(["a/c.txt".to_string()]);
         let c = toggled_checked("d", "a/d", &ck2, &vis).unwrap();
         assert!(c.contains("a/d/m.md"), "none selected → add all under dir");
@@ -880,7 +880,7 @@ mod tests {
         let full = BTreeSet::from(["a/c.txt".to_string(), "a/d/m.md".to_string(),
                                    "e.md".to_string()]);
         let c = toggled_checked("d", "a", &full, &vis).unwrap();
-        // python law is `checked -= files` (files = visible descendants of the
+        // law is `checked -= files` (files = visible descendants of the
         // dir) — non-descendants SURVIVE: a/ clears a/c.txt + a/d/m.md, e.md stays
         assert_eq!(c, BTreeSet::from(["e.md".to_string()]), "descendants cleared, rest kept");
         // masthead (visible-only law, I2)
@@ -889,7 +889,7 @@ mod tests {
         let c = toggled_checked("s", "", &BTreeSet::new(), &vis).unwrap();
         assert_eq!(c, vis);
         // dir with no visible descendants → |= ∅ no-op (Some, unchanged —
-        // python's else-branch `checked |= set()`)
+        // the else-branch `checked |= set()`)
         let c = toggled_checked("d", "zzz", &ck, &vis).unwrap();
         assert_eq!(c, ck);
         // unknown kind → None (never flips a "No changes" row)

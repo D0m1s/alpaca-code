@@ -1,5 +1,5 @@
 //! Bottom notebook: Agent (raw claude TUI) / Terminal ($SHELL) / Output (run
-//! cmd) + the run lifecycle. Port of alpaca_code/panels.py; decision helpers
+//! cmd) + the run lifecycle. Decision helpers
 //! are pure fns tested headlessly, the widget layer stays thin (relm4 inputs).
 
 use std::cell::Cell;
@@ -14,8 +14,8 @@ use vte4::PtyFlags;
 
 use crate::vector;
 
-/// _alive / os.path.exists("/proc/<pid>") — zombies keep /proc, mirroring
-/// python exactly (life is judged by exit status elsewhere).
+/// /proc/<pid> existence — zombies keep /proc (life is judged by exit
+/// status elsewhere).
 pub fn alive(pid: Option<i32>) -> bool {
     match pid {
         Some(p) if p > 0 => Path::new(&format!("/proc/{p}")).exists(),
@@ -23,7 +23,7 @@ pub fn alive(pid: Option<i32>) -> bool {
     }
 }
 
-/// _pane_child_exited's decision table (panels.py:165-188). `budget` is the
+/// The pane-exit decision table. `budget` is the
 /// pane's current respawn counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
@@ -35,7 +35,7 @@ pub enum Decision {
     Respawn,
     /// ≥60s-lived child: re-arm (budget→0) and respawn
     RespawnRearm,
-    /// budget spent; the tab drops out of `_spawned` so returning re-arms
+    /// budget spent; the tab drops out of `spawned` so returning re-arms
     Exhausted,
 }
 
@@ -58,7 +58,7 @@ pub fn respawn_decision(kills_pending: bool, rooted: bool, in_spawned: bool, liv
     Decision::Respawn
 }
 
-/// The run lifecycle state of Panes (panels.py:194-246) as a pure struct.
+/// The run lifecycle state of Panes as a pure struct.
 #[derive(Debug, Default)]
 pub struct RunState {
     pub starting: bool,
@@ -66,7 +66,7 @@ pub struct RunState {
     pub pid: Option<i32>,
 }
 
-/// What the run's spawn callback landed into (panels.py:201-218).
+/// What the run's spawn callback landed into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Landed {
     /// pid stored — the caller checks alive() → "Running" / "Process ended (label)"
@@ -77,7 +77,7 @@ pub enum Landed {
     FailedToStart,
 }
 
-/// stop_run's transitions (panels.py:228-236); the widget composes "Ready".
+/// stop_run's transitions; the widget composes "Ready".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stopped {
     /// the pid was live → kill_tree(pid) (already cleared here)
@@ -97,7 +97,7 @@ impl RunState {
         self.starting || alive(self.pid)
     }
 
-    /// launch_run's guard (panels.py:194-198); false = a run is live.
+    /// launch_run's guard; false = a run is live.
     pub fn launch(&mut self) -> bool {
         if self.has_running() {
             return false;
@@ -107,7 +107,7 @@ impl RunState {
         true
     }
 
-    /// The spawn callback's landed() transitions (panels.py:201-211).
+    /// The spawn callback's on_landed transitions.
     pub fn on_landed(&mut self, pid: i32, error: Option<String>) -> Landed {
         self.starting = false;
         if error.is_some() || pid <= 0 {
@@ -138,9 +138,9 @@ impl RunState {
         }
     }
 
-    /// _run_child_exited (panels.py:238-246): None = cleanup exit — keep status.
+    /// on_child_exited: None = cleanup exit — keep status.
     /// Some = a real run exit (the widget re-emits the running mirror). The
-    /// decode + "Exit N"/ok/err text died at S5: nothing on either build reads it.
+    /// decode + "Exit N"/ok/err text died at S5: nothing reads it.
     pub fn on_child_exited(&mut self) -> Option<()> {
         if self.pid.is_none() && !self.starting {
             return None;
@@ -153,13 +153,13 @@ impl RunState {
 // ---- kill tree ------------------------------------------------------------------
 
 /// VTE children are session leaders; the pgid kill reaches node/npm
-/// grandchildren (panels.py:253-265). SIGHUP first, SIGKILL escalation after
+/// grandchildren. SIGHUP first, SIGKILL escalation after
 /// 2s via the glib timer (millisecond Duration — CLAUDE.md invariant: never
 /// timeout_add_seconds on this box).
 pub fn kill_tree(pid: i32) {
     let pgid = unsafe { libc::getpgid(pid) };
     if pgid < 0 {
-        return; // ProcessLookupError / PermissionError → nothing to escalate
+        return; // ESRCH / EPERM → nothing to escalate
     }
     unsafe {
         let res = libc::killpg(pgid, libc::SIGHUP);
@@ -181,7 +181,7 @@ pub fn kill_tree(pid: i32) {
     });
 }
 
-// ---- palette + spawn (panels.py:13-52) ---------------------------------------
+// ---- palette + spawn ----------------------------------------------------------
 
 /// Mockup (Agentic App – Dark IDE) VTE colors: card-bg terminals, ANSI slots
 /// mapped to the same hues as the editor scheme.
@@ -210,7 +210,7 @@ fn make_term() -> vte4::Terminal {
     t
 }
 
-/// panels._pane_tab: pill head Box — `alpaca-panetab` carries the 12px side
+/// Pane tab: pill head Box — `alpaca-panetab` carries the 12px side
 /// insets (NOT the label); icon valign CENTER (FILL drops it to the row top).
 fn pane_tab(title: &str, ipy: Option<gtk::Image>) -> gtk::Box {
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -226,8 +226,7 @@ fn pane_tab(title: &str, ipy: Option<gtk::Image>) -> gtk::Box {
     head
 }
 
-/// Per-terminal slot: the widget plus the pid the spawn callback landed (the
-/// port of `term.pid_holder`).
+/// Per-terminal slot: the widget plus the pid the spawn callback landed.
 struct PaneSlot {
     term: vte4::Terminal,
     pid: Cell<Option<i32>>,
@@ -240,18 +239,18 @@ pub enum PanesMsg {
     SetRoot(PathBuf),
     LaunchRun { argv: Vec<String> },
     StopRun,
-    /// a spawn's callback landed (panels.spawn's ready); argv0/label ride for
-    /// the landing callback's verdict (argv0/label dropped at S5 — python's
-    /// landed() reads them only for the never-displayed status texts)
+    /// a spawn's callback landed; argv0/label ride for
+    /// the landing callback's verdict (argv0/label dropped at S5 — they fed
+    /// only the never-displayed status texts)
     SpawnLanded { key: &'static str, pid: i32, error: Option<String> },
-    /// agent/term child exit → revive logic (python's `_pane_child_exited`
+    /// agent/term child exit → revive logic (the handler
     /// gets the wait status and never reads it — S5 deleted the dead payload).
     PaneExited { key: &'static str },
     /// output pane's child exit → run lifecycle (status dropped at S5:
-    /// python decodes it only for the never-displayed "Exit N" text)
+    /// it fed only the never-displayed "Exit N" text)
     RunExited,
-    /// Notebook current-page readback (python `_ensure_current` — the
-    /// current-page read is stale mid-emission on this build)
+    /// Notebook current-page readback — the
+    /// current-page read is stale mid-emission on this build
     EnsureCurrent(Option<i32>),
 }
 
@@ -259,8 +258,8 @@ pub enum PanesMsg {
 pub enum PanesOutput {
     /// launch_run accepted (the starting window) — App flips Run/Stop
     RunStarting,
-    /// panels._set_status + the running mirror App can't query synchronously.
-    /// text/cls dropped at S5: window.py's `_on_run_status` receives and
+    /// The status + the running mirror App can't query synchronously.
+    /// text/cls dropped at S5: the consumer receives and
     /// discards both — the running flag is the only live payload.
     RunStatus { running: bool },
 }
@@ -376,12 +375,12 @@ impl Panes {
         self.run.has_running()
     }
 
-    /// panels._set_status + the running mirror (App re-enables buttons off it).
+    /// The status + the running mirror (App re-enables buttons off it).
     fn status(&self, sender: ComponentSender<Self>) {
         let _ = sender.output(PanesOutput::RunStatus { running: self.has_running_run() });
     }
 
-    /// panels.spawn: spawn argv on a terminal's pty; the callback lands the
+    /// spawn argv on a terminal's pty; the callback lands the
     /// pid back through the component sender. Flags must be
     /// SEARCH_PATH|SEARCH_PATH_FROM_ENVP — DEFAULT is plain execv and a bare
     /// "claude" dies ENOENT (CLAUDE.md invariant).
@@ -395,7 +394,7 @@ impl Panes {
         let envv = crate::runctl::pane_environ();
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         let envv: Vec<&str> = envv.iter().map(String::as_str).collect();
-        // python's ready() prints every spawn failure keyed by argv[0] (panels.py:32-34)
+        // every spawn failure prints keyed by argv[0]
         let argv0 = argv[0].to_owned();
         let cb_send = send.clone();
         term.spawn_async(
@@ -422,12 +421,12 @@ impl Panes {
 
     // ---- workspace -----------------------------------------------------------
 
-    /// panels.set_root: kill live children, clear all bookkeeping, reset all
+    /// set_root: kill live children, clear all bookkeeping, reset all
     /// three terminals, status "Ready", idle ensure_current.
     fn set_root(&mut self, path: PathBuf, sender: ComponentSender<Self>) {
         if let Some(pid) = self.run.pid
             && alive(Some(pid)) {
-                // the out cleanup exit is ignored by _run_child_exited itself
+                // the out cleanup exit is ignored by on_child_exited itself
                 kill_tree(pid);
             }
         self.run.pid = None;
@@ -455,15 +454,15 @@ impl Panes {
         });
     }
 
-    /// panels._ensure_current: spawn the visible tab's child once.
+    /// ensure_current: spawn the visible tab's child once.
     fn ensure_current(&mut self, page_ix: Option<i32>, sender: ComponentSender<Self>) {
         if self.root.is_none() {
             return;
         }
-        // python: page_ix or get_current_page() — GTK reads the OLD index
+        // page_ix or current-page readback — GTK reads the OLD index
         // mid-emission, so a switch-page signal passes its own index
         let i = page_ix.or(self.nb.current_page().map(|p| p as i32)).unwrap_or(-1);
-        // re-entry re-arms the exit budget (python _respawns.pop, deliberate only)
+        // re-entry re-arms the exit budget (deliberate only)
         if i == 0 && !self.spawned.contains("agent") {
             self.respawns.remove("agent");
             self.spawn_pane("agent", true, sender);
@@ -476,7 +475,7 @@ impl Panes {
     /// the ensure-current body once gated (spawned bookkeeping + argv pick).
     fn spawn_pane(&mut self, key: &'static str, is_agent: bool, sender: ComponentSender<Self>) {
         self.spawned.insert(key);
-        // python keeps respawns.pop in _ensure_current (deliberate re-entry only);
+        // respawns.pop lives in ensure_current (deliberate re-entry only);
         // clearing here would reset the exit budget each respawn — measured live:
         // 5 mid-band deaths never exhausted (claude resurrection forever)
         self.spawned_at.insert(key, Instant::now());
@@ -492,7 +491,7 @@ impl Panes {
 
     // ---- run lifecycle ---------------------------------------------------------
 
-    /// panels.launch_run; input only proceeds (RunStarting) when accepted.
+    /// launch_run; input only proceeds (RunStarting) when accepted.
     fn launch_run(&mut self, argv: Vec<String>, sender: ComponentSender<Self>) {
         if !self.run.launch() {
             return;
@@ -504,7 +503,7 @@ impl Panes {
         let _ = sender.output(PanesOutput::RunStarting);
     }
 
-    /// spawn callback landed (panels.py:201-218 for Output; pid_holder for the rest).
+    /// spawn callback landed (the run lifecycle for Output; a plain pid store for the rest).
     fn on_spawn_landed(
         &mut self,
         key: &'static str,
@@ -531,7 +530,7 @@ impl Panes {
         slot.pid.set(if pid > 0 { Some(pid) } else { None });
     }
 
-    /// panels.stop_run: kill+clear the live run else arm stop-pending; "Ready".
+    /// stop_run: kill+clear the live run else arm stop-pending; "Ready".
     fn stop_run(&mut self, sender: ComponentSender<Self>) {
         if let Stopped::KilledAlive(p) = self.run.on_stop() {
             kill_tree(p);
@@ -539,7 +538,7 @@ impl Panes {
         self.status(sender);
     }
 
-    /// the output pane's child exit (panels.py:238-246): a run's real exit
+    /// the output pane's child exit: a run's real exit
     /// re-emits the status (buttons/pill flip); a stop/set_root cleanup exit
     /// is ignored — the pill already reads its own mirror.
     fn on_run_exited(&mut self, sender: ComponentSender<Self>) {
@@ -548,19 +547,19 @@ impl Panes {
         }
     }
 
-    /// panels._pane_child_exited: revive logic with the capped budget.
+    /// pane child exit: revive logic with the capped budget.
     fn on_pane_exited(&mut self, key: &'static str, sender: ComponentSender<Self>) {
         let kills = *self.kills_pending.get(key).unwrap_or(&0);
         let rooted = self.root.is_some();
         let in_spawned = self.spawned.contains(key);
-        // a missing stamp reads as an ancient spawn (python's epoch default);
+        // a missing stamp reads as an ancient spawn (epoch default);
         // unreachable in practice — every spawned.insert accompanies a stamp
         let lived = self
             .spawned_at
             .get(key)
             .map_or(f64::INFINITY, |t| t.elapsed().as_secs_f64());
         let budget = *self.respawns.get(key).unwrap_or(&0);
-        // (status is unused for pane children — python ignores it too)
+        // (status is unused for pane children)
         match respawn_decision(kills > 0, rooted, in_spawned, lived, budget) {
             Decision::Swallow => *self.kills_pending.get_mut(key).unwrap() -= 1,
             Decision::Ignore => {}
@@ -595,7 +594,7 @@ mod tests {
 
     #[test]
     fn respawns_policy() {
-        // _pane_child_exited decision table (panels.py:165-188). The brief's
+        // The pane-exit decision table. The brief's
         // literal arg list repeats equal prefixes with contradictory outcomes;
         // the respawn budget is a 5th arg.
         assert_eq!(respawn_decision(true, true, true, 100.0, 0), Decision::Swallow);

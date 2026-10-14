@@ -1,5 +1,4 @@
-//! state.json persistence — port of alpaca_code/state.py.
-//! Shared file with the Python app: ~/.config/alpaca-code/state.json.
+//! state.json persistence — ~/.config/alpaca-code/state.json.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -37,13 +36,13 @@ pub fn state_path() -> PathBuf {
         .join(".config/alpaca-code/state.json")
 }
 
-/// Load from arbitrary JSON value with state.py's tolerance contract:
+/// Load from arbitrary JSON value with the tolerance contract:
 /// wrong-typed-but-valid JSON must never brick startup.
 fn parse(v: &serde_json::Value) -> State {
     match v {
         serde_json::Value::Object(root) => {
             let get = |k: &str| root.get(k).unwrap_or(&serde_json::Value::Null);
-            // wholesale check BEFORE per-entry filtering (state.py:19-24)
+            // wholesale check BEFORE per-entry filtering
             let recents = get("recents");
             let projects = get("projects");
             let last = get("last_project");
@@ -76,9 +75,9 @@ fn parse(v: &serde_json::Value) -> State {
     }
 }
 
-/// Coerce one per-project entry the way `int()` + list-filter do in python:
+/// Coerce one per-project entry with int()/list-filter tolerance:
 /// open_tabs non-str filtered, non-list → empty; active_tab truthy-str/float/bool
-/// coerced like `int()`, error → 0.
+/// coerced (str parsed, float truncated toward 0, bool 1/0), error → 0.
 fn parse_project_entry(v: &serde_json::Value) -> ProjectTabs {
     const EMPTY: ProjectTabs = ProjectTabs { open_tabs: Vec::new(), active_tab: 0 };
     let Some(obj) = v.as_object() else { return EMPTY };
@@ -93,7 +92,7 @@ fn parse_project_entry(v: &serde_json::Value) -> ProjectTabs {
         serde_json::Value::String(s) => s.trim().parse::<i64>().unwrap_or(0),
         serde_json::Value::Number(n) => n
             .as_f64()
-            .map(|f| f as i64) // int(2.7) → 2 (truncate toward 0)
+            .map(|f| f as i64) // truncate toward 0: 2.7 → 2
             .unwrap_or(0),
         _ => 0,
     };
@@ -169,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn coercion_rules_mirror_python() {
+    fn coercion_rules_match_contract() {
         // wrong top-level types → whole default (wholesale, before per-entry filter)
         let bad = json!({"recents": "x", "projects": [], "last_project": 3});
         assert_eq!(parse(&bad), State::default());
@@ -180,7 +179,7 @@ mod tests {
         });
         let s = parse(&ok);
         assert_eq!(s.recents, vec!["/a".to_string()]);
-        assert!(s.projects.contains_key(" /a")); // keys not normalized (mirrors python)
+        assert!(s.projects.contains_key(" /a")); // keys not normalized
         assert_eq!(s.projects.get("/bad"), None);
         assert_eq!(s.projects[" /a"].active_tab, 2);
         // last_project None is legal

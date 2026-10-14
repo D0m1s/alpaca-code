@@ -1,14 +1,14 @@
-//! Status-bar branch pill + Switch/New popover — python branchmenu.py port.
+//! Status-bar branch pill + Switch/New popover.
 //!
 //! Pill is a flat button (branch icon + name) whose popover holds Switch
-//! Branch and New Branch; git flights copy the commit-bar pattern (command
+//! Branch, Pull, and New Branch; git flights copy the commit-bar pattern (command
 //! thread, land via update_cmd, the status row owns busy/err/ok). The pill
 //! hides outside a repo (the branch_of rule).
 //!
-//! Hover timers are GENERATION COUNTERS: python `_cancel` was a silent no-op
-//! on an already-fired GLib source, rust `SourceId::remove` PANICS on one —
-//! handlers instead bump the generation a timer closure captured; a stale
-//! timer fires and its input is discarded by the gen check.
+//! Hover timers are GENERATION COUNTERS: the old cancel path was a silent
+//! no-op on an already-fired GLib source while rust `SourceId::remove`
+//! PANICS on one — handlers instead bump the generation a timer closure
+//! captured; a stale timer fires and its input is discarded by the gen check.
 
 // The module's whole API surface is consumed by GitPanel and app wiring
 // (proven by the landed callers — the T4 sweep's build gate holds the line:
@@ -27,13 +27,14 @@ use crate::gitstatus::{self, GitStatusKind};
 pub enum BranchMenuMsg {
     SetRoot(Option<PathBuf>),
     Update(Option<String>),
-    /// wiring: gate flights (shell's not-_git_busy)
+    /// wiring: gate flights while no commit/push flight owns the status row
     Gate(bool),
     Pick(String),
     Create(String),
+    Pull,
     SubOpen(u64),
     SubClose(u64),
-    // relm4 routing additions: python called these methods straight from
+    // relm4 routing additions: these were plain method calls straight from
     // closures; a relm4 closure can't reach the component model, so each one
     // became an input (additive — T6 consumes only SetRoot/Update/Gate).
     OpenMenu,
@@ -57,7 +58,7 @@ pub enum BranchCommand {
         okmsg: String,
     },
     /// branch-list flight (hover submenu + open menu): branch_of + branches
-    /// off the UI thread — python blocked the popup handler on both. The
+    /// off the UI thread — the popup handler no longer blocks on both. The
     /// widget rebuild lands in update_cmd; `popup_sub` + the open_gen token
     /// decide the submenu pop (the sync handler popped inline inside SubOpen
     /// AFTER the gen check — an async landing must re-validate that the hover
@@ -172,6 +173,25 @@ impl Component for BranchMenu {
         );
         new_row.set_child(Some(&strip3));
         menupage.append(&switch_row);
+
+        // Pull row: chevron-down reads as "pull down"; rides the shared flight
+        let pull_row = gtk::Button::builder()
+            .has_frame(false)
+            .css_classes(["alpaca-branchitem"])
+            .build();
+        let strip4 = gtk::Box::builder().spacing(8).build();
+        if let Some(px) = vector::icon("chevron-down.svg").map(|vec| gtk::Image::from_paintable(Some(&vec))) {
+            strip4.append(&px);
+        }
+        strip4.append(
+            &gtk::Label::builder()
+                .label("Pull")
+                .xalign(0.0)
+                .hexpand(true)
+                .build(),
+        );
+        pull_row.set_child(Some(&strip4));
+        menupage.append(&pull_row);
         menupage.append(&new_row);
 
         let stack = gtk::Stack::builder()
@@ -245,6 +265,8 @@ impl Component for BranchMenu {
             nent.set_text("");
             nent.grab_focus();
         });
+        let snd = sender.clone();
+        pull_row.connect_clicked(move |_| snd.input(BranchMenuMsg::Pull));
 
         let model = BranchMenu {
             root: None,
@@ -267,7 +289,7 @@ impl Component for BranchMenu {
     fn update(&mut self, msg: BranchMenuMsg, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
             BranchMenuMsg::SetRoot(r) => {
-                // python latent-bug fix: the pill wired set_root nowhere, so
+                // fixed latent bug: the pill wired set_root nowhere, so
                 // flights would run on root=None — here it's a real input
                 self.root = r;
             }
@@ -293,6 +315,10 @@ impl Component for BranchMenu {
                     &sender,
                 )
             }
+            BranchMenuMsg::Pull => {
+                // name ignored by pull — the arg shape is the shared op signature
+                self.start(gitstatus::pull, String::new(), "Pulling…", "Pulled ✓", &sender)
+            }
             BranchMenuMsg::SubOpen(g) => {
                 if g != self.open_gen {
                     return; // stale timer, canceled by a gen bump
@@ -314,7 +340,7 @@ impl Component for BranchMenu {
             }
             BranchMenuMsg::Closed => {
                 root.remove_css_class("alpaca-open");
-                // python's double _cancel: kill both armed timers at once
+                // the double cancel: kill both armed timers at once
                 self.open_gen += 1;
                 self.close_gen += 1;
                 self.open_armed = false;
@@ -398,7 +424,7 @@ impl BranchMenu {
             return;
         }
         let Some(root) = self.root.clone() else {
-            // not a repo — the pill hides anyway; python flew on None
+            // not a repo — the pill hides anyway
             return;
         };
         // snapshot: set_root mid-flight must not reroute it
@@ -418,7 +444,7 @@ impl BranchMenu {
         });
     }
 
-    /// Branch list as a command flight — python blocked the popup handler on
+    /// Branch list as a command flight — the popup handler used to block on
     /// two git subprocess calls (branch_of + branches, 5s walls); hovering the
     /// pill no longer freezes the mainloop on a stalled git. Widgets build in
     /// Branches's landing (the root guard drops a switched workspace).
@@ -436,7 +462,7 @@ impl BranchMenu {
         });
     }
 
-    /// The widget half of python fill_branches: clear + rebuild the submenu
+    /// The widget half of the branch fill: clear + rebuild the submenu
     /// rows from landed git data, pop the submenu when the request was a hover
     /// (✓ tick marks the current branch; unborn HEAD → "No branches yet").
     fn paint_branches(

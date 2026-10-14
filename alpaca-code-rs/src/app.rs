@@ -1,11 +1,11 @@
-//! App component — the window shell. Port of alpaca_code/window.py: headerbar
+//! App component — the window shell: headerbar
 //! (File/Edit/Window/Help label buttons + run/stop cells), hpaned → vpaned
 //! (editor / panes placeholder cards) + file-browser card, workspace lifecycle
 //! (set_workspace / discard flow), menus/actions, and the persist-tabs
 //! debounce. Slot cards stay in the model; Tasks 6–8 pack real components.
 
 // 4.10-deprecated Dialog/FileChooser/MessageDialog API — the new-project and
-// open-file dialogs mirror window.py's Gtk flow; S3 polish modernizes.
+// open-file dialogs ride the deprecated Gtk flow; S3 polish modernizes.
 #![allow(deprecated)]
 
 use std::cell::Cell;
@@ -34,7 +34,7 @@ pub enum AppMsg {
     /// panes → header Run/Stop sync (t8: launch accepted — the starting window)
     RunStarting,
     RunStatus(bool),
-    /// the run/stop pills (window.py:_on_run/_on_stop)
+    /// the run/stop pills
     RunPressed,
     StopPressed,
     FlushTabs,
@@ -42,7 +42,7 @@ pub enum AppMsg {
     RecentMissing(String),
     /// discard-dialog accepted → switch without the dirty gate
     DiscardWorkspace(PathBuf),
-    /// CHANGES row → editor diff page (window.py:_open_changes_diff)
+    /// CHANGES row → editor diff page
     OpenDiff {
         rel: String,
         letter: String,
@@ -56,9 +56,9 @@ pub enum AppMsg {
     },
     /// editor SaveOpen's ack — the ONLY thing that releases pending_commit
     Flushed,
-    /// git rows → editor diff-tab renewal (window.py:_on_git_changed)
+    /// git rows → editor diff-tab renewal
     GitChanged(crate::gitstatus::Rows),
-    /// window notify::is-active → git re-sync (filetree.py:refresh_git)
+    /// window notify::is-active → git re-sync
     WindowActive,
     /// New Project dialog result — makedirs + `git init` ran OFF the main
     /// thread (runctl.create_project has a 10s wall; a stalled git must not
@@ -111,8 +111,8 @@ struct App {
     /// production never constructs it (env unset)
     probe_s3: Option<(PathBuf, usize)>,
     dirty: bool,
-    /// latest editor snapshot, read by the debounce flush (window.py reads the
-    /// editor live; a snapshot at every flip is equivalent)
+    /// latest editor snapshot, read by the debounce flush (a snapshot at every
+    /// flip is equivalent to reading the editor live)
     editor_state: EditorSnapshot,
     /// panes' has_running_run — Task 8 keeps it honest
     running: bool,
@@ -129,7 +129,7 @@ impl Component for App {
 
     view! {
         gtk::ApplicationWindow {
-            set_title: Some("alpaca_code"),
+            set_title: Some("alpaca-code"),
             set_icon_name: Some("io.alpaca.rs"),
         }
     }
@@ -158,7 +158,7 @@ impl Component for App {
         // Mockup's pill buttons: green play / red stop — design SVG (theme
         // symbols grey both out); t4's symbolic stand-in paid off — badges (t5)
         // carries the art. valign CENTER: default FILL lands ink top-left
-        // (window.py:_img, measured 7px high).
+        // (measured 7px high).
         let run_btn = gtk::Button::new();
         let run_icon = match vector::icon("play.svg") {
             Some(vec) => {
@@ -221,7 +221,7 @@ impl Component for App {
         header.pack_end(&run_row);
         root.set_titlebar(Some(&header));
 
-        // run/stop pills (window.py:_on_run/_on_stop route through the model)
+        // run/stop pills (button clicks route through the model)
         let send = sender.clone();
         run_btn.connect_clicked(move |_b| send.input(AppMsg::RunPressed));
         let send = sender.clone();
@@ -257,7 +257,7 @@ impl Component for App {
         // design: editor card 56..649 (593) − pane handle overlap
         vpane.set_position(592);
 
-        // git panel card (window.py:165 — FileBrowser in the hpane end child)
+        // git panel card (the hpane end child)
         let app_in = sender.clone();
         let gitpanel = GitPanel::builder()
             .launch(())
@@ -277,7 +277,7 @@ impl Component for App {
             });
 
         // hpane DIRECTLY as the window child — a wrapping Box under-allocates
-        // (window.py:148, measured 43px tall)
+        // (measured 43px tall)
         let hpane = gtk::Paned::new(gtk::Orientation::Horizontal);
         hpane.set_wide_handle(true);
         hpane.set_start_child(Some(&vpane));
@@ -286,7 +286,7 @@ impl Component for App {
         hpane.set_position(1161);
         root.set_child(Some(&hpane));
 
-        // window.py:37-46 — clamped AFTER construction, same numbers
+        // clamped AFTER construction, same numbers
         let widgets = view_output!();
         let (w, h) = default_size();
         root.set_default_size(w, h);
@@ -312,15 +312,14 @@ impl Component for App {
         register_actions(&relm4::main_application(), &root, sender.clone(), ed_in);
         model.refresh_menus();
 
-        // window.py: win.connect("notify::is-active", lambda: tree.refresh_git())
-        // — python fires on EVERY notify (both False→True and the rare True→False
-        // edge); each fire costs one sync refresh — keep exactly that.
+        // notify::is-active fires on EVERY notify (both False→True and the rare
+        // True→False edge); each fire costs one sync refresh — keep exactly that.
         let in_active = sender.clone();
         root.connect_notify_local(Some("is-active"), move |_, _| {
             in_active.input(AppMsg::WindowActive)
         });
 
-        // startup workspace (window.py:154 — last_project populates everything)
+        // startup workspace (last_project populates everything)
                 if let Some(p) = model.root.clone() {
             sender.input(AppMsg::SetWorkspace(PathBuf::from(p)));
         }
@@ -356,7 +355,7 @@ impl Component for App {
                 if self.root.is_some() {
                     // debounced ≤1s; each event re-arms (stacked timers flush
                     // the LATEST snapshot; last event before quit may be lost —
-                    // acceptable, window.py:204)
+                    // acceptable)
                     let sender = sender.clone();
                     glib::timeout_add(std::time::Duration::from_millis(1000), move || {
                         sender.input(AppMsg::FlushTabs);
@@ -376,7 +375,7 @@ impl Component for App {
                 }
             }
             AppMsg::RunStatus(running) => {
-                // window.py:_on_run_status — the payload is not displayed; the
+                // the run-status payload is not displayed; the
                 // buttons + pill class follow the running mirror
                 self.running = running;
                 if !running {
@@ -391,7 +390,7 @@ impl Component for App {
                 self.refresh_run_style();
             }
             AppMsg::RunPressed => {
-                // window.py:_on_run: no root / live run → noop
+                // no root / live run → noop
                 if self.root.is_none() || self.running {
                     return;
                 }
@@ -404,11 +403,11 @@ impl Component for App {
                 self.stop_btn.set_sensitive(true);
                 self.panes
                     .emit(PanesMsg::LaunchRun { argv: cmd.argv });
-                // run-off + style land with RunStarting (accepted) — python's
-                // _on_run does it synchronously; one mainloop turn, same frame
+                // run-off + style land with RunStarting (accepted) —
+                // one mainloop turn, same frame
             }
             AppMsg::StopPressed => {
-                // window.py:_on_stop — unconditional button sync, then the panes
+                // unconditional button sync, then the panes
                 self.panes.emit(PanesMsg::StopRun);
                 self.stop_btn.set_sensitive(false);
                 self.run_btn.set_sensitive(true);
@@ -422,8 +421,8 @@ impl Component for App {
                 Ok(()) => sender.input(AppMsg::SetWorkspace(target)),
             },
             AppMsg::OpenDiff { rel, letter } => {
-                // window.py:_open_changes_diff runs ON the window with its own
-                // root guard — same shape here (App's root is Option<String>)
+                // the diff open runs ON the window with its own
+                // root guard (App's root is Option<String>)
                 if self.root.is_none() {
                     return;
                 }
@@ -431,10 +430,10 @@ impl Component for App {
                 self.editor.emit(EditorMsg::OpenDiff { root: root_path, rel, letter });
             }
             AppMsg::Commit { root, paths, msg } => {
-                // python gitview.commit_clicked called before_commit(paths)
-                // SYNCHRONOUSLY (editor.save_open on the same mainloop turn) —
-                // relm4 inputs are QUEUE-processed, not call-stack: the turn's
-                // equivalent is the pending store + the Flushed ack chain
+                // the commit's dirty-file flush (editor.save_open) must run
+                // SYNCHRONOUSLY on the commit's mainloop turn — relm4 inputs
+                // are QUEUE-processed, not call-stack: the turn's equivalent
+                // is the pending store + the Flushed ack chain
                 self.pending_commit = Some((root.clone(), paths.clone(), msg.clone()));
                 self.editor.emit(EditorMsg::SaveOpen(
                     paths.iter().map(|rel| root.join(rel)).collect(),
@@ -450,10 +449,10 @@ impl Component for App {
                 }
             }
             AppMsg::GitChanged(rows) => {
-                // window.py:_on_git_changed — diff-tab renewal. A stale diff
+                // diff-tab renewal. A stale diff
                 // tab across workspaces: rust restore (S1) rebuilds ONLY path
-                // pages, so a diff page stays open with stale sides — same as
-                // python (measured: _set_workspace_now re-roots the trees, the
+                // pages, so a diff page stays open with stale sides
+                // (measured: set_workspace_now re-roots the trees, the
                 // letters map misses the foreign rel, fresh is None → left
                 // as-is). Self.root None → no diffs can exist (skip).
                 if self.root.is_none() {
@@ -464,7 +463,7 @@ impl Component for App {
                 self.editor.emit(EditorMsg::RefreshDiffs { root: root_path, letters });
             }
             AppMsg::WindowActive => {
-                // filetree.py:285-287 refresh_git — window focus re-syncs git
+                // window focus re-syncs git
                 self.gitpanel.emit(GitPanelMsg::RefreshGit);
             }
             AppMsg::ProbeS2(dir) => {
@@ -667,7 +666,7 @@ impl App {
                 GitViewMsg::ProbeMsg(PROBE_MSG.into()),
             ))),
             // the diff page for the fix-3 assert (Edit-menu target on a diff
-            // page must be the focused side view, python _edit_op)
+            // page must be the focused side view)
             3 => sender.input(AppMsg::OpenDiff {
                 rel: "a.txt".into(),
                 letter: "M".into(),
@@ -691,16 +690,16 @@ impl App {
                 self.editor.emit(EditorMsg::ProbeDiffScroll);
             }
             // select-all via the REAL row-toggle law — but rows arrive
-            // PRE-CHECKED (python's "fresh view selects all", gitview SetRoot
+            // PRE-CHECKED (a fresh view selects all, gitview SetRoot
             // → refresh(false)): one masthead toggle would DESELECT. Toggle
             // twice (off→on) so the live toggle path runs and the state ends
-            // all-checked, python-exact.
+            // all-checked.
             10 => {
                 let mast = || GitPanelMsg::ProbeChild(ProbeChild::Changes(
                     GitViewMsg::RowToggled(gtk::TreePath::from_string("0").unwrap()),
                 ));
                 self.gitpanel.emit(mast()); // off
-                self.gitpanel.emit(mast()); // on — ends python's all-checked
+                self.gitpanel.emit(mast()); // on — ends all-checked
             }
             // the FULL production chain: validate → eager busy → Commit out
             // → App Commit → SaveOpen → Flushed → panel StartCommit → flight
@@ -790,14 +789,14 @@ impl App {
             return;
         }
         self.set_workspace_now(path, root);
-        // refresh recents after any workspace switch (python refreshes in
-        // _on_pick/_act_new_project; all of those land here)
+        // refresh recents after any workspace switch (open / recent /
+        // new-project all land here)
         self.refresh_menus();
     }
 
-    /// window.py:set_workspace's discard flow: CANCEL/Discard on the MessageDialog.
+    /// Discard flow: CANCEL/Discard on the MessageDialog.
     fn show_discard_dialog(&self, root: &gtk::ApplicationWindow, path: &Path, sender: ComponentSender<Self>) {
-        #[allow(deprecated)] // 4.10-deprecated upstream; window.py uses it (S3 polish)
+        #[allow(deprecated)] // 4.10-deprecated upstream (S3 polish)
         let d = gtk::MessageDialog::builder()
             .transient_for(root)
             .modal(true)
@@ -807,7 +806,7 @@ impl App {
         d.add_button("Discard", gtk::ResponseType::Accept);
         let path = path.to_path_buf();
         d.connect_response(move |dd, r| {
-            dd.destroy(); // python always destroys in the response handler
+            dd.destroy(); // destroy in the response handler
             if r == gtk::ResponseType::Accept {
                 sender.input(AppMsg::DiscardWorkspace(path.clone()));
             }
@@ -819,14 +818,14 @@ impl App {
         let path_str = path.to_string_lossy();
         state::save(&state::remember(state::load(), path_str.as_ref()));
         self.root = Some(path_str.to_string());
-        root.set_title(Some("alpaca_code"));
+        root.set_title(Some("alpaca-code"));
         let base = py_basename(&path_str);
         self.title.set_text(&if base.is_empty() {
             "alpaca-code".to_owned()
         } else {
             format!("alpaca-code — {base}")
         });
-        // tree first, then panes, like window.py:_set_workspace_now;
+        // tree first, then panes;
         // notify::is-active → refresh_git comes true in T7
         self.gitpanel.emit(GitPanelMsg::SetRoot(path.to_path_buf()));
         self.panes.emit(PanesMsg::SetRoot(path.to_path_buf()));
@@ -839,7 +838,7 @@ impl App {
         ));
         self.stop_btn.set_sensitive(false);
         self.refresh_run_style();
-        // window.py:_set_workspace_now — editor.restore LAST (python order)
+        // editor restore LAST (after the re-roots above)
         let tabs = state::project_tabs(&state::load(), path_str.as_ref());
         self.editor
             .emit(EditorMsg::Restore(path.to_path_buf(), tabs.open_tabs, tabs.active_tab));
@@ -849,8 +848,8 @@ impl App {
         refresh_menus(&self.menu_btns);
     }
 
-    /// window.py:_refresh_run_style — the running class rides the pill row
-    /// (App tracks `running` off the panes' outputs; python read it live).
+    /// the running class rides the pill row
+    /// (App tracks `running` off the panes' outputs)
     fn refresh_run_style(&self) {
         if self.running {
             self.run_row.set_css_classes(&["alpaca-runpill", "running"]);
@@ -860,13 +859,13 @@ impl App {
     }
 }
 
-// window.py basename(path.rstrip("/")) — empty result (root "/") → bare title
+// basename(path.rstrip("/")) — empty result (root "/") → bare title
 fn py_basename(s: &str) -> String {
     let t = s.trim_end_matches('/');
     t.rsplit('/').find(|c| !c.is_empty()).unwrap_or(t).to_owned()
 }
 
-/// window.py:37-46 — 1586×992 clamped to the monitor (−40 top/side pad, −140
+/// 1586×992 clamped to the monitor (−40 top/side pad, −140
 /// vertical incl. panel); a too-tall default opens half-offscreen. ponytail: monitor 0.
 fn default_size() -> (i32, i32) {
     if let Some(disp) = gdk::Display::default() {
@@ -914,8 +913,8 @@ fn file_menu(s: &state::State) -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(Some("Open Project…"), Some("app.open-project"));
     // recents submenu: "basename(rstrip /) — path" rows, newest first; the
-    // submenu row only exists when there is at least one recent (python
-    // window.py:383 `if recents.get_n_items()`)
+    // submenu row only exists when there is at least one recent
+    // (`if recents.get_n_items()`)
     let recents = gio::Menu::new();
     for p in &s.recents {
         let item = gio::MenuItem::new(Some(&format!("{} — {}", py_basename(p), p)), None);
@@ -1006,9 +1005,9 @@ fn new_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) 
         }
         let target = Path::new(&parent).join(name.as_str());
         // OFF the response thread: create_project blocks up to 10s (git init
-        // wall) — running it here would freeze the whole window, python
-        // ran it synchronously on this handler. The Sender is Send: the
-        // spawned thread posts straight back into the main context.
+        // wall) — running it here would freeze the whole window. The Sender
+        // is Send: the spawned thread posts straight back into the main
+        // context.
         let snd = sender.clone();
         std::thread::spawn(move || {
             let res = runctl::create_project(&target);
@@ -1018,14 +1017,14 @@ fn new_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) 
     d.present();
 }
 
-/// window.py:_error_dialog — MessageDialog CLOSE destroy-on-response.
+/// MessageDialog CLOSE destroy-on-response.
 fn error_dialog(root: &gtk::ApplicationWindow, primary: &str, secondary: &str) {
     show_message(root, primary, Some(secondary), gtk::ButtonsType::Close);
 }
 
-/// MessageDialog is 4.10-deprecated upstream; window.py uses it throughout
-/// (parity wins, AlertDialog redesign is S3 polish). python never passed a
-/// message_type → INFO default; secondary set post-hoc like the constructor kwarg.
+/// MessageDialog is 4.10-deprecated upstream; the AlertDialog redesign is S3
+/// polish. No message_type passed → INFO default; secondary set post-hoc
+/// like the constructor kwarg.
 fn show_message(
     root: &gtk::ApplicationWindow,
     text: &str,
@@ -1078,7 +1077,7 @@ fn register_actions(
     }
     app.add_action(&quit);
 
-    // window.py:_edit_op — undo/redo buffer-side, clipboard ops on the view's
+    // undo/redo buffer-side, clipboard ops on the view's
     // own actions; S1 has no diff pages so there's no pair-box edge
     for name in ["undo", "redo", "cut", "copy", "paste", "select-all"] {
         let a = gio::SimpleAction::new(name, None);
@@ -1179,7 +1178,7 @@ mod tests {
     #[test]
     fn file_menu_items_and_recents_submenu_model() {
         use gio::prelude::MenuModelExt;
-        // window.py:_build_menu — fixed rows + recents submenu (newest first,
+        // fixed rows + recents submenu (newest first,
         // each "basename(rstrip) — path"), submenu only when recents non-empty.
         let m = file_menu(&fixture(&["/home/u/misiuscode", "/home/u/porttest"]));
         assert_eq!(m.n_items(), 4);
@@ -1208,7 +1207,7 @@ mod tests {
     #[test]
     fn file_menu_without_recents_has_no_submenu() {
         use gio::prelude::MenuModelExt;
-        // python: `if recents.get_n_items(): menu.append_submenu(...)`
+        // submenu gated on non-empty recents
         let m = file_menu(&fixture(&[]));
         assert_eq!(m.n_items(), 3);
         assert!(

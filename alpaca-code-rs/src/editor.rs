@@ -1,15 +1,14 @@
 //! Editor component — file tabs: open/close/save/restore/watches/tombstone/
-//! binary/dirty dots/badges (python `alpaca_code/editor.py`, file-page S1 port;
-//! diff pages + `_TabDistributor` is S2/S3).
+//! binary/dirty dots/badges (file-page S1; diff pages + `_TabDistributor` is
+//! S2/S3).
 //!
 //! Rust keeps a parallel page model (`PageState`, index-aligned with the
 //! notebook) instead of dangling attributes on the page GtkWidget — the
 //! wrapper-identity trap CLAUDE.md warns about is avoided by construction, and
-//! the dirty dot / tabname labels are held directly (python walks
-//! `get_first_child()` to find them).
+//! the dirty dot / tabname labels are held directly instead of re-found by
+//! walking `get_first_child()`.
 
-// 4.10-deprecated dialog API (the VTE open-with dialog) — same patterns as the
-// Gtk4-Python source; S3 polish modernizes.
+// 4.10-deprecated dialog API (the VTE open-with dialog) — S3 polish modernizes.
 #![allow(deprecated)]
 
 use std::cell::{Cell, RefCell};
@@ -30,8 +29,8 @@ pub const GONE_NOTE: &str = "‹file has been deleted›";
 pub const BINARY_NOTE: &str = "‹file changed on disk — not UTF-8 text›";
 
 /// chrome subtracted before sharing a tab's width: badge slot + ✕ + label/
-/// head paddings (@13px measured on python; starting hypothesis from python's
-/// code value 62 — re-measure live if `max(wide) > share` ever trips)
+/// head paddings (measured @13px; 62 is the starting hypothesis —
+/// re-measure live if `max(wide) > share` ever trips)
 const TAB_CHROME: i32 = 62;
 
 /// walk a widget tree hunting a descendant carrying the tab-name class
@@ -54,7 +53,7 @@ fn find_tabname(w: &gtk4::Widget) -> Option<gtk4::Widget> {
     None
 }
 
-/// `_TabDistributor` port (editor.py:12-49): the layout manager of the
+/// `_TabDistributor`: the layout manager of the
 /// vertical wrapper Box around the notebook strip. GTK 4.22 pins scrollable
 /// notebook tabs at their minimum width even with room to spare, and scroll
 /// mode's visible tail grows WIDER as the window narrows — this layout
@@ -63,7 +62,7 @@ fn find_tabname(w: &gtk4::Widget) -> Option<gtk4::Widget> {
 /// Recomputes only on (width, n) change.
 #[derive(Default)]
 pub struct TabDistributorImp {
-    last: Cell<Option<(i32, i32)>>, // (wrap width, nb page count) — python's _last
+    last: Cell<Option<(i32, i32)>>, // (wrap width, nb page count) — last-seen memo
 }
 
 glib::wrapper! {
@@ -113,8 +112,8 @@ impl LayoutManagerImpl for TabDistributorImp {
         if n == 0 || self.last.get() == Some((width, n as i32)) {
             return;
         }
-        // python: act_w = end-action widget's allocated width; never set in
-        // this app → no widget → 0. (kept None-safe for parity)
+        // act_w = end-action widget's allocated width; never set in
+        // this app → no widget → 0 (kept None-safe)
         let act = nb
             .action_widget(gtk::PackType::End)
             .map_or(0, |w| w.allocated_width());
@@ -130,7 +129,7 @@ impl LayoutManagerImpl for TabDistributorImp {
     }
 }
 
-/// editor.py:readable_text — decode UTF-8; reject NUL bytes (a lossy buffer
+/// decode UTF-8; reject NUL bytes (a lossy buffer
 /// plus Ctrl+S would rewrite the file with truncated/replacement garbage).
 pub fn readable_text(raw: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(raw).ok()?;
@@ -149,7 +148,7 @@ fn mtime_ns(path: &Path) -> Option<i64> {
     }
 }
 
-// python os.path.basename — the last component (empty for paths ending in /).
+// os.path.basename — the last component (empty for paths ending in /).
 pub fn basename(p: &Path) -> String {
     p.file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -191,7 +190,7 @@ pub struct EditorSnapshot {
 
 #[derive(Debug)]
 pub enum EditorMsg {
-    Restore(PathBuf, Vec<String>, i64),   // set_root + open still-existing tabs (window.py:192 is the only set path)
+    Restore(PathBuf, Vec<String>, i64),   // set_root + open still-existing tabs (the only set path)
     OpenFile(PathBuf),
     SaveActive,
     /// PROBE-ONLY (ALPACA_PROBE_S3) — tab allocation trace (taballoc line);
@@ -199,14 +198,14 @@ pub enum EditorMsg {
     ProbeTrace(String),
     /// commit flow flushes dirty buffers among the named abs paths
     SaveOpen(Vec<PathBuf>),
-    /// CHANGES row click → side-by-side diff page (python window._open_changes_diff)
+    /// CHANGES row click → side-by-side diff page
     OpenDiff {
         root: PathBuf,
         rel: String,
         letter: String,
     },
     /// fresh git data → refetch sides for every open diff page still present
-    /// in the change set (python window._on_git_changed); rel→fresh-letter rows
+    /// in the change set; rel→fresh-letter rows
     RefreshDiffs {
         root: PathBuf,
         letters: Vec<(String, String)>,
@@ -220,7 +219,7 @@ pub enum EditorMsg {
     Paste,
     SelectAll,
     /// probe-only: exercise the Edit-menu op target on the active diff page
-    /// and report which side it lands on (python _edit_op's focus route);
+    /// and report which side it lands on (the Edit-menu focus route);
     /// production never sends it
     ProbeClip,
     /// PROBE-ONLY (ALPACA_PROBE_S2) — diff-page scrollbar-policy + dual-axis
@@ -230,9 +229,9 @@ pub enum EditorMsg {
     /// post-emission re-stamp: fires after switch-page lands, when current_page()
     /// is already the new index (the staleness window is inside the emission only)
     Switched,
-    /// a file monitor fired (python `_on_file_event`)
+    /// a file monitor fired
     FsEvent(PathBuf),
-    /// the 120ms settle elapsed (python `_fs_settled`)
+    /// the 120ms settle elapsed
     FsSettled(PathBuf),
     ClosePage(usize, bool),
 }
@@ -257,7 +256,6 @@ pub enum EditorCommand {
     FreshDiffs(Vec<(String, String, Sides, String)>),
 }
 
-// editor.py:209-211
 const DIFF_DEL_BG: &str = "#25181c";
 const DIFF_ADD_BG: &str = "#15261d";
 const DIFF_HDR_FG: &str = "#5a6375";
@@ -273,13 +271,13 @@ struct LinkedAxes {
 }
 
 /// both diff sides' scroll pairing state: the widgets the live renewal
-/// refills, plus each view's linked-adjustment dedupe (python `_linked`
-/// attrs — one per direction). `v_r` stays so the refill can retarget the
-/// right side's buffer in place (python swaps the views; the measured churn
-/// law says keep the widget tree: teardown re-allocates and the visible page
-/// jumps — see refresh_diff). `diff_text` is the raw text the sides came
-/// from: the renewal flight dedupes against it (python renews every
-/// GitChanged; a byte-identical diff must not tear the page down every tick).
+/// refills, plus each view's linked-adjustment dedupe (one per direction).
+/// `v_r` stays so the refill can retarget the right side's buffer in place
+/// (the measured churn law says keep the widget tree: swapping the views
+/// tears the page down and the visible page jumps — see refresh_diff).
+/// `diff_text` is the raw text the sides came
+/// from: the renewal flight dedupes against it (a byte-identical diff must
+/// not tear the page down every tick).
 struct DiffWidgets {
     sw_l: gtk::ScrolledWindow,
     sw_r: gtk::ScrolledWindow,
@@ -367,13 +365,13 @@ impl Component for Editor {
             snd.input(EditorMsg::Switched);
         });
 
-        // editor.py:95-104 — Ctrl+S saves the active page
+        // Ctrl+S saves the active page
         let svc = gtk::ShortcutController::new();
         let snd = sender.clone();
         let trig = gtk::ShortcutTrigger::parse_string("<Control>s");
         let act = gtk::CallbackAction::new(move |_w, _a| {
             snd.input(EditorMsg::SaveActive);
-            glib::Propagation::Proceed // python's handler returns True (propagate)
+            glib::Propagation::Proceed // propagate
         });
         let sc = gtk::Shortcut::new(trig, Some(act));
         svc.add_shortcut(sc);
@@ -381,7 +379,7 @@ impl Component for Editor {
 
         let dist: TabDistributor = glib::Object::builder::<TabDistributor>().build();
         let tabs_wrap = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
-        // python's comment, carried: the wrap must take the full row width — a
+        // the wrap must take the full row width — a
         // HORIZONTAL Box gives a non-hexpand child only its own minimum (measured
         // 900px wrap → 280px nb); VERTICAL makes x the cross axis where children FILL
         tabs_wrap.set_layout_manager(Some(dist)); // widget refs the object; local keeps the borrow
@@ -425,8 +423,7 @@ impl Component for Editor {
             EditorMsg::SaveOpen(paths) => {
                 // commit flow flush: dirty buffers among the named abs paths go
                 // to disk BEFORE the commit runs. Write errors are swallowed
-                // and Flushed ALWAYS fires — python left the OSError unguarded
-                // in its callback chain; rust must not strand T7's
+                // and Flushed ALWAYS fires — rust must not strand T7's
                 // pending-commit chain on an I/O error (eager-busy gate).
                 for idx in 0..self.pages.len() {
                     let flush = self.pages[idx]
@@ -442,8 +439,7 @@ impl Component for Editor {
             }
             EditorMsg::OpenDiff { root, rel, letter } => {
                 // root snapshot rides into the flight (App passes its live
-                // root; no guard beyond snapshot — python guarded its own
-                // root before dispatch)
+                // root; no guard beyond the snapshot)
                 sender.spawn_command(move |out| {
                     let (text, binary) = gitstatus::diff_for(
                         &root.to_string_lossy(),
@@ -457,13 +453,12 @@ impl Component for Editor {
             }
             EditorMsg::RefreshDiffs { root, letters } => {
                 // per OPEN diff page still present in the change set; resolved
-                // tabs stay as-is. python ran this fetch SYNC on the UI
-                // thread — the flight is a responsiveness improvement only,
-                // identical behavior when it lands.
+                // tabs stay as-is. The fetch flight is a responsiveness
+                // improvement only, identical behavior when it lands.
                 //
                 // The flight dedupes byte-identical renewals (each page's
                 // shown text + letter captured here, fresh ones compared
-                // in-thread): python and pre-fix rust renewed on EVERY probe
+                // in-thread): pre-fix rust renewed on EVERY probe
                 // tick and tore the visible page down with it (measured: 6
                 // full rebuilds of one unchanged diff in 10s, both sides'
                 // scroll adj flapping 320→0→320 — the "diff jumps around"
@@ -524,7 +519,7 @@ impl Component for Editor {
                     }
                 }
             }
-            // window.py:_edit_op — clipboard ops ride the view's own actions
+            // clipboard ops ride the view's own actions
             EditorMsg::Cut => self.clip_op("cut-clipboard"),
             EditorMsg::Copy => self.clip_op("copy-clipboard"),
             EditorMsg::Paste => self.clip_op("paste-clipboard"),
@@ -663,7 +658,7 @@ impl Component for Editor {
                     return;
                 }
                 let sides = gitstatus::build_sides(&gitstatus::parse_unified(&text));
-                // python: `len(sides[0]) == 0` — sides[0] is the OLD side
+                // sides.old is the OLD side — len==0 means no content
                 if sides.old.is_empty() {
                     self.error(
                         &format!("No diff: {rel}"),
@@ -687,15 +682,15 @@ impl Editor {
         self.nb.current_page().map(|c| c as usize)
     }
 
-    /// the toplevel window (dialogs are transient for it — python get_root())
+    /// the toplevel window (dialogs are transient for it)
     fn window_widget(&self) -> Option<gtk::Window> {
         self.nb.root().and_downcast::<gtk::Window>()
     }
 
-    /// editor.py:_error — modal CLOSE MessageDialog, transient for the window.
+    /// modal CLOSE MessageDialog, transient for the window.
     fn error(&self, primary: &str, secondary: &str) {
         let Some(win) = self.window_widget() else { return };
-        #[allow(deprecated)] // 4.10-deprecated upstream; editor.py uses it (S3 polish)
+        #[allow(deprecated)] // 4.10-deprecated upstream (S3 polish)
         let d = gtk::MessageDialog::builder()
             .transient_for(&win)
             .modal(true)
@@ -711,7 +706,7 @@ impl Editor {
         self.pages.iter().position(|pg| pg.path.as_deref() == Some(path))
     }
 
-    /// diff tabs key off "diff:<rel>" (python `_page_of`'s diff arm); the exact
+    /// diff tabs key off "diff:<rel>"; the exact
     /// path match `page_of` stays file-tab-only
     fn page_of_key(&self, key: &str) -> Option<usize> {
         self.pages.iter().position(|pg| pg.diff_of.as_deref() == Some(key))
@@ -724,13 +719,13 @@ impl Editor {
 
     // ---- lifecycle ------------------------------------------------------------
 
-    /// editor.py:set_root — records the root, closes everything.
+    /// records the root, closes everything.
     fn set_root(&mut self, root: PathBuf) {
         self.root = Some(root);
         self.close_all();
     }
 
-    /// editor.py:restore — set_root + open still-existing tabs + clamp by
+    /// set_root + open still-existing tabs + clamp by
     /// min(tab, n-1) (a saved index past the end re-clamps) + refresh.
     fn restore(&mut self, root: &Path, tabs: Vec<String>, active: i64, sender: &ComponentSender<Self>) {
         self.set_root(root.to_path_buf());
@@ -976,7 +971,6 @@ impl Editor {
             // dirty → "Discard changes to X?" CANCEL/Discard; the Discard
             // click re-enters forced. The index is resolved at response time
             // via the page widget — tabs may shift while the dialog is open
-            // (python captures a possibly-stale one; same UI outcome).
             let Some(win) = self.window_widget() else { return };
             let name = self.pages[index]
                 .path
@@ -988,7 +982,7 @@ impl Editor {
             let pg_widget = self.pages[index].page.clone();
             let snd = sender.clone();
             d.connect_response(move |dd, r| {
-                dd.destroy(); // python always destroys in the response handler
+                dd.destroy(); // destroy in the response handler
                 if r == gtk::ResponseType::Accept {
                     let idx = nb2.page_num(&pg_widget).map(|i| i as usize);
                     if let Some(idx) = idx {
@@ -1045,7 +1039,7 @@ impl Editor {
 
     // ---- diff pages (S2) ------------------------------------------------------
 
-    /// python `_diff_side`'s buffer half — fresh GtkSource buffer (scheme +
+    /// diff-side buffer — fresh GtkSource buffer (scheme +
     /// lang), bg tint over the marked lines, header fg, `set_modified` AFTER
     /// the tags ("diff tabs never dirty"). Full syntax highlighting both
     /// sides — the '=' rows get NO fg tag (user reversal 2026-10-14: the
@@ -1066,7 +1060,7 @@ impl Editor {
         if let Some(lang) = lang {
             buf.set_language(Some(lang));
         }
-        // editor.py:_rgba — a bad hex stays transparent (fresh Gdk.RGBA())
+        // a bad hex stays transparent (fresh Gdk.RGBA())
         let tint = rgba(hexcol);
         let tag = gtk::TextTag::builder().background_rgba(&tint).build();
         let fg = gtk::TextTag::builder()
@@ -1074,7 +1068,7 @@ impl Editor {
             .build();
         buf.tag_table().add(&tag);
         buf.tag_table().add(&fg);
-        // python's `i < 0` clamp — parse never stores negatives, so the usize
+        // negative-index clamp — parse never stores negatives, so the usize
         // compare kills a wrapped usize::MAX too (untracked full-del rows)
         for &i in idxs.iter() {
             if i >= buf.line_count() as usize || i == usize::MAX {
@@ -1123,7 +1117,7 @@ impl Editor {
         (view, buf)
     }
 
-    /// python editor.py:open_diff — a CHANGES row's side-by-side page: left
+    /// a CHANGES row's side-by-side diff page: left
     /// (del, red tint) / right (add, green tint), linked scroll, letter chip
     /// in the tab head ("diff tabs never dirty" → no dot). Reuses the file
     /// page's widget fields for the LEFT side.
@@ -1305,8 +1299,7 @@ impl Editor {
         page.append(&hbar);
 
         // tab head: letter chip slot FIRST, name, close — and no dirty dot.
-        // python builds a dot anyway but never appends it (diff tabs never
-        // dirty); an orphan for paint_dot parity
+        // an orphan dot for paint_dot parity (diff tabs never dirty)
         let slot = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
         if !letter.is_empty() {
             let chip = gtk::Label::builder()
@@ -1397,9 +1390,8 @@ impl Editor {
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    /// python editor.py:refresh_diff's live renewal of an open diff page —
-    /// same trigger/fraction/letter-chip contract, measured-churn-safe body
-    /// (see the comment inside).
+    /// live renewal of an open diff page — same trigger/fraction/letter-chip
+    /// contract, measured-churn-safe body (see the comment inside).
     fn refresh_diff(
         &mut self,
         rel: &str,
@@ -1414,8 +1406,8 @@ impl Editor {
             let dw = self.pages[idx].diff.as_ref().unwrap(); // diff pages always carry theirs
             (frac_of(&dw.sw_l), frac_of(&dw.sw_r))
         };
-        // refresh_diff — live renewal of an open diff page. NOT the python
-        // shape (python swaps both sides' child VIEWS): measured churn law —
+        // refresh_diff — live renewal of an open diff page. NOT the
+        // swap-the-child-VIEWS shape: measured churn law —
         // every widget swap re-allocates the visible page and its scroll
         // adjustments reset/flap; the swap raced restore_frac too. The views,
         // ScrolledWindows and scroll pairing here are RETAINED and only the
@@ -1457,8 +1449,6 @@ impl Editor {
             restore_frac(&sw_l, frac_l);
             restore_frac(&sw_r, frac_r);
         }
-        // python refresh_diff touches no page refs (its diff pages carry no
-        // buf attr at all) and never calls _refresh_tab_state
         if letter != self.pages[idx].diff_letter {
             let slot = self.pages[idx].badge_slot.clone();
             let mut chip_child = slot.first_child();
@@ -1481,7 +1471,7 @@ impl Editor {
 
     // ---- clip / edit ops ------------------------------------------------------
 
-    /// Edit-menu op target (python window.py:_edit_op, review fix-3):
+    /// Edit-menu op target (review fix-3):
     /// buffer pages → the page's own view; diff pages → the CURRENTLY FOCUSED
     /// text view (either side panel), so Cut/Copy/Paste/Select-All act on the
     /// side the user actually has focus in; anything not focusable cleanly
@@ -1513,7 +1503,7 @@ impl Editor {
         }
     }
 
-    /// editor.py:_watch — one FileMonitor per open path.
+    /// one FileMonitor per open path.
     fn arm_watch(&mut self, path: &Path, sender: &ComponentSender<Self>) {
         self.cancel_watch(path);
         let file = gio::File::for_path(path);
@@ -1534,7 +1524,7 @@ impl Editor {
     }
 
     fn arm_settle(&self, path: PathBuf, sender: &ComponentSender<Self>) {
-        // python resets the debounce (pop + source_remove), but SourceId::remove
+        // the cancel-then-arm reset shape is out: SourceId::remove
         // PANICS on an already-fired id (measured: one touch+delete race kills the
         // app). fs_settled is idempotent, so stale settles are harmless — arm
         // without cancelling.
@@ -1702,7 +1692,7 @@ impl Editor {
 
 }
 
-#[allow(deprecated)] // 4.10-deprecated upstream; editor.py uses it (S3 polish)
+#[allow(deprecated)] // 4.10-deprecated upstream (S3 polish)
 fn discard_dialog(win: &gtk::Window, text: &str) -> gtk::MessageDialog {
     let d = gtk::MessageDialog::builder()
         .transient_for(win)
@@ -1714,16 +1704,16 @@ fn discard_dialog(win: &gtk::Window, text: &str) -> gtk::MessageDialog {
     d
 }
 
-// diff-page pairing law (2026-10-13, replaces the python-era "placeholder
+// diff-page pairing law (2026-10-13, replaces the "placeholder
 // swap at first allocation" story): a View owns BOTH its adjustments from
 // construction; the ScrolledWindow binds those very objects to its
 // scrollbars (adjtrace: view-getter == sw-getter — identity measured held
 // across refresh_diff renewals — the only-buffer-swap contract); GTK's
 // notify::allocation NEVER fires on this build, so linking hooks ONCE at
-// open (LinkedAxes dedupe) and never retries — the python-era notify/idle
+// open (LinkedAxes dedupe) and never retries — the notify/idle
 // retries were measured inert and deleted.
 
-/// python `_rgba` — fresh Gdk.RGBA() (transparent) that parse() fills in
+/// fresh Gdk.RGBA() (transparent) that parse() fills in
 /// place; a bad hex stays transparent (an invisible tag, not a panic)
 fn rgba(hexcol: &str) -> gtk::gdk::RGBA {
     let mut c = gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0);
@@ -1733,8 +1723,7 @@ fn rgba(hexcol: &str) -> gtk::gdk::RGBA {
     c
 }
 
-/// capture the scroll fraction BEFORE a re-child (python `_on_git_changed`'s
-/// leading _scroll_frac reads)
+/// capture the scroll fraction BEFORE a re-child
 fn frac_of(sw: &gtk::ScrolledWindow) -> f64 {
     let adj = sw.vadjustment(); // inherent getter: non-Option (only views are)
     let span = (adj.upper() - adj.page_size()).max(0.0);
@@ -1951,7 +1940,7 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
     }
 }
 
-/// python `_wire_diff_scroll`... — the number-column side (Task 4): a
+/// the number-column side (Task 4): a
 /// non-editable, unfocusable, fixed-narrow source view over the side's
 /// per-row file numbers; line-box params MUST track diff_side's (row 1:1).
 fn diff_num_view(no: &[u32]) -> sourceview5::View {
@@ -1984,17 +1973,17 @@ fn diff_num_pane_width(no: &[u32], view: &sourceview5::View) -> i32 {
     (px + 4 + 4).max(24) // left_margin 4 + antialias slack 4
 }
 
-/// python `_diff_link` + `_wire_diff_scroll` merged — drive `dst`'s scroll
+/// the diff scroll-link machinery — drive `dst`'s scroll
 /// from `v`'s, BOTH axes. True = a NEW link was made on either axis
 /// (equal-value set_value fires no changed signal → no loop, so the
 /// destination never needs a guard). Each axis links independently (see
-/// LinkedAxes). MEASURED 2026-10-13 (broadway python probes + app probe runs
+/// LinkedAxes). MEASURED 2026-10-13 (broadway probes + app probe runs
 /// on broadway AND the real display): a View owns BOTH its adjustments from
 /// construction — hooks land at open_diff's wire time, the sw binds those
 /// very objects to its scrollbars (adjtrace: view-getter == sw-getter,
 /// identity held across refresh_diff renewals), and GTK's notify::allocation
-/// NEVER fires for widgets here — the python-era allocation-notify retry +
-/// `_diff_resync` idle were measured inert and are gone. `linked` keeps the
+/// NEVER fires for widgets here — the allocation-notify retry +
+/// idle-resync timers were measured inert and are gone. `linked` keeps the
 /// identity-dedup so a stray second call can't double-hook. Closed page:
 /// v → handler → dst is a DAG (no cycle); ownership frees the chain.
 fn diff_link(

@@ -1,5 +1,5 @@
 //! Pure helpers: pane environment build + project run detection.
-//! Port of alpaca_code/runctl.py — no gi imports, safe to test directly.
+//! No gi imports — safe to test directly.
 
 use std::path::Path;
 
@@ -14,8 +14,8 @@ const CLAUDE_SESSION_MARKERS: [&str; 9] = [
     "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SSE_PORT",
 ];
 
-/// VTE spawn_async MERGES envv onto the child's INHERITED environ (measured on the
-/// Python app: the child kept all parent vars) — omitting a key here does NOT remove
+/// VTE spawn_async MERGES envv onto the child's INHERITED environ (measured:
+/// the child kept all parent vars) — omitting a key here does NOT remove
 /// it from the child. Override instead: claude's nested-marker check is a plain
 /// truthiness test on CLAUDE_CODE_CHILD_SESSION, so an empty value disables it.
 pub fn pane_environ() -> Vec<String> {
@@ -51,7 +51,7 @@ pub struct RunCmd {
     pub label: String,
 }
 
-/// Detect how to run a project (runctl.py:29-49): package.json scripts dev→start
+/// Detect how to run a project: package.json scripts dev→start
 /// (present-but-broken package.json stops the decision), else csproj top level,
 /// else one-level-nested first hit, else None.
 pub fn detect(root: &Path) -> Option<RunCmd> {
@@ -98,17 +98,17 @@ pub fn detect(root: &Path) -> Option<RunCmd> {
     None
 }
 
-/// New Project flow (window.py:_act_new_project on_resp): `os.makedirs(target,
-/// exist_ok=False)` — intermediates allowed, final dir must NOT exist — then
+/// New Project flow: create the target dir — intermediates allowed, the final
+/// dir must NOT exist (an existing leaf dir is an error) — then
 /// `git init` with a 10s wall. Both failures surface in the app's error dialog
 /// ("Couldn't create {target}"), and a nonzero git exit is NOT an error there
-/// (python runs without check=True, only the timeout/launch raise).
+/// (only the timeout/launch failure raises).
 pub fn create_project(target: &Path) -> Result<(), String> {
     if target.exists() {
-        // exist_ok=False — an existing leaf dir is FileExistsError in python
+        // an existing leaf dir is an error (intermediates would be allowed)
         return Err(format!("File exists: '{}'", target.display()));
     }
-    // makedirs creates intermediates; an empty parent means the cwd (relative target)
+    // intermediates are created when missing; an empty parent means the cwd (relative target)
     let parent = match target.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
@@ -118,8 +118,8 @@ pub fn create_project(target: &Path) -> Result<(), String> {
     git_init(target)
 }
 
-/// `git init` with a 10s wall (window.py:423 subprocess.run(timeout=10));
-/// git's output is captured-and-discarded, exactly like python's.
+/// `git init` with a 10s wall;
+/// git's output is captured-and-discarded.
 fn git_init(target: &Path) -> Result<(), String> {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
@@ -133,7 +133,7 @@ fn git_init(target: &Path) -> Result<(), String> {
     let start = Instant::now();
     loop {
         match child.try_wait() {
-            // nonzero exit is not an error (python: no check=True)
+            // nonzero exit is not an error
             Ok(Some(_)) => return Ok(()),
             Ok(None) => {
                 if start.elapsed() >= Duration::from_secs(10) {
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn create_project_makedirs_and_git_init() {
-        // window.py:_act_new_project — makedirs(exist_ok=False) + git init
+        // target creation (intermediates ok, existing leaf fails) + git init
         let base = std::env::temp_dir().join("alpaca-newproj");
         let _ = std::fs::remove_dir_all(&base);
         let parent = base.join("p"); // nonexistent parent chain is created
@@ -173,7 +173,7 @@ mod tests {
         create_project(&target).unwrap();
         assert!(target.is_dir());
         assert!(target.join(".git").is_dir());
-        // exist_ok=False: the second run must fail, not silently reuse
+        // existing leaf dir: the second run must fail, not silently reuse
         create_project(&target).unwrap_err();
         std::fs::remove_dir_all(&base).unwrap();
     }
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn package_json_corrupt_or_without_scripts_is_none() {
         // package.json PRESENT means decision stops there — no csproj fallback
-        // (runctl.py:31-42: the is_file branch returns in all cases)
+        // (the is_file branch returns in all cases)
         let d = dir_with("broken", &[("package.json", "{ nope")]);
         assert!(detect(&d).is_none());
         let d = dir_with("noscripts", &[("package.json", r#"{ "name": "x" }"#)]);
@@ -230,15 +230,15 @@ mod tests {
             "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SSE_PORT",
         ] {
             // present in the ambient environ → overridden to EMPTY (VTE merge
-            // invariant); absent from it → must NOT appear at all (python:
-            // `if k in os.environ`)
+            // invariant); absent from it → must NOT appear at all (only ambient
+            // keys get overridden)
             if std::env::var_os(k).is_some() {
                 assert_eq!(get(k).unwrap().split_once('=').unwrap().1, "");
             } else {
                 assert!(get(k).is_none(), "{k} absent from parent must stay absent");
             }
         }
-        // PATH append invariant (python: `p not in PATH.split(os.pathsep)`);
+        // PATH append invariant (append only when not already present);
         // present anywhere → PATH untouched; absent → appended after a colon
         let home = std::env::var("HOME").unwrap();
         let local_bin = format!("{home}/.local/bin");

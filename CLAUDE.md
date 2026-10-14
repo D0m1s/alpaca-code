@@ -4,7 +4,6 @@ GTK4 desktop app wrapping the raw `claude` CLI: tabbed GtkSourceView editor +
 file browser + three VTE panes (Agent = raw claude TUI, Terminal = `$SHELL`,
 Output = npm/dotnet run), Run/Stop buttons, File menu. Stack: relm4 0.11 +
 gtk4 0.11 (v4_22), sourceview5 0.11, vte4 0.10, glib/gio 0.22, gdk-pixbuf 0.22.
-The original PyGObject build was removed 2026-10-09 — git history keeps it.
 
 ## Run / test
 
@@ -16,19 +15,13 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]  # no arg → last_proj
 
 System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
-## Port status
+## Status
 
 - **S1/S2/S3 complete (2026-10-09).**
   Wayland frame-callback freeze (measured, this stage): after a KWin restart,
   surfaces get no frame callbacks until touched, so GTK allocations FREEZE at
   the startup paint (~0.9-2.2s) — positional/live geometry is unreachable
   there; live probes need the running display before the freeze, or never restart KWin.
-
-```
-cargo test --manifest-path alpaca-code-rs/Cargo.toml   # displayless — THE test command
-cargo build --manifest-path alpaca-code-rs/Cargo.toml  # cargo test does NOT refresh the runnable bin
-alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
-```
 
 - App-id `io.alpaca.rs`. Reads/writes `~/.config/alpaca-code/state.json`
   (schema at the bottom of this file, atomic rename write).
@@ -58,7 +51,7 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
 
 - `gitstatus.rs` — pure git porcelain/diff parser + subprocess callers
   (`branch_of/branches/switch/create_switch/changes/parse_*/diff_for/commit/ahead/
-  commit_then_push/group_tree`, git_run timeouts 5–120s).
+  commit_then_push/push/pull/group_tree`, git_run timeouts 5–120s).
 - `treehover.rs` — HoverTree + press capture + toggle hit-test (press_xy, toggle_hit).
 - `gitview.rs` — CHANGES view: tree + checkbox column + Select-all row + commit bar;
   CommitClicked validation guards + flight (Phase/Landed). apply() skips the
@@ -66,7 +59,7 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
   is unchanged — both are LOAD-BEARING: without them the 2s probe rebuilds a
   big repo's store every tick (31k rows ≈2.3s UI-thread each, misiuscode's
   unignored target/ measured it) and the mainloop saturates = hard hang.
-- `branchmenu.rs` — branch status-bar pill + Switch/New-Branch hover popover
+- `branchmenu.rs` — branch status-bar pill + Switch/Pull/New-Branch popover
   (80/250ms hysteresis timers, generation-cancelled).
 - `gitpanel.rs` — WORKSPACE/CHANGES mode card: shared search entry + status row
   (branch pill, dot, spinner, count) + 2s live probe; hosts file tree, changes
@@ -100,10 +93,6 @@ alpaca-code-rs/target/debug/alpaca-code-rs [project-dir]
 
 ## Invariants and gotchas (each is a measured ruling — trust them)
 
-Python-era rulings keep their values; `.py` paths below are historical
-provenance — the Python build was removed 2026-10-09 and the Rust port
-implements the behaviors.
-
 - `GtkSource.Buffer(text=…)` is born `modified=True` — an open must call `set_modified(False)`.
 - `Gtk.Notebook.append_page` does NOT switch pages on this build — `set_current_page()` after.
 - Theme styling of app widgets needs MORE than `border`: Breeze paints
@@ -133,11 +122,11 @@ implements the behaviors.
  Agent pane's claude into a no-transcript child session — empty values satisfy its
  truthiness checks) OVERRIDE it to `""` in envv. Env build is pure `runctl::pane_environ`.
 - VTE children are session leaders — kill trees with `killpg(getpgid(pid), SIGHUP)` +
- 2s SIGKILL escalation (`panels.Panes._kill_tree`). `/proc/<pid>` existing is not proof of
+ 2s SIGKILL escalation (`panes::kill_tree`). `/proc/<pid>` existing is not proof of
  life (zombies); judge by exit status.
-- Run state machine (`panels.py`): `_run_starting` covers the async window before the pid
- lands; `has_running_run()` is true through it; Stop in that window sets `_run_stop_pending`
- and the landed pid gets killed. `_run_child_exited` ignores our own cleanup exits so
+- Run state machine (panes.rs): the starting window covers the async gap before the pid
+ lands; `has_running_run()` is true through it; Stop in that window sets `stop_pending`
+ and the landed pid gets killed. Child-exit handling ignores our own cleanup exits so
  status stays truthful.
 - Pane children auto-respawn on user exit, capped (3 per budget; a ≥60s-lived child re-arms;
   re-entering the tab re-arms; <3s deaths are broken children, never respawns — no loops).
@@ -145,12 +134,12 @@ implements the behaviors.
   missing/wrong types to defaults. A bad `state.json` must not brick startup.
 - Editor refuses non-UTF-8 / NUL-containing files at open (`readable_text`) — a lossy
   buffer would be rewritten on Ctrl+S. Valid non-ASCII UTF-8 opens fine.
-- Filetree rebuilds (`set_root`, search-clear) reset `_expanded` — remembered expansions
-  are stale after any store clear; monitor refill prunes stale child expansions in `_fill_children`.
+- Filetree rebuilds (`set_root`, search clear) reset the remembered `open` expansions —
+  stale after any store clear; monitor refill prunes stale child expansions.
 - Filetree (this build, measured): mutating the TreeStore under an EXPANDED row visually
   collapses the view (even deferred/idle fills); surgical INSERTs under expanded rows are
   safe. `view.row_expanded()` readback is deprecated + stale after mutations — expand state
-  lives in filetree's own `_open` set, updated by signal transitions. Children load before
+  lives in filetree's own `open` set, updated by signal transitions. Children load before
   `expand_row` fires (never inside `row-expanded`). Tree store is 8 cols: 0 name, 1 abs path,
   2 is_dir, 3 fallback icon, 4 chevron, 5 badge pixbuf, 6/7 badge/icon visibility;
   `show-expanders=False`.
@@ -169,7 +158,7 @@ implements the behaviors.
   WIDER as the window narrows — text visibility is inversely coupled to window size.
   Also: a scrollable notebook's natural == its minimum, so GtkBox gives it only that
   minimum unless the nb has `hexpand=True` (900px wrap → 280px nb, measured).
-  Fixes in editor.py: `hexpand` on the nb + `_TabDistributor` (BoxLayout subclass wrapping
+  Fixes in editor.rs: `hexpand` on the nb + `TabDistributor` (BoxLayout subclass wrapping
   the nb) sets each tab-name label's min from the strip's live allocation inside its
   do_allocate — every tab = equal share `avail/n − CHROME(62)` capped at natural, recomputed
   on (width, n) change only. No fixed floor: one below the share re-enters scroll mode.
@@ -180,7 +169,7 @@ implements the behaviors.
   hash-for-inactive rule — a selected tab must not blank the others'); restamp via
   `_refresh_tab_state(index)` using the switch-page signal's index (get_current_page is
   stale inside that signal, measured).
-- Icons are vector now (`badges.icon(name)` → `vector.VecIcon`, a `Gdk.Paintable` emitting
+- Icons are vector (`vector::icon(name)` → `VecIcon`, a `Gdk.Paintable` emitting
   Gsk fill/stroke nodes in viewBox units; GSK tessellates per frame at device scale — sharp
   at any display scale). Two resamples used to blur every pixbuf (measured 2026-10-04):
   librsvg scaling viewBox≠request geometry (40–45% partial-alpha pixels), then GtkImage
@@ -197,7 +186,7 @@ implements the behaviors.
   load-bearing: with the property absent, Breeze's `tab:checked` margins (`-3px` both
   sides) leak through and the pill box reshapes on every click (nudge) and pulls into
   the neighbours (probe: cells [134,134,131] → [131,134,134] across page switches;
-  state-invariant only with margin 0 present). `_TabDistributor.CHROME` = 62 (no margin
+  state-invariant only with margin 0 present). `TabDistributor`'s `TAB_CHROME` = 62 (no margin
   px) — without it the req overshoots shares and GTK falls back to unequal min-based
   allocation (measured).
 - Breeze paints popovers via the `popover > contents` child node (bg + 1px
@@ -219,7 +208,7 @@ implements the behaviors.
   = bite, inset = square, measured both ways). A bg-color paint is clipped to the
   same radius, so corners stay ROUND by construction — no inset arithmetic. Band
   height = 28 exactly BECAUSE the run row stands only 28 tall: `run_row.set_valign(
-  CENTER)` in window.py (default FILL would make the row allocate the header
+  Center)` in app.rs (default FILL would make the row allocate the header
   interior 32 — band would grow to 32). Keep this alignment if the header changes.
 - Button metrics live at USER priority, and only after a zero-first sweep
   (2026-10-05): rules at APPLICATION (600) LOSE `button min-height` to Breeze on
@@ -238,7 +227,7 @@ implements the behaviors.
   console cards is BACK by user reversal — the override
   `paned.vertical > separator { min-height: 0 }` is deleted; BOTH splits take the
   shared `paned > separator` 6px transparent-gutter rule, and the drag knob is
-  resize-grabbable again (positions stay set in window.py, never persisted; the
+  resize-grabbable again (positions stay set in app.rs, never persisted; the
   6px comes out of the panes' area — position 592 = start-child height, so the
   editor card keeps ~593 and the seam's y is unchanged). Probe note: FULLSCREENING the probe window
   collapses the headerbar to a 12×0 alloc (GTK/KWin interplay on this build) — verify
@@ -250,7 +239,7 @@ implements the behaviors.
   changed". Kill the old process first (exact pid, not pkill -f), then relaunch.
 - Run/Stop icon centering: a constant-size GtkImage under the default align lands at
   its content-box TOP (ink rides 7px high in the 32px cell) — set `set_valign(CENTER)`
-  on the image (window.py `_img`): alloc centers to (h−16)/2 and the ink centers match
+  on the image (app.rs `_img`): alloc centers to (h−16)/2 and the ink centers match
   the band center to the pixel (measured 16.5 vs 16.5; play+stop agree). Alignment only:
   image min stays 16 → bar stays 34. Gotcha: a widget alloc probe can PRINT stale
   pre-layout values after an align change (requests unchanged → GTK skips re-alloc);
@@ -265,7 +254,7 @@ implements the behaviors.
 - Tree-icon vertical centering (file browser): pixbuf cells center on the line box while
   glyph ink hangs ~1px below → every filetype icon (docs, chips, folders) read ~1px high
   vs filenames at the 22px row. Fix = bottom-pin via `yalign` on the three pixbuf
-  renderers (filetree.py, set BEFORE inserts — cell props cache at insert, so post-set
+  renderers (filetree.rs, set BEFORE inserts — cell props cache at insert, so post-set
   no-ops: measured twice): chips/symbolic 1.0 (+1px, 2px slack), chevron 2/3 (+1px, stays
   flush with folders). Shift law measured at slack 10: shift = slack·(yalign−0.5) exact on
   both `pixbuf` and `icon-name` render paths. Post-fix modes −0.04/+0.12 (was −1.04/−0.88).
@@ -274,18 +263,18 @@ implements the behaviors.
   centers a different BOX than the eye reads — the eye anchors on the dense-ink band
   (x-height for lowercase, caps band for all-caps) plus the baseline (text baseline = row
   top+15 exact in 22px tree rows). Channels: Pango labels/tabs (ink hangs — CSS
-  padding-bottom 3px, above), pixbuf cells (yalign, above), cairo chip letters (badges
-  `_render`: ink-box centering pulls LOWERCASE labels ~1.5px high because the descender-
+  padding-bottom 3px, above), pixbuf cells (yalign, above), cairo chip letters (badges.rs
+  `render`: ink-box centering pulls LOWERCASE labels ~1.5px high because the descender-
   tipped box drags the average — fix centers the bowl band instead, baseline canvas 11 =
-  row_top+15; caps labels are already exact since caps = the band; measured py −1.5→≤0.15).
-- CHANGES-panel gaps (2026-10-05, gitview.py): WORKSPACE sets xpad 2 on every tree cell —
+  row_top+15; caps labels are already exact since caps = the band; measured −1.5→≤0.15).
+- CHANGES-panel gaps (2026-10-05, gitview.rs): WORKSPACE sets xpad 2 on every tree cell —
   4px art-to-art; CHANGES' chip/badge/name cells had none (0-2px gaps) and the blank
   chevron/chip slots in dir/Select-all rows floated the checkbox ~20-35px. Fix = xpad 2
   everywhere + chip/badge cells PER-ROW INVISIBLE on rows without chips (bind `visible`;
   this GTK drops a hidden cell's width per row — probe: hidden row's text sat 20px left
   of its twins). Measured after (column-run profile of replica shots): dir/file/Select-all
   gaps read 8-10px with tile edges eaten ~2px per side by antialias thresholds = the same
-  4px WORKSPACE shows; py-badge→name parity 6 vs 6-9; chip bottom-pins −1px vs WORKSPACE.
+  4px WORKSPACE shows; badge→name parity 6 vs 6-9; chip bottom-pins −1px vs WORKSPACE.
   Amber-chip edges drop below sat thresholds before blue tiles — color, not layout.
 - GtkSourceView style schemes: languages address styles through the `def:*` namespace
   (lang defs say `<style name="keyword" map-to="def:keyword"/>` and the render path calls
@@ -295,7 +284,7 @@ implements the behaviors.
 - Window buttons (minimize/maximize/close): the headerbar IS an internal `Gtk.WindowControls`
   (wrapped in a `WindowHandle` — `headerbar.get_first_child()` only shows that wrapper, so
   never pack your own WindowControls; it duplicates). KDE Wayland supplies no decoration
-  layout — `main._theme_setup` must force `gtk-decoration-layout` or buttons stay hidden.
+  layout — style.rs must force `gtk-decoration-layout` or buttons stay hidden.
 - CSS: never give titlebuttons a `background` rule — Adwaita paints their icons via
   background-image, so `background: transparent` (e.g. a broad `.alpaca-header button`)
   blanks the window buttons entirely; scope button styling to `menubutton > button` etc.
@@ -379,9 +368,9 @@ implements the behaviors.
   GDK_BACKEND=broadway BROADWAY_DISPLAY=:N ALPACA_PROBE_S2=…` (own session →
   own instance); delete `/run/user/1000/broadway*.socket` between runs;
   pkill -x broadwayd.
-- GTK widget pairing laws (all measured 2026-10-13 via broadway python probes
-  + app probe runs): (a) `notify::allocation` NEVER fires on this GTK —
-  python-era allocation-notify retries were inert and are gone from diff_link;
+- GTK widget pairing laws (all measured 2026-10-13 via broadway probe captures
+ + app probe runs): (a) `notify::allocation` NEVER fires on this GTK —
+  allocation-notify retries were inert and are gone from diff_link;
   a View owns BOTH its adjustments from construction and the sw binds those
   same objects to its scrollbars (view-getter == sw-getter measured
   pointer-identical, identity stable across refresh_diff's buffer swaps).
@@ -394,8 +383,8 @@ implements the behaviors.
   push races, one restore_frac per side); their h adj stays private (page
   sizes differ — one adjustment can't hold two).
 - Paned divider gotchas (measured 2026-10-13): the UNSET position with
-  text-view children put the start child at its 1px minimum in-app (the lone
-  python probe's even split does not generalize to wrapped/nested panes) —
+  text-view children put the start child at its 1px minimum in-app (a lone
+  probe's even split does not generalize to wrapped/nested panes) —
   one-shot 50% rides the sw's hadjustment `changed` (page_size landing =
   the split area's first allocation) and set_position must fire at IDLE: a
   set mid-allocation-cascade is discarded (position property 482 with

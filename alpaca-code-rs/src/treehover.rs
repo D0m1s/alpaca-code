@@ -18,7 +18,7 @@ pub struct Imp {
     hover_xy: Cell<(f64, f64)>, // last pointer pos in view coords; y<0 = outside
     hover_row: RefCell<Option<gtk::TreeRowReference>>,
     last_adj: RefCell<Option<gtk::Adjustment>>,
-    press_xy: Cell<(f64, f64)>, // python's view._press_xy sentinel
+    press_xy: Cell<(f64, f64)>, // press sentinel (-1,-1) = no press
 }
 
 impl Default for Imp {
@@ -72,7 +72,7 @@ impl TreeViewImpl for Imp {}
 impl WidgetImpl for Imp {
     fn snapshot(&self, snapshot: &gtk::Snapshot) {
         if let Some((x, y, w, h)) = self.hover_band() {
-            // python: lookup_color("alpaca-hover") else "#111723"
+            // lookup_color("alpaca-hover"), else the fallback
             let rgba = self
                 .obj()
                 .style_context()
@@ -197,7 +197,7 @@ impl HoverTree {
     }
 }
 
-/// Changes-view toggle routing (python gitview.py `_toggle_hit`): press_x
+/// Changes-view toggle routing: press_x
 /// inside the toggle CELL AREA, past the chevron slot (+16 = 12px art + 2px
 /// pad, measured), within the toggle's natural width (falls back to 24 at
 /// the caller when the lazy measure fails). px<0 = no press captured.
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn toggle_hit_geometry() {
-        // python gitview.py _toggle_hit: px<0 = no press → never a toggle;
+        // px<0 = no press → never a toggle;
         // x0 = cell_area.x + 16 (chevron slot: 12px art + 2px pad, measured);
         // inclusive lower, exclusive upper.
         assert!(!toggle_hit(-5.0, 0, 24), "sentinel press: not a toggle hit");
