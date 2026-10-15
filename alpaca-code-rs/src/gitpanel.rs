@@ -33,6 +33,11 @@ pub enum GitPanelMsg {
     ModeTree,
     ModeChanges,
     EntryChanged(String),
+    /// Ctrl+Shift+F → put the caret in the shared search entry. No text
+    /// touched here (set_text("") queues the delayed Search("") wipe) — the
+    /// entry routes itself: EntryChanged already fans out per mode
+    /// (tree → FileTreeMsg::Search, changes → GitViewMsg::Filter).
+    FocusSearch,
     /// gitview + branchmenu status reports land here (window wiring's target)
     ChildStatus(GitStatusKind, String),
     ChildBusy(bool),
@@ -360,6 +365,9 @@ impl Component for GitPanel {
             GitPanelMsg::ModeTree => self.set_mode("tree"),
             GitPanelMsg::ModeChanges => self.set_mode("changes"),
             GitPanelMsg::EntryChanged(text) => self.entry_changed(&text),
+            GitPanelMsg::FocusSearch => {
+                self.entry.grab_focus();
+            }
             GitPanelMsg::ChildStatus(kind, text) => self.show_git_status(kind, text, &sender),
             GitPanelMsg::ChildBusy(b) => self.changes_busy = b,
             GitPanelMsg::Count(n) => self.count_label.set_text(&format!("{n} files")),

@@ -17,13 +17,88 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
 ## Status
 
-- **Workbench save/restore (2026-10-14, step 1 of the workbench phase,
-  workbenches pending):** Ctrl+Shift+S, the menu Save row, the X button and
+- **Workbench Launcher (2026-10-15, workbenches phase step 2):** the hub is a
+  GtkStack PAGE (`launcher`) in the main window (no second window):
+  launcher.rs lists `~/.config/alpaca-code/workbenches/*.json` as one
+  `.alpaca-launchcard` per file, most recent MTIME first (the last save
+  rides first; the file STEM = the workbench name — LauncherOpen loads by it
+  via the workbench_path sanitize law). Boot = the HUB AT EVERY BOOT (user
+  decision; open_projects no longer auto-reopens at boot — BootActivate and
+  slot_of were deleted, the field stays WRITE-ONLY via add/close's
+  live-truth rebuild + the S4 probe's state assert); the CLI `[dir]` arg
+  still boots straight into the project. Card click = `open_workbench`:
+  ADOPT the file (wb/wb_name = that uuid → the next save writes THAT file;
+  the old-preserve law keeps closed projects' sessions across strip edits),
+  roots via `launcher::open_roots` (alphabetical, state's last_project LAST
+  — open_workspace leaves the last-processed root ACTIVE), each through the
+  shared OpenWorkspace (already-open → switch; cap-full reports; sessions
+  restore like any Add). Tiles: basename (py_basename now pub(crate)), the
+  SAVED ProjectSession.language as a chip (`lang_label`: c-sharp→`C#`,
+  typescript→`TS`, prettified fallback; hue = seti palette via `.alpaca-lc-*`
+  classes, each restating `:backdrop` per the leak law) + `branch_of` live
+  read with branch.svg 12px (None → omitted). The big `+` →
+  LauncherOutput::New → LauncherAdd → the shared chooser with fresh=true →
+  `OpenNew` CLEARS wb/wb_name THEN opens (fresh workbench; first save mints
+  its uuid). Zero-workspace close swing now shows the launcher
+  (close_target None arm); New/Open Workbench menu stubs now route there.
+  Masthead llama = assets/alpaca-80.png (1254px source bakes ONE-SHOT
+  magick Lanczos → 80, frozen artifact; include_bytes → PixbufLoader →
+  gdk::Texture for_pixbuf (4.20-deprecated, no replacement binding shipped
+  in gdk4 0.11.5 — targeted allow) drawn 1:1 with set_pixel_size(80): bare
+  paintables draw at the 16px measure floor otherwise — caught in the
+  broadway capture). Footer "By @D0m1s" 10px #5a6375 →
+  `gio::AppInfo::launch_default_for_uri` github.com/D0m1s. Probe:
+  `ALPACA_PROBE_LN=<rig dir>` — 14 asserts (boot page + card order + tile
+  facts via launcher's probe_texts widget walk; card clicks ride
+  probe_click = the REAL Button activation; the blend click asserts the
+  switch-not-add law + identity swap; wrapper /tmp/lnshot.sh = same rig
+  content WITHOUT the probe env → static capture). WB_RESTORE's chain was
+  rewritten for the hub boot (step 0 clicks the card; r-strip/r-adopted/
+  r-page-flipped + the old restore set). Baseline-equal FAILs (pristine
+  HEAD with the same rebuilt rigs, so NOT this change): S2 diff-bar-drive
+  (merged h-bar drive) and S4 pill-band-floats (the never-allocated race).
+  The launcher-at-boot also exposed two capture-rig numbers: broadway's
+  http port = display+8080 (:11 → 8091), and google-chrome-stable is the
+  chromium binary on this box.
+
+- **Launcher chrome hide + language tally (2026-10-15):** while the hub page
+  is visible the header's workspace furniture is HIDDEN — the workbench-menu
+  chevron (`menu_btn`, now an App field) and the projadd `+`. ONE
+  `stack.connect_notify_local(Some("visible-child"))` hook covers every flip
+  (boot/open/switch/close-to-hub); the explicit init set carries boot
+  because the visible page is ALREADY the launcher at init — the queued
+  ShowLauncher is a no-op change and fires no notify. LN chain = 14 asserts
+  now (`ln-chrome-hidden` step 0, `ln-chrome-shown` step 2); paint-verified
+  via lnshot crops (band empty left+center, run/stop + window controls kept).
+  The card chip's language source `filetree::dominant_language` is
+  linguist-style now: git repos tally `git ls-files -z --cached --others
+  --exclude-standard` (gitignored NOT counted — .superpowers/ leaked in the
+  old walk) BYTE-weighted, prose exts (md/rst/txt) skipped, ties lexically
+  smallest (BTreeMap); no git → the old count-walk unchanged. Measured root
+  cause of "XML": the count fold let 203 tracked seti `.svg` badge assets
+  out-count 17 `.rs` (x.svg → xml), and ignored `.superpowers/` added 27
+  more svg — dropping ignored files alone would still have shown XML, bytes
+  are what make rs 533K beat svg 195K. The chip reads the SAVED language,
+  so real repos show the fix from their NEXT Ctrl+Shift+S (no migration).
+  Second chip misfire same day (techshop-admin-frontend read JSON):
+  generated lockfiles are EXCLUDED too — `GENERATED_NAMES`
+  (package-lock.json 603K outweighed that repo's tsx+ts 572K combined) +
+  `GENERATED_EXTS` = ["lock"] (yarn/Cargo/composer; x.lock maps to TOML on
+  this GtkSourceView so Cargo.lock would even hide behind a toml chip).
+  Measured id map on this box: x.tsx → typescript-jsx (chip "TS" via its
+  lang_label rule), x.mjs/x.js → id "js" (not "javascript") — both in the
+  launcher label/class tables.
+  Tests ride the `dominant_ext_of` seam (`LanguageManager::default()`
+  aborts in the displayless run: "Gtk has to be initialized" — never touch
+  it in a unit test).
+
+- **Workbench save/restore (2026-10-14, step 1 of the workbench phase):**
+  Ctrl+Shift+S, the menu Save row, the X button and
   Exit/Ctrl+Q all run `App::save_all` — tabs flush (defeats the 1s
   debounce), window geom + `last_workbench` into state.json, and the full
   session into `~/.config/alpaca-code/workbenches/<uuid>.json` (name =
-  `glib::uuid_string_random()` placeholder; new/open-workbench stay no-op
-  stubs). Per live project it saves: paned positions (vpane now STORED on
+  `glib::uuid_string_random()` placeholder; new/open-workbench SURFACE THE
+  LAUNCHER now — 2026-10-15, see its block above). Per live project it saves: paned positions (vpane now STORED on
   `Workspace`), dominant language (`filetree::dominant_language` =
   scan_project ext tally → top ext → `LanguageManager::guess_language` id;
   store-only, no display), filetree open set (abs) + gitview closed set
@@ -53,11 +128,12 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   XDG config across the two runs) — save run ends with the real
   `root.close()`; restore asserts hpane/vpane/scroll/tabs/open-set.
 
-- **Header menu row swap (2026-10-14, workbenches pending):** the
+- **Header menu row swap (2026-10-14):** the
   File/Edit/Window/Help label buttons are GONE — one icon-mode chevron
   MenuButton (`chevron-down.svg` as custom child) at the header's left opens
   the workbench menu (New/Open | Save | Exit; `gio::Menu` sections = the
-  separator lines; new/open/save = no-op stub actions, Exit = `app.quit`).
+  separator lines; new → LauncherAdd (fresh workbench), open → ShowLauncher,
+  save → the full save, Exit = `app.quit`).
   Static popover attached ONCE at init — `refresh_menus`, `HeaderButtons`,
   `no_arrow` and the old menu-model fns are deleted (the open/recent/
   minimize/close/about/edit-op ACTIONS stay registered, surface-less, for
@@ -139,6 +215,9 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   green unit tests because the bookkeeping is widget-layer. Kill the pane child externally and count resurrections via
   `pgrep -P <app>`; that is the pane-exit path's only live gate.
 - Rust probe envs (PROBE-ONLY chains in app.rs, never run with env unset):
+  `ALPACA_PROBE_LN=<rig dir>` (launcher chain: boot page + card order + tile
+  facts + real card-click opens + the blend-click law; /tmp/lnshot.sh = the
+  same rig content without the env = a static launcher capture),
   `ALPACA_PROBE_S2=<dir>` (workspace chain), `ALPACA_PROBE_S3=<dir>` (hpane
   width-step chain + tab strip), `ALPACA_PROBE_S4=<dir>` (multi-workspace
   chain: 2 opens + switch-survival + cap asserts + a close step (5–6:
@@ -575,7 +654,8 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
 ```json
 {"last_project": "/path|null", "recents": ["/path", …cap 10, newest first],
- "open_projects": ["/path", …cap 3, opened-order], "projects": {"/path": {"open_tabs": ["rel/path", …], "active_tab": 0}},
+ "open_projects": ["/path", …cap 3, opened-order],   // write-only at boot since the 2026-10-15 launcher — still mirrors the live strip
+ "projects": {"/path": {"open_tabs": ["rel/path", …], "active_tab": 0}},
  "last_workbench": "<uuid>|null", "window": {"width": 1586, "height": 992, "maximized": false}}
 ```
 
@@ -585,7 +665,7 @@ step 2026-10-14; name = `glib::uuid_string_random()` placeholder; tolerant
 
 ```json
 {"name": "<uuid>", "projects": {"/abs/project": {
-  "language": "rust|null",            // GtkSourceView id from the top ext tally
+  "language": "rust|null",            // GtkSourceView id from the top ext tally; the launcher's card chip displays it
   "vpane": 592, "hpane": 1161,        // 0/neg = not saved → built-in default
   "scroll": {"rel": "src/main.rs", "frac": 0.37},  // ACTIVE file only; diff pages → null
   "expanded": ["/abs/project/sub"],   // filetree open set (abs dirs)

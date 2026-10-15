@@ -330,3 +330,49 @@ notebook.alpaca-panes > header > tabs > tab:checked { min-height: 28px; }
    keeps 3px) drops the pane pill's ink the extra ~1px the user read as centered */
 .alpaca-panetabname { font-size: 13px; font-weight: 500; color: #8a93a6; padding: 0 0 2px 0; }
 tab:checked .alpaca-panetabname { color: #e6e8ee; }
+
+/* --- workbench launcher (hub page, 2026-10-15) ---
+   A stack page on the app's own dark window: cards = the .alpaca-card family,
+   tiles = the darker strip tone (#0a0d13); the same raised/airline tokens as
+   everywhere else. Buttons here carry NO headerbar ancestry — the 16px
+   vertical additive dies with headerbar buttons only, so a flat
+   min-height:0 + user-priority rule is enough (branchbtn precedent). */
+.alpaca-launch { padding: 28px 38px 8px; }
+/* the card is a has_frame(false) Button (click = open the workbench): wipe
+   the theme button box, then raise the card shape in the same rule */
+.alpaca-launchcard { background: #0d1017; border: 1px solid #1c2230;
+                     border-radius: 4px; outline: none; box-shadow: none;
+                     min-height: 0; min-width: 0; margin: 0; border-spacing: 0;
+                     padding: 12px 14px; }
+.alpaca-launchcard:hover { background: #111723; border-color: #2b3448; }
+/* label:backdrop leak law: every label inside a button-state node restates
+   its color (Breeze brightens backdrop labels; name/tile read dim otherwise) */
+.alpaca-launchcard label:backdrop { color: #e6e8ee; }
+.alpaca-launchname { font-size: 16px; font-weight: 600; color: #e6e8ee; }
+.alpaca-launchtile { background: #0a0d13; border: 1px solid #1c2230;
+                     border-radius: 4px; padding: 9px 12px; }
+.alpaca-launchtile label { font-size: 13px; color: #e6e8ee; }
+.alpaca-launchlang { font-size: 11px; font-weight: 600; }   /* chip text + hue below */
+.alpaca-lc-blue, .alpaca-lc-blue:backdrop { color: #519aba; }
+.alpaca-lc-green, .alpaca-lc-green:backdrop { color: #8dc149; }
+.alpaca-lc-yellow, .alpaca-lc-yellow:backdrop { color: #cbcb41; }
+.alpaca-lc-purple, .alpaca-lc-purple:backdrop { color: #a074c4; }
+.alpaca-lc-orange, .alpaca-lc-orange:backdrop { color: #e37933; }
+.alpaca-lc-red, .alpaca-lc-red:backdrop { color: #cc3e44; }
+.alpaca-lc-grey, .alpaca-lc-grey:backdrop { color: #6d8086; }
+.alpaca-lc-muted, .alpaca-lc-muted:backdrop { color: #8a93a6; }
+.alpaca-launchbranch, .alpaca-launchbranch:backdrop { font-size: 12px; color: #8a93a6; }
+.alpaca-launchadd { background: #0d1017; border: 1px solid #1c2230;
+                    border-radius: 4px; outline: none; box-shadow: none;
+                    min-height: 0; min-width: 0; margin: 0; border-spacing: 0;
+                    padding: 15px 0; }
+.alpaca-launchadd:hover { background: #1c2431; }
+.alpaca-launchsection { font-size: 13px; font-weight: 600; color: #e6e8ee;
+                        padding-bottom: 6px; border-bottom: 1px solid #1c2230; }
+.alpaca-launchtitle { font-size: 28px; font-weight: 400; color: #e6e8ee; }
+.alpaca-launchby { background: transparent; border: none; box-shadow: none;
+                   outline: none; min-height: 0; min-width: 0; margin: 0;
+                   border-spacing: 0; padding: 2px 4px; font-size: 10px;
+                   color: #5a6375; }
+.alpaca-launchby:hover { color: #8a93a6; }
+.alpaca-launchby label:backdrop { color: #5a6375; }

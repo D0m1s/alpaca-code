@@ -312,18 +312,9 @@ pub fn remember(mut s: State, project_path: &str) -> State {
     s
 }
 
-/// The open-workspace set as saved (boot decides its own fallback:
-/// empty set + existing last_project → open just that one).
-///
-/// The persisted set is REBUILT from the app's live strip on every workspace
-/// ADD (the only path that grows it): parse()'s take(3) caps it at boot and
-/// the app's rebuild keeps saved state in lockstep with the strip, so a
-/// deleted project's ghost can never steal a cap slot. No add helper lives
-/// here — app-side state (open_workspace) is the single writer.
-pub fn open_projects(s: &State) -> Vec<String> {
-    s.open_projects.clone()
-}
-
+/// The per-project tab set (the app flushes it on its debounce + saves; the
+/// open-workspace set itself is rebuilt by the app's strip on add/close —
+/// app-side state is the single writer).
 pub fn project_tabs(s: &State, project_path: &str) -> ProjectTabs {
     s.projects
         .get(project_path)

@@ -19,6 +19,7 @@ use crate::editor::{Editor, EditorMsg, EditorOutput};
 use crate::filetree::FileTreeMsg;
 use crate::gitpanel::{GitPanel, GitPanelMsg, GitPanelOutput, ProbeChild};
 use crate::gitview::GitViewMsg;
+use crate::launcher::{Launcher, LauncherMsg, LauncherOutput};
 use crate::panes::{Panes, PanesMsg, PanesOutput, kill_tree};
 use crate::{runctl, state, vector};
 
@@ -33,10 +34,18 @@ pub enum AppMsg {
     SwitchWorkspace(usize),
     /// strip ✕ → close the tagged workspace (tombstone + swing)
     CloseWorkspace(usize),
-    /// startup: swing to the remembered project after ALL queued opens ran
-    BootActivate(PathBuf),
     /// requirement 3: header "+" → the folder picker (shared open path)
     AddProjectDialog,
+    /// launcher (2026-10-15): show the hub page (boot + menu Open Workbench)
+    ShowLauncher,
+    /// launcher card → adopt the file's uuid as this session's workbench,
+    /// then route each surviving root through the shared open path
+    LauncherOpen(String),
+    /// launcher big + / menu New Workbench → folder picker; the accept
+    /// opens the folder as a FRESH workbench (identity cleared)
+    LauncherAdd,
+    /// LauncherAdd's picker accept: clear the workbench identity, then open
+    OpenNew(PathBuf),
     /// tree → editor routing within the tagged workspace
     OpenFile(usize, PathBuf),
     /// editor state flip → snapshot storage + persist debounce
@@ -78,6 +87,9 @@ pub enum AppMsg {
     WindowActive,
     /// Edit menu → the active workspace's editor
     EditOp(EditKind),
+    /// Ctrl+Shift+F → the active workspace's gitpanel search entry
+    /// (tree mode: file search; changes mode: filter the changes rows)
+    FocusSearch,
     /// New Project dialog result — makedirs + `git init` ran OFF the main
     /// thread (runctl.create_project has a 10s wall; a stalled git must not
     /// freeze the window). The Sender marshals back onto the main context.
@@ -105,6 +117,9 @@ pub enum AppMsg {
     /// same rig config the SAVE run wrote
     ProbeWBRestore(PathBuf),
     ProbeWBRStep,
+    /// PROBE-ONLY (ALPACA_PROBE_LN) — launcher boot + card-click chain
+    ProbeLN(PathBuf),
+    ProbeLNStep,
 }
 
 thread_local! {
@@ -355,6 +370,8 @@ struct App {
     stack: gtk::Stack,
     proj_box: gtk::Box,
     add_btn: gtk::Button,
+    /// the workbench-menu chevron — chrome-hidden on the launcher page
+    menu_btn: gtk::MenuButton,
     run_btn: gtk::Button,
     stop_btn: gtk::Button,
     run_row: gtk::Box,
@@ -365,6 +382,9 @@ struct App {
     ws: Vec<Option<Workspace>>,
     /// valid iff a live slot exists at active — never read when none live
     active: usize,
+    /// the Workbench Launcher hub page (2026-10-15) — a stack page above the
+    /// workspace pages; its outputs route through AppMsg's LauncherOpen/Add
+    launcher: relm4::Controller<Launcher>,
     /// PROBE-ONLY (ALPACA_PROBE_S2) — step chain (workspace, step index);
     /// production never constructs it (env unset)
     probe_ws: Option<(PathBuf, usize)>,
@@ -378,6 +398,8 @@ struct App {
     /// step chains; production never constructs them (env unset)
     probe_wb: Option<(PathBuf, usize)>,
     probe_wbr: Option<(PathBuf, usize)>,
+    /// PROBE-ONLY (ALPACA_PROBE_LN) — the launcher chain
+    probe_l: Option<(PathBuf, usize)>,
     /// the session's workbench (workbench step 2026-10-14): the LAST saved
     /// file, source of preserve-lists on the next save; None until first boot
     /// with a saved workbench
@@ -554,13 +576,48 @@ impl Component for App {
             .build();
         root.set_child(Some(&stack));
 
+        // The launcher hub page (2026-10-15), named for the asserts and the
+        // boot/menu-visible path. It's added FIRST — before any workspace
+        // page — so a boot with nothing to open can simply make it visible.
+        let send_l = sender.clone();
+        let launcher = Launcher::builder()
+            .launch(())
+            .connect_receiver(move |_, out| match out {
+                LauncherOutput::Open(name) => send_l.input(AppMsg::LauncherOpen(name)),
+                LauncherOutput::New => send_l.input(AppMsg::LauncherAdd),
+            });
+        stack.add_named(launcher.widget(), Some("launcher"));
+
+        // Header chrome on the hub page (2026-10-15, user ruling): the
+        // workbench-menu chevron and the project `+` are workspace furniture —
+        // the launcher has its own big `+` card, so both vanish while the hub
+        // is visible. One notify::visible-child hook covers every flip (boot /
+        // open / switch / close-to-hub / ShowLauncher); the explicit set below
+        // carries boot (the visible page is ALREADY the launcher — the queued
+        // ShowLauncher is a no-op change and fires no notify). No component
+        // sender captured → no relm4 shutdown-panic surface.
+        {
+            let menu_c = menu_btn.clone();
+            let add_c = add_btn.clone();
+            stack.connect_notify_local(Some("visible-child"), move |st, _| {
+                let on_hub = st.visible_child_name().as_deref() == Some("launcher");
+                menu_c.set_visible(!on_hub);
+                add_c.set_visible(!on_hub);
+            });
+        }
+        let on_hub = stack.visible_child_name().as_deref() == Some("launcher");
+        menu_btn.set_visible(!on_hub);
+        add_btn.set_visible(!on_hub);
+
         let model = App {
             stack,
             proj_box,
             add_btn,
+            menu_btn,
             run_btn,
             stop_btn,
             run_row,
+            launcher,
             ws: Vec::new(),
             active: 0,
             probe_ws: None,
@@ -568,6 +625,7 @@ impl Component for App {
             probe_s4: None,
             probe_wb: None,
             probe_wbr: None,
+            probe_l: None,
             wb: st.last_workbench.as_deref().and_then(state::load_workbench),
             wb_name: st.last_workbench.clone(),
         };
@@ -592,30 +650,13 @@ impl Component for App {
             glib::Propagation::Stop
         });
 
-        // startup: reopen last session's strip (open_projects; old files
-        // coerce to [last_project] via the fallback), then swing active to the
-        // remembered one. BootActivate must ride the SAME queue as the opens.
-        // (st was hoisted above for the model's workbench fields)
-        let mut opens: Vec<PathBuf> = state::open_projects(&st)
-            .iter()
-            .map(PathBuf::from)
-            .filter(|p| p.is_dir())
-            .collect();
-        if opens.is_empty()
-            && let Some(l) = st.last_project.clone()
-            && Path::new(&l).is_dir()
-        {
-            opens.push(PathBuf::from(l));
-        }
-        for p in opens {
-            sender.input(AppMsg::OpenWorkspace(p));
-        }
-        if let Some(l) = st.last_project {
-            sender.input(AppMsg::BootActivate(PathBuf::from(l)));
-        }
-        // the CLI arg opens LAST — it ends active (the old launch's whole point)
+        // startup (2026-10-15): the Workbench Launcher AT EVERY BOOT (user
+        // decision) — clicking a card adopts its saved session; the CLI arg
+        // keeps the old direct-open path (no hub in between).
         if let Some(p) = arg {
             sender.input(AppMsg::OpenWorkspace(p));
+        } else {
+            sender.input(AppMsg::ShowLauncher);
         }
         // PROBE-ONLY (ALPACA_PROBE_S2) — never runs in production (env unset)
         if let Ok(dir) = std::env::var("ALPACA_PROBE_S2") {
@@ -636,6 +677,10 @@ impl Component for App {
         if let Ok(dir) = std::env::var("ALPACA_PROBE_WB_RESTORE") {
             sender.input(AppMsg::ProbeWBRestore(PathBuf::from(dir)));
         }
+        // PROBE-ONLY (ALPACA_PROBE_LN) — never in production
+        if let Ok(dir) = std::env::var("ALPACA_PROBE_LN") {
+            sender.input(AppMsg::ProbeLN(PathBuf::from(dir)));
+        }
 
         ComponentParts { model, widgets }
     }
@@ -644,12 +689,23 @@ impl Component for App {
         match msg {
             AppMsg::OpenWorkspace(p) => self.open_workspace(&p, root, sender),
             AppMsg::SwitchWorkspace(i) => self.switch_to(i, root),
-            AppMsg::CloseWorkspace(slot) => self.close_workspace(slot, root),
-            AppMsg::BootActivate(p) => {
-                let p = p.canonicalize().unwrap_or(p);
-                if let Some(i) = self.slot_of(&p) {
-                    self.switch_to(i, root);
-                }
+            AppMsg::CloseWorkspace(slot) => self.close_workspace(slot, root, sender),
+            AppMsg::ShowLauncher => {
+                // the hub: rebuild its cards (a fresh disk scan every show),
+                // flip the page, and hand the WM a bare title (no project)
+                self.launcher.emit(LauncherMsg::Build);
+                self.stack.set_visible_child_name("launcher");
+                root.set_title(Some("alpaca-code"));
+            }
+            AppMsg::LauncherOpen(name) => self.open_workbench(&name, sender),
+            AppMsg::LauncherAdd => ask_folder(root, "New Workbench", sender, true),
+            AppMsg::OpenNew(p) => {
+                // the launcher's + path: a FRESH workbench identity — the
+                // next Ctrl+Shift+S mints its uuid instead of riding the
+                // previously-adopted workbench's file
+                self.wb = None;
+                self.wb_name = None;
+                sender.input(AppMsg::OpenWorkspace(p));
             }
             AppMsg::AddProjectDialog => open_project(root, sender),
             AppMsg::OpenFile(ws, p) => {
@@ -811,6 +867,11 @@ impl Component for App {
                         EditKind::Paste => EditorMsg::Paste,
                         EditKind::SelectAll => EditorMsg::SelectAll,
                     });
+                }
+            }
+            AppMsg::FocusSearch => {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
+                    w.gitpanel.emit(GitPanelMsg::FocusSearch);
                 }
             }
             AppMsg::ProbeS2(dir) => {
@@ -980,7 +1041,7 @@ impl Component for App {
                     // path — tombstone + active swing right (slot 0 of
                     // [0,1,2] → 1 = wsB), strip unit gone, "+" re-armed
                     5 => {
-                        self.close_workspace(0, root);
+                        self.close_workspace(0, root, sender.clone());
                         // wsB (slot 1) + wsC (slot 2) stay live; slots never
                         // compact: 3,0-tombstone,1,2
                         say("close-live-2", self.live_len() == 2 && self.ws.len() == 3);
@@ -1183,8 +1244,21 @@ impl Component for App {
                 };
                 match step {
                     0 => {
+                        // 2026-10-15: boot no longer auto-opens — the hub
+                        // shows. Click its single card through the REAL route
+                        // (ProbeClick → the Button's activation → output →
+                        // LauncherOpen → shared open path + session restore)
+                        self.launcher.model().probe_click(0);
+                    }
+                    1 => {
                         // boot restored the strip: 1 live ws + active swing
                         say("r-strip", self.live_len() == 1 && self.active == 0);
+                        say("r-page-flipped", self.stack.visible_child_name().as_deref() != Some("launcher"));
+                        say(
+                            "r-adopted",
+                            self.wb_name.as_deref()
+                                == self.launcher.model().entries.first().map(|e| e.name.as_str()),
+                        );
                         if let Some(w) = self.ws.get(0).and_then(|o| o.as_ref()) {
                             say("r-tabs", w.snapshot.open_tabs == vec!["a.txt".to_string()]);
                             // paned restore, S4's pinned law: an allocated page
@@ -1218,7 +1292,7 @@ impl Component for App {
                             say("r-open-has-sub", open.iter().any(|d| d.ends_with("/sub")));
                         }
                     }
-                    1 => {
+                    2 => {
                         println!("PROBE WB RESTORE DONE");
                         self.probe_wbr = None;
                         return;
@@ -1230,6 +1304,120 @@ impl Component for App {
                     let snd = sender.clone();
                     glib::timeout_add(std::time::Duration::from_millis(*next), move || {
                         snd.input(AppMsg::ProbeWBRStep);
+                        glib::ControlFlow::Break
+                    });
+                }
+            }
+            AppMsg::ProbeLN(dir) => {
+                // PROBE-ONLY (ALPACA_PROBE_LN) — never runs in production
+                self.probe_l = Some((dir, 0));
+                root.present();
+                let snd = sender.clone();
+                glib::timeout_add(std::time::Duration::from_millis(PROBE_LN_MS[0]), move || {
+                    snd.input(AppMsg::ProbeLNStep);
+                    glib::ControlFlow::Break
+                });
+            }
+            AppMsg::ProbeLNStep => {
+                // PROBE-ONLY (ALPACA_PROBE_LN) — launcher boot + card clicks;
+                // emissions target the launcher's real widgets
+                let Some((_rig, step)) = self.probe_l.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                    return;
+                };
+                let say = |name: &str, ok: bool| {
+                    println!("PROBE assert: {name}: {}", if ok { "PASS" } else { "FAIL" })
+                };
+                // rig (wrapper-built): projA/.git = main, projB/.git =
+                // feature-ln; aaaabbbb-0001.json = projA(c-sharp) + projB
+                // (typescript) written LAST (newer mtime = FIRST card),
+                // aaaabbbb-0002.json = projB(rust) alone
+                match step {
+                    0 => {
+                        // boot truth: hub page up, 2 cards, the tiles' facts
+                        println!("PROBE LN: boot asserts");
+                        say(
+                            "ln-boot-page",
+                            self.stack.visible_child_name().as_deref() == Some("launcher"),
+                        );
+                        let texts = self.launcher.model().probe_texts();
+                        say("ln-cards", texts.len() == 2);
+                        say(
+                            "ln-order-last-saved-first",
+                            texts.len() == 2
+                                && texts[0].0 == "aaaabbbb-0001"
+                                && texts[1].0 == "aaaabbbb-0002",
+                        );
+                        say(
+                            "ln-tile0-facts",
+                            texts.first().is_some_and(|(_, t)| {
+                                t.first().is_some_and(|x| x.0 == "projA" && x.1 == "C#" && x.2 == "main")
+                            }),
+                        );
+                        say(
+                            "ln-tile1-facts",
+                            texts.first().is_some_and(|(_, t)| {
+                                t.get(1).is_some_and(|x| {
+                                    x.0 == "projB" && x.1 == "TS" && x.2 == "feature-ln"
+                                })
+                            }),
+                        );
+                        // hub chrome law: workspace furniture hidden AT BOOT
+                        say(
+                            "ln-chrome-hidden",
+                            !self.menu_btn.is_visible() && !self.add_btn.is_visible(),
+                        );
+                    }
+                    1 => {
+                        // the REAL click: card 0's activation output →
+                        // LauncherOpen → adopt + open both roots
+                        self.launcher.model().probe_click(0);
+                    }
+                    2 => {
+                        println!("PROBE LN: open asserts");
+                        // the card's 2 roots via the shared Add path; the
+                        // LAST processed root (projB, alphabetical) is active
+                        say("ln-open-two", self.live_len() == 2 && self.active == 1);
+                        say(
+                            "ln-workbench-adopted",
+                            self.wb_name.as_deref() == Some("aaaabbbb-0001"),
+                        );
+                        say(
+                            "ln-page-flipped",
+                            self.stack.visible_child_name().as_deref() != Some("launcher"),
+                        );
+                        say("ln-title", root.title().as_deref() == Some("projB"));
+                        // and the chrome is back on any project page
+                        say(
+                            "ln-chrome-shown",
+                            self.menu_btn.is_visible() && self.add_btn.is_visible(),
+                        );
+                    }
+                    3 => {
+                        // card 1 (projB only) while 2 live → blend: switch
+                        self.launcher.model().probe_click(1);
+                    }
+                    4 => {
+                        // blending law: an already-open root SWITCHES (no
+                        // strip growth); the identity swaps to the clicked file
+                        say("ln-blend-switch", self.live_len() == 2);
+                        say("ln-blend-active", self.active == 1);
+                        say(
+                            "ln-workbench-swapped",
+                            self.wb_name.as_deref() == Some("aaaabbbb-0002"),
+                        );
+                    }
+                    5 => {
+                        println!("PROBE LN DONE");
+                        self.probe_l = None;
+                        return;
+                    }
+                    _ => {}
+                }
+                if let Some(next) = PROBE_LN_MS.get(step + 1) {
+                    self.probe_l.as_mut().unwrap().1 = step + 1;
+                    let snd = sender.clone();
+                    glib::timeout_add(std::time::Duration::from_millis(*next), move || {
+                        snd.input(AppMsg::ProbeLNStep);
                         glib::ControlFlow::Break
                     });
                 }
@@ -1364,8 +1552,12 @@ const PROBE_S4_STEP_MS: [u64; 8] = [500, 700, 700, 700, 700, 500, 700, 700];
 
 /// PROBE-ONLY (ALPACA_PROBE_WB_SAVE) — gap[i] = ms delay before step i
 const PROBE_WB_SAVE_MS: [u64; 6] = [500, 700, 700, 700, 700, 700];
-/// PROBE-ONLY (ALPACA_PROBE_WB_RESTORE)
-const PROBE_WB_RESTORE_MS: [u64; 2] = [800, 700];
+/// PROBE-ONLY (ALPACA_PROBE_LN) — launcher chain: 0 boot asserts, 1 click,
+/// 2 open asserts, 3 blend-click, 4 blend asserts, 5 DONE
+const PROBE_LN_MS: [u64; 6] = [1300, 800, 800, 800, 800, 700];
+/// PROBE-ONLY (ALPACA_PROBE_WB_RESTORE) — 0 = click the launcher card,
+/// 1 = restore asserts, 2 = DONE
+const PROBE_WB_RESTORE_MS: [u64; 3] = [500, 1400, 700];
 
 /// epoch ms for the probe's step trace (the wrapper correlates app ts with
 /// the git-shim log's ts)
@@ -1636,6 +1828,30 @@ impl App {
         }
     }
 
+    /// The launcher's card click (2026-10-15): ADOPT the saved file as this
+    /// session's workbench (self.wb/wb_name — the next Ctrl+Shift+S saves
+    /// into THAT uuid's file), then route each surviving root through the
+    /// shared OpenWorkspace (already-open → switch; under-cap → add w/ its
+    /// ProjectSession restore; cap-full reports). root order = open_roots
+    /// (alphabetical, state's last_project last = it lands active).
+    fn open_workbench(&mut self, name: &str, sender: ComponentSender<Self>) {
+        let Some(wb) = state::load_workbench(name) else {
+            return;
+        };
+        let roots = crate::launcher::open_roots(
+            &wb,
+            state::load().last_project.as_deref().map(Path::new),
+        );
+        if roots.is_empty() {
+            return; // every project vanished — stay on the launcher
+        }
+        self.wb = Some(wb);
+        self.wb_name = Some(name.to_owned());
+        for p in roots {
+            sender.input(AppMsg::OpenWorkspace(p));
+        }
+    }
+
     /// Header-pill click / an open's activation / a close's active-swing:
     /// flip the stack page — state carries over because NOTHING is re-rooted
     /// (the feature's core). Tombstone slots guard-return.
@@ -1741,15 +1957,6 @@ impl App {
             .collect()
     }
 
-    /// the live slot holding `path` (canonical spelling) — BootActivate +
-    /// the dedupe lookup; position() counts VEC items, tombstones included,
-    /// so the result IS the slot number
-    fn slot_of(&self, path: &Path) -> Option<usize> {
-        self.ws
-            .iter()
-            .position(|w| w.as_ref().is_some_and(|w| w.root.as_path() == path))
-    }
-
     /// The strip ✕: tombstone the slot (indices are Add-time and never shift
     /// — the tags every component output carries stay valid), kill this
     /// workspace's pane children via the real Stop/kill paths, drop the
@@ -1758,7 +1965,7 @@ impl App {
     /// rebuild the persisted open set from the LIVE strip (same live-truth
     /// law as Add — and the closed project's per-project tabs entry STAYS so
     /// a reopen restores its pages).
-    fn close_workspace(&mut self, slot: usize, root: &gtk::ApplicationWindow) {
+    fn close_workspace(&mut self, slot: usize, root: &gtk::ApplicationWindow, sender: ComponentSender<Self>) {
         let Some(w) = self.ws.get_mut(slot).and_then(|o| o.take()) else {
             return;
         };
@@ -1781,13 +1988,14 @@ impl App {
                 None => {
                     // zero workspaces: the fresh-install state — no title, no
                     // run pills, and boot's open_projects fallback must NOT
-                    // resurrect the closed project (open_projects = [] below)
+                    // resurrect the closed project (open_projects = [] below).
+                    // 2026-10-15: that state IS the launcher now
                     self.active = 0;
-                    root.set_title(None);
                     let mut st = state::load();
                     st.last_project = None;
                     st.open_projects = Vec::new();
                     state::save(&st);
+                    sender.input(AppMsg::ShowLauncher);
                 }
             }
         }
@@ -1837,8 +2045,9 @@ impl App {
     }
 }
 
-// basename(path.rstrip("/")) — empty result (root "/") → bare title
-fn py_basename(s: &str) -> String {
+// basename(path.rstrip("/")) — empty result (root "/") → bare title.
+// pub(crate): the launcher's project tiles read the same spelling.
+pub(crate) fn py_basename(s: &str) -> String {
     let t = s.trim_end_matches('/');
     t.rsplit('/').find(|c| !c.is_empty()).unwrap_or(t).to_owned()
 }
@@ -1874,9 +2083,17 @@ fn workbench_menu() -> gio::Menu {
     m
 }
 
-fn open_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) {
+/// The shared folder picker. `fresh` = the launcher's New-Workbench path —
+/// the accept clears the workbench identity BEFORE the open (a fresh uuid
+/// on the next save) instead of adding to the adopted one.
+fn ask_folder(
+    root_win: &gtk::ApplicationWindow,
+    title: &str,
+    sender: ComponentSender<App>,
+    fresh: bool,
+) {
     let dialog = gtk::FileChooserNative::new(
-        Some("Open Project"),
+        Some(title),
         Some(root_win),
         gtk::FileChooserAction::SelectFolder,
         Some("Open"),
@@ -1892,10 +2109,18 @@ fn open_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>)
         d.destroy();
         if let Some(p) = path
             && p.is_dir() {
-                sender.input(AppMsg::OpenWorkspace(p));
+                if fresh {
+                    sender.input(AppMsg::OpenNew(p));
+                } else {
+                    sender.input(AppMsg::OpenWorkspace(p));
+                }
             }
     });
     dialog.show();
+}
+
+fn open_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) {
+    ask_folder(root_win, "Open Project", sender, false);
 }
 
 fn new_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) {
@@ -1993,19 +2218,33 @@ fn register_actions(
     }
     app.add_action(&quit);
 
-    // no-op stubs until workbenches land (they'll be the superproject layer
-    // loading the up-to-3 projects): the rows must look enabled and do
-    // nothing yet.
-    for name in ["new-workbench", "open-workbench"] {
-        let a = gio::SimpleAction::new(name, None);
-        a.connect_activate(|_a, _p| {});
-        app.add_action(&a);
+    // the workbench phase's stubs got REAL targets (launcher, 2026-10-15):
+    // New Workbench = the picker w/ fresh identity; Open Workbench = the hub.
+    {
+        let sender = sender.clone();
+        let act = gio::SimpleAction::new("new-workbench", None);
+        act.connect_activate(move |_a, _p| sender.input(AppMsg::LauncherAdd));
+        app.add_action(&act);
+    }
+    {
+        let sender = sender.clone();
+        let act = gio::SimpleAction::new("open-workbench", None);
+        act.connect_activate(move |_a, _p| sender.input(AppMsg::ShowLauncher));
+        app.add_action(&act);
     }
     {
         // Save Workbench (menu row + Ctrl+Shift+S) → the full explicit save
         let sender = sender.clone();
         let a = gio::SimpleAction::new("save-workbench", None);
         a.connect_activate(move |_a, _p| sender.input(AppMsg::SaveWorkbench));
+        app.add_action(&a);
+    }
+    {
+        // Ctrl+Shift+F → the active workspace's search entry (no menu
+        // surface; EditOp-style active-slot routing)
+        let sender = sender.clone();
+        let a = gio::SimpleAction::new("focus-search", None);
+        a.connect_activate(move |_a, _p| sender.input(AppMsg::FocusSearch));
         app.add_action(&a);
     }
 
@@ -2081,6 +2320,7 @@ fn register_actions(
 
     app.set_accels_for_action("app.quit", &["<Control>q"]);
     app.set_accels_for_action("app.save-workbench", &["<Control><Shift>s"]);
+    app.set_accels_for_action("app.focus-search", &["<Control><Shift>f"]);
 }
 
 /// Launch entry: the component's Widgets struct is macro-private, so the

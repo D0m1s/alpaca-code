@@ -21,7 +21,7 @@ use std::time::Duration;
 use relm4::gtk::{self, gio, glib, pango, gdk_pixbuf, prelude::*};
 use relm4::prelude::*;
 
-use crate::badges;
+use crate::{badges, gitstatus};
 
 pub const SKIP_DIRS: [&str; 7] = [
     "node_modules",
@@ -78,15 +78,92 @@ fn dominant_ext(names: Vec<String>) -> Option<String> {
     best.map(|(e, _)| e)
 }
 
-/// The project's dominant language as a GtkSourceView language id ("rust",
-/// "python", …) or None. ponytail: file-count tally via scan_project's
-/// SKIP_DIRS walk — no .gitignore/byte weighting or vendored heuristics;
-/// upgrade when it misfires on a real repo.
-pub fn dominant_language(root: &Path) -> Option<String> {
-    let ext = dominant_ext(scan_project(root, "", 100_000))?;
+/// Prose exts — GitHub linguist excludes docs from the language bar; so do
+/// we (a README/CLAUDE.md-heavy tree would otherwise outweigh the sources).
+const PROSE_EXTS: [&str; 3] = ["md", "rst", "txt"];
+
+/// Generated artifacts linguist also excludes — the lockfile family dwarfs
+/// real sources (measured: package-lock.json 603K outweighed a repo's tsx+ts
+/// 572K combined → the chip read JSON off it; and x.lock maps to TOML on
+/// this GtkSourceView, so Cargo.lock would even hide behind a toml chip).
+const GENERATED_EXTS: [&str; 1] = ["lock"];
+const GENERATED_NAMES: [&str; 2] = ["package-lock.json", "pnpm-lock.yaml"];
+
+fn lang_of_ext(ext: &str) -> Option<String> {
     sourceview5::LanguageManager::default()
         .guess_language(Some(&format!("x.{ext}")), None)
         .map(|l| l.id().to_string())
+}
+
+/// The project's dominant language as a GtkSourceView language id ("rust",
+/// "python", …) or None. Git repos: git's tracked + untracked-not-ignored
+/// files (gitignored junk is NOT counted — .superpowers/ leaked in the old
+/// walk), BYTE-weighted — the GitHub-language-bar analog. The old count
+/// fold let 203 tiny seti `.svg` badge assets out-count 17 `.rs` sources →
+/// "xml" (measured). Prose skipped like linguist's docs exclusion. No git →
+/// the old count-based SKIP_DIRS walk, unchanged.
+/// ponytail: stat loop per tracked file (~100k files ≈ 100ms at save);
+/// cache if saves on huge repos ever feel slow.
+pub fn dominant_language(root: &Path) -> Option<String> {
+    dominant_ext_of(root).and_then(|e| lang_of_ext(&e))
+}
+
+/// The winning EXT of dominant_language's tally — the unit test seam (the id
+/// mapping needs Gtk init, which the displayless test run can't do).
+pub fn dominant_ext_of(root: &Path) -> Option<String> {
+    let root_s = root.to_string_lossy().to_string();
+    let files = gitstatus::git_out(
+        &root_s,
+        &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        15,
+    )
+    .map(|out| {
+        out.split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| root.join(String::from_utf8_lossy(p).into_owned()))
+            .collect::<Vec<PathBuf>>()
+    });
+    match files {
+        Some(files) => max_ext_bytes(&files),
+        None => dominant_ext(scan_project(root, "", 100_000)),
+    }
+}
+
+/// ext → Σ file bytes over `paths` (absolute): the dominant_ext basename laws
+/// (no-dot / dotfile / empty-ext skips) plus prose, generated lockfiles, dirs
+/// (submodule rows) and failed stat skipped; ties go to the lexically
+/// smallest ext (BTreeMap order, same law as dominant_ext).
+fn max_ext_bytes(paths: &[PathBuf]) -> Option<String> {
+    let mut tally: BTreeMap<String, u64> = BTreeMap::new();
+    for p in paths {
+        if let Ok(md) = p.metadata() {
+            if md.is_dir() {
+                continue;
+            }
+            let base = p.file_name().unwrap_or_default().to_string_lossy();
+            if !base.contains('.') || base.starts_with('.') {
+                continue;
+            }
+            if GENERATED_NAMES.contains(&base.to_lowercase().as_str()) {
+                continue;
+            }
+            let e = ext_of(&base);
+            if e.is_empty()
+                || PROSE_EXTS.contains(&e.as_str())
+                || GENERATED_EXTS.contains(&e.as_str())
+            {
+                continue;
+            }
+            *tally.entry(e).or_insert(0) += md.len();
+        }
+    }
+    let mut best: Option<(String, u64)> = None;
+    for (e, n) in tally {
+        if best.as_ref().map(|(_, bn)| n > *bn).unwrap_or(true) {
+            best = Some((e, n));
+        }
+    }
+    best.map(|(e, _)| e)
 }
 
 pub fn scan_dir(path: &Path) -> Vec<(String, bool)> {
@@ -215,6 +292,56 @@ mod tests {
             None
         );
         assert_eq!(dominant_ext(Vec::new()), None);
+    }
+
+    /// Spawn a git command in a scratch tree (unit-test rig; no GTK).
+    fn run_git(args: &[&str], cwd: &Path) {
+        let st = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("git binary available");
+        assert!(st.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&st.stderr));
+    }
+
+    #[test]
+    fn dominant_language_git_weights_bytes_and_skips_ignored() {
+        let root = scratch("dom-git");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("main.rs"), "x".repeat(40_000)).unwrap();
+        std::fs::write(root.join("a.svg"), "<svg/>".repeat(8)).unwrap();
+        // prose big enough to win any tally — must still be skipped
+        std::fs::write(root.join("README.md"), "y".repeat(200_000)).unwrap();
+        // generated lockfiles even bigger than the prose — skipped too
+        std::fs::write(root.join("package-lock.json"), "j".repeat(500_000)).unwrap();
+        std::fs::write(root.join("Cargo.lock"), "c".repeat(300_000)).unwrap();
+        // ignored junk: huge, must never be counted
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::write(root.join("target/o.o"), "z".repeat(300_000)).unwrap();
+        std::fs::write(root.join("big.log"), "l".repeat(300_000)).unwrap();
+        std::fs::write(root.join(".gitignore"), "target/\n*.log\n").unwrap();
+        run_git(&["init", "-q"], &root);
+        run_git(&["add", "."], &root);
+        // rs wins on bytes (40k > 40) despite the 1-to-1 count tie with svg
+        assert_eq!(dominant_ext_of(&root).as_deref(), Some("rs"));
+    }
+
+    #[test]
+    fn dominant_language_walk_fallback_without_git() {
+        let root = scratch("dom-walk");
+        std::fs::create_dir_all(&root).unwrap();
+        for i in 0..5 {
+            std::fs::write(root.join(format!("m{i}.py")), "p").unwrap();
+        }
+        std::fs::write(root.join("big.rs"), "x".repeat(50_000)).unwrap();
+        // no .git → the old count-based fold: 5 py out-extend 1 rs
+        assert_eq!(dominant_ext_of(&root).as_deref(), Some("py"));
     }
 
     #[test]

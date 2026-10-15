@@ -20,6 +20,10 @@ a tabbed code editor, a file browser, and a bottom console area running the real
 - **Terminal** — your `$SHELL`, with `~/.local/bin` on PATH even when launched from a menu.
 - **Projects** — File ▸ Open Project / Open Recent (10, deduped) / New Project
   (empty dir + `git init`); open tabs and last project persist between launches.
+- **Workbenches** — explicit sessions: Ctrl+Shift+S saves paned/scroll/tree
+  layout to a workbench file; the boot **Launcher** lists every saved workbench
+  as a card (project tiles with the saved language + git branch) — click opens
+  the whole strip back up, the big `+` opens a folder as a fresh workbench.
 
 ## Install (Arch / CachyOS)
 
@@ -31,7 +35,7 @@ sudo pacman -S --needed gtksourceview5 vte4
 
 ```
 cargo build --manifest-path alpaca-code-rs/Cargo.toml          # refresh the bin
-alpaca-code-rs/target/debug/alpaca-code-rs                 # reopen last project
+alpaca-code-rs/target/debug/alpaca-code-rs                # the workbench launcher
 alpaca-code-rs/target/debug/alpaca-code-rs ~/some/project  # open a specific project
 ```
 
@@ -40,11 +44,14 @@ alpaca-code-rs/target/debug/alpaca-code-rs ~/some/project  # open a specific pro
 | Key | Action |
 |---|---|
 | Ctrl+S | Save active tab |
+| Ctrl+Shift+S | Save workbench |
+| Ctrl+Shift+F | Focus the panel search |
 | Ctrl+Q | Quit (tabs persist) |
 
 ## State
 
 `~/.config/alpaca-code/state.json` — last project, recents, open tabs per project.
+`~/.config/alpaca-code/workbenches/<uuid>.json` — one saved session layout each.
 
 ## Tests
 
