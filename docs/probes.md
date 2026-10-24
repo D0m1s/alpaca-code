@@ -12,10 +12,10 @@ The app's display-level verification runs as env-gated probe chains inside `app.
 | `ALPACA_PROBE_S4=<dir>` | wsA dir | multi-workspace: opens, switch-survival, cap, close/tombstone/swing/re-tag; rig files: `a.txt`/`b.txt` per dir, `wsB/b2.txt` for the re-tag proof |
 | `ALPACA_PROBE_WB_SAVE=<dir>` | wsA dir | workbench pair, side 1: build a session, save, grep written files, end with real `root.close()` |
 | `ALPACA_PROBE_WB_RESTORE=<dir>` | wsA dir | side 2: boots on the SAME `XDG_CONFIG_HOME`, asserts restored paneds/scroll/tabs/open-set; `a.txt` needs ~300 lines so the scroll span > 0; row 1 = "sub" dir |
-| `ALPACA_PROBE_LN=<dir>` | rig dir | launcher chain (boot page, card order/tiles, real card clicks, rename/`+` identity); wrapper `/tmp/lnprobe.sh` |
+| `ALPACA_PROBE_LN=<dir>` | rig dir | launcher chain (boot page, card order/tiles, real card clicks, rename/`+` identity — 15 steps, commit never driven in the `+` flow) |
 | `ALPACA_PROBE_LN_HOLD=N` | — | parks the LN chain after step N−1 = popover+hover capture |
 
-`ALPACA_PROBE_LN` is a rig dir (its own content); S2/S3/S4/WB are wsA dirs (wsB/wsC derived by name replacement).
+`ALPACA_PROBE_LN` is a rig dir (its own content); S2/S3/S4/WB are wsA dirs (wsB — and wsC for the S4 chain — derived by name replacement).
 
 ## Headless rig
 

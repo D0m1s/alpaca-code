@@ -10,7 +10,7 @@ cargo build         # cargo test does NOT refresh the runnable bin
 ./target/debug/alpaca-code-rs [project-dir]   # no arg → boot launcher hub
 ```
 
-System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`. Release install: `cargo build --release` → binary to `~/.local/bin/alpaca-code-rs`.
+System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`. Release install: `cargo build --release`, then copy `target/release/alpaca-code-rs` to `~/.local/bin/` yourself.
 
 ## Repo map
 

@@ -14,7 +14,7 @@ Hubs (`src/main.rs` → group hub files, named-file style):
 - **`git/`** — git features: `gitstatus.rs` (pure porcelain/diff parser + subprocess runners), `gitview.rs` (CHANGES view: checkbox tree, commit bar, flight; selection lenses to VISIBLE rows only — invisible files never drive a commit; toggles follow the visible-descendant law), `gitpanel.rs` (WORKSPACE/CHANGES mode card: search entry, status row, 2s live probe, hosts the others), `branchmenu.rs` (branch pill + Switch/Pull/New-Branch popover with hysteresis timers).
 - **`fs/`** — file browsing: `filetree.rs` (lazy TreeStore, monitors, search open-set memory), `treehover.rs` (HoverTree + press capture mixin, shared by filetree + gitview).
 - **`render/`** — pixels and styles: `vector.rs` (SVG → VecIcon paintable via gsk::Path), `badges.rs` (file-type pixbuf cache, from seti), `seti.rs` (baked seti mapping table), `style.rs` (include_str of `assets/app.css` + style scheme, provider setup).
-- **`support/`** — non-GTK: `state.rs` (state.json + workbench files: tolerant parse — per-element and wholesale-default gates, atomic write, sanitize), `runctl.rs` (pane spawn env, run-command detection: dotnet runnable = class libraries sort before the Web host and the runnable must win regardless of name order, with Directory.Build.props / lexical-with-csproj fallbacks; new-project dirs must not pre-exist).
+- **`support/`** — non-GTK: `state.rs` (state.json + workbench files: tolerant parse — per-element and wholesale-default gates, atomic write, sanitize), `runctl.rs` (pane spawn env; run-command detection: dotnet pass 1 = a csproj whose TEXT signals runnable (sdk-web / exe OutputType), pass 2 = first csproj lexically — text-only detection deliberately misses Build.props-driven projects, see invariants ceilings; `create_project`: target must not exist, `git init` is deliberately LENIENT — any nonzero git exit is not an error, 10s wall is the only timeout, and failures surface in the UI as "Couldn't create {target}").
 
 Key cross-references: app → everything; editor/gitview/launcher/branchmenu/panes → render; gitpanel → gitview/filetree/branchmenu/gitstatus; filetree → treehover. All internal refs are `crate::`-qualified.
 
@@ -56,7 +56,7 @@ Load never raises (coerce to defaults). 0/neg paned values = "not saved". Save r
 ## Assets pipeline
 
 - `assets/app.css` — the whole custom stylesheet, loaded by `style.rs` via include_str; `assets/style-schemes/alpaca-dark.xml` — GtkSourceView scheme (`def:*` namespace law).
-- `assets/icons/seti-*.svg` (~197) — frozen one-shot bake of seti-ui mapping.less (see invariants, Icons and assets). `assets/icons/*.svg` (8 app icons) — authored 1:1 art consumed by `vector::icon` via `badges::svg_data` (include_bytes). `assets/alpaca-80.png` — llama masthead, built once via PixbufLoader → gdk::Texture.
+- `assets/icons/seti-*.svg` (192) — frozen one-shot bake of seti-ui mapping.less (see invariants, Icons and assets). `assets/icons/*.svg` (13 app icons, matching `badges::svg_data` arms and the vector golden test) — authored 1:1 art consumed by `vector::icon` (include_bytes). `assets/alpaca-80.png` — llama masthead, built once via PixbufLoader → gdk::Texture.
 - Tree cells / CHANGES rows / tab badges consume pixbufs (badges.rs); everything else uses VecIcon paintables.
 
 ## Tests
