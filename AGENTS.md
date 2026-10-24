@@ -12,7 +12,7 @@ cargo build         # cargo test does NOT refresh the runnable bin
 
 System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`. Release install: `cargo build --release`, then copy `target/release/alpaca-code-rs` to `~/.local/bin/` yourself.
 
-CI: GitHub Actions (`.github/workflows/ci.yml`) mirrors this gate — `cargo test --locked` blocking, fmt/clippy advisory (`continue-on-error` until a fmt+lint pass lands) — on `runs-on: ubuntu-26.04`, because that runner is the first Ubuntu with GTK 4.22 (the crate's `v4_22` feature floor; the 24.04 image stops at 4.14).
+CI: GitHub Actions (`.github/workflows/ci.yml`) mirrors this gate — jobs `test` (`cargo test --locked` blocking, under `xvfb-run`: the VecIcon golden test calls `gtk4::init`, which needs a display and only passes locally via the session's display env), `clippy`/`fmt` advisory (`continue-on-error` until a fmt+lint pass lands) — on `runs-on: ubuntu-26.04`, because that runner is the first Ubuntu with GTK 4.22 (the crate's `v4_22` feature floor; the 24.04 image stops at 4.14).
 
 ## Repo map
 
