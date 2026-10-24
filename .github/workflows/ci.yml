@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: cargo test (the gate)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: system deps (26.04 ships GTK 4.22, the crate's v4_22 floor; 24.04's 4.14 is short)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-dev libgtksourceview-5-dev libvte-2.91-gtk4-dev xvfb
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2.9.3
+
+      - name: test (70 units, under xvfb — the VecIcon golden test calls gtk4::init, which needs a display)
+        run: xvfb-run --auto-servernum cargo test --locked
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: system deps (26.04 ships GTK 4.22, the crate's v4_22 floor; 24.04's 4.14 is short)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-dev libgtksourceview-5-dev libvte-2.91-gtk4-dev
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2.9.3
+
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2.9.3
+
+      - run: cargo fmt --all -- --check

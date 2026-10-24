@@ -2,7 +2,7 @@
 
 A minimal GTK4 desktop editor (Rust, relm4) that wraps the raw `claude` CLI. One dark window:
 a tabbed code editor, a file browser, and a bottom console area running the real
-`claude` TUI beside an Output pane and a plain terminal.
+`claude` TUI beside an Output pane and a plain terminal. Workbench launcher at boot.
 
 ## Features
 
@@ -10,16 +10,16 @@ a tabbed code editor, a file browser, and a bottom console area running the real
   cancels claude's current action, not the pane; exiting claude revives it (capped
   so a broken install can't respawn-loop).
 - **Editor** — tabbed GtkSourceView with syntax highlighting (custom `alpaca-dark`
-  scheme), dirty dots, Ctrl+S save, breadcrumb per tab, and a dialog when a file
-  is deleted on disk. Binary/NUL/non-UTF-8 files are refused at open so a save can
-  never mangle them.
+  scheme), dirty dots, Ctrl+S save, breadcrumb per tab, side-by-side diff pages,
+  and a dialog when a file is deleted on disk. Binary/NUL/non-UTF-8 files are
+  refused at open so a save can never mangle them.
 - **File browser** — lazy tree (node_modules, .git, obj/bin/vendor skipped), live
   file monitors, filename search over the whole project, file count, git branch label.
 - **Output** — `npm run dev`/`npm start` or `dotnet run` (detected from the project),
   double-click-Run protected, one Stop to kill the whole child tree.
 - **Terminal** — your `$SHELL`, with `~/.local/bin` on PATH even when launched from a menu.
-- **Projects** — File ▸ Open Project / Open Recent (10, deduped) / New Project
-  (empty dir + `git init`); open tabs and last project persist between launches.
+- **Projects** — up to three at once as workspace tabs; recents (10, deduped) and
+  open tabs persist between launches.
 - **Workbenches** — explicit sessions: Ctrl+Shift+S saves paned/scroll/tree
   layout to a workbench file; the boot **Launcher** lists every saved workbench
   as a card (project tiles with the saved language + git branch) — click opens
@@ -34,9 +34,9 @@ sudo pacman -S --needed gtksourceview5 vte4
 ## Run
 
 ```
-cargo build --manifest-path alpaca-code-rs/Cargo.toml          # refresh the bin
-alpaca-code-rs/target/debug/alpaca-code-rs                # the workbench launcher
-alpaca-code-rs/target/debug/alpaca-code-rs ~/some/project  # open a specific project
+cargo build                                  # refresh the bin
+./target/debug/alpaca-code-rs                # the workbench launcher
+./target/debug/alpaca-code-rs ~/some/project # open a specific project
 ```
 
 ## Shortcuts
@@ -50,11 +50,13 @@ alpaca-code-rs/target/debug/alpaca-code-rs ~/some/project  # open a specific pro
 
 ## State
 
-`~/.config/alpaca-code/state.json` — last project, recents, open tabs per project.
+`~/.config/alpaca-code/state.json` — last project, recents, workspaces, window.
 `~/.config/alpaca-code/workbenches/<uuid>.json` — one saved session layout each.
 
 ## Tests
 
 ```
-cargo test --manifest-path alpaca-code-rs/Cargo.toml
+cargo test
 ```
+
+Agent-facing docs live in [AGENTS.md](AGENTS.md) and [docs/](docs/).

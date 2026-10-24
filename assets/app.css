@@ -1,0 +1,241 @@
+@define-color alpaca-hover #111723;
+
+window, window:backdrop { background: #07090d; padding: 0 6px 6px; }
+.alpaca-card { background: #0d1017; border: 1px solid #1c2230; border-radius: 4px; }
+
+paned > separator { background: transparent; min-width: 6px; min-height: 6px; }
+
+.alpaca-header, .alpaca-header:backdrop { background: transparent; min-height: 32px;
+                                          padding: 0 6px; border-top: none;
+                                          border-bottom: none; }
+headerbar.alpaca-header windowcontrols { padding: 0; margin: 0; }
+headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22px;
+                                                padding: 0; margin: 0; }
+
+.alpaca-projbtn, .alpaca-projbtn > box,
+.alpaca-projadd, .alpaca-projadd > label {
+    background: transparent; border: none; border-radius: 6px;
+    min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border-spacing: 0px;
+}
+
+.alpaca-projbtn { color: #4d5666; font-size: 13px; font-weight: 500; padding: 1px 4px 1px 8px; }
+
+.alpaca-projbtn label, .alpaca-projadd > label { padding: 0 0 3px 0; }
+.alpaca-projbtn.alpaca-on { color: #e6e8ee; background: #1c2431; }
+.alpaca-projbtn:hover, .alpaca-projbtn.alpaca-on:hover, .alpaca-projadd:hover,
+.alpaca-branchbtn:hover, .alpaca-branchbtn.alpaca-open { background: #1c2431; color: #e6e8ee; }
+.alpaca-projbtn label:backdrop { color: #4d5666; }
+.alpaca-projbtn.alpaca-on label:backdrop { color: #e6e8ee; }
+.alpaca-projbtn:hover label:backdrop, .alpaca-projbtn.alpaca-on:hover label:backdrop { color: #e6e8ee; }
+.alpaca-projadd { color: #8a93a6; font-size: 13px; font-weight: 500; padding: 1px 5px; }
+.alpaca-projadd:disabled { color: #3d4454; opacity: 0.35; }
+
+.alpaca-projclose, .alpaca-projclose > box, .alpaca-projclose > image {
+    background: transparent; border: none; border-radius: 4px;
+    min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border-spacing: 0px;
+}
+.alpaca-projclose { color: #4d5666; padding: 0 2px; min-height: 18px; }
+.alpaca-projclose:hover { background: #2b3448; color: #e6e8ee; }
+
+.alpaca-header menubutton > button { background: transparent; color: #e6e8ee; font-size: 13px;
+                                     border: none; border-radius: 6px; padding: 0 5px;
+                                     min-height: 2px; margin: 4px 0; }
+.alpaca-header menubutton > button:hover { background: #111723; }
+
+.alpaca-runpill { background: transparent; border: none; border-radius: 8px;
+                  min-height: 24px; }
+.alpaca-runpill.running, .alpaca-runpill.running:hover { background: #111723; }
+
+.alpaca-runpill button, .alpaca-runpill button > box,
+.alpaca-runpill button > box > image {
+    min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border: none;
+    border-spacing: 0px; }
+.alpaca-runpill button { background: transparent; border: none;
+                         min-height: 24px; padding: 0 5px; }
+.alpaca-runpill button:disabled { opacity: 0.35; }
+
+.alpaca-runcell { border-radius: 6px; }
+.alpaca-runcell:hover { background-color: #111723; }
+.alpaca-runpill.running .alpaca-runcell:hover { background-color: #1b2233; }
+.alpaca-rundivider { min-width: 1px; background: transparent; margin: 4px 0; }
+.alpaca-runpill.running .alpaca-rundivider { background: #2b3448; }
+
+.alpaca-panel-title { font-size: 16px; font-weight: 600; color: #e6e8ee; }
+.alpaca-search { background: #0a0d13; color: #e6e8ee; font-size: 13px;
+                 border: 1px solid #2b3448; border-radius: 8px;
+                 min-height: 10px; padding: 0 10px; margin-top: 0; margin-bottom: 6px;
+                 caret-color: #2f80ed; }
+.alpaca-search:focus { border-color: #2f80ed; }
+.alpaca-search image { margin-right: 6px; }
+
+.alpaca-modetabs { padding: 0 12px; border-bottom: 1px solid #1c2230; }
+.alpaca-tabbtn { color: #8a93a6; font-size: 11px; font-weight: 500;
+                 letter-spacing: 1px; min-height: 18px; padding: 0;
+                 background: transparent; border: none;
+                 border-bottom: 2px solid transparent; border-radius: 0;
+                 box-shadow: none; outline: none; }
+.alpaca-tabbtn:hover { color: #e6e8ee; }
+.alpaca-tabbtn.alpaca-on { color: #e6e8ee; border-bottom-color: #2f80ed; }
+
+.alpaca-tabbtn label:backdrop { color: #8a93a6; }
+.alpaca-tabbtn.alpaca-on label:backdrop { color: #e6e8ee; }
+.alpaca-tree { background: transparent; color: #e6e8ee; font-size: 13px; }
+
+.alpaca-search text { min-height: 14px; padding: 0; }
+.alpaca-tree.view:selected { background: #1b3560; color: #ffffff; }
+.alpaca-tree:selected { background: #1b3560; color: #ffffff; }
+
+.alpaca-statusbar { min-height: 0; padding: 2px 0; border-top: 1px solid #1c2230;
+                    color: #8a93a6; font-size: 12px; }
+.alpaca-statusbar label { color: #8a93a6; font-size: 12px; }
+.alpaca-statusbar > label:last-child { color: #5a6375; }
+
+.alpaca-branchbtn { background: transparent; border: none; border-radius: 6px;
+                    min-height: 0; padding: 1px 8px; color: #8a93a6; }
+
+.alpaca-branchbtn label:backdrop { color: #8a93a6; }
+
+.alpaca-branchitem { background: transparent; border: none; border-radius: 6px;
+                     min-height: 0; padding: 4px 10px; color: #8a93a6; font-size: 13px; }
+.alpaca-branchitem:hover { background: #1c2230; color: #e6e8ee; }
+.alpaca-branchitem.alpaca-on { color: #e6e8ee; }
+.alpaca-branchitem label:backdrop { color: #8a93a6; }
+.alpaca-branchitem.alpaca-on label:backdrop { color: #e6e8ee; }
+.alpaca-hint { color: #8a93a6; font-size: 12px; font-style: italic; }
+
+.alpaca-msg { background: #0a0d13; color: #e6e8ee; font-size: 13px;
+              border: 1px solid #2b3448; border-radius: 8px;
+              min-height: 10px; padding: 0 12px; }
+.alpaca-msg:focus { border-color: #2f80ed; }
+.alpaca-msg text { min-height: 14px; padding: 0; }
+.alpaca-barbtn { background: #111723; color: #e6e8ee; border: 1px solid #2b3448;
+                 border-radius: 8px; font-size: 12px; font-weight: 500;
+                 padding: 0 12px; min-height: 26px; }
+.alpaca-barbtn:hover { background: #1c2431; }
+.alpaca-barbtn:disabled { color: #5a6375; background: #0a0d13; }
+.alpaca-barbtn label:backdrop { color: #e6e8ee; }
+
+.alpaca-status-dot { min-width: 8px; min-height: 8px; border-radius: 4px; background: #5a6375; }
+.alpaca-status-dot.ok { background: #22c55e; }
+.alpaca-status-dot.warn { background: #f2c94c; }
+.alpaca-status-dot.err { background: #ef4444; }
+.alpaca-status-spin { min-width: 10px; min-height: 10px; }
+.alpaca-mono { font-family: "JetBrains Mono", monospace; font-size: 13px; }
+
+.alpaca-tab { padding: 4px 10px; }
+
+.alpaca-tabname { font-size: 13px; font-weight: 500; padding: 0 0 3px 0; }
+.alpaca-close { min-width: 18px; min-height: 18px; padding: 0; background: transparent;
+                border: none; border-radius: 4px; }
+.alpaca-close:hover { background: #1c2230; }
+.alpaca-dirty { color: #ef4444; font-size: 8px; }
+
+.alpaca-dirty.conflict { color: #f2c94c; }
+tab .alpaca-tabname.alpaca-deleted, tab:checked .alpaca-tabname.alpaca-deleted {
+    font-style: italic; color: #5a6375; }
+
+.alpaca-mono text { background-color: #0d1017; }
+
+.alpaca-diffnum, .alpaca-diffnum text { color: #5a6375; }
+
+paned.alpaca-diffpaned > separator {
+    background: linear-gradient(to right,
+        transparent 0px, transparent 2px, #2b3448 2px, #2b3448 4px,
+        transparent 4px, transparent 6px);
+}
+
+.alpaca-diffchipm,.alpaca-diffchipa,.alpaca-diffchipu,.alpaca-diffchipd,.alpaca-diffchipr {
+    font-size: 10px; font-weight: 700; }
+.alpaca-diffchipm { color: #f2c94c; }
+.alpaca-diffchipr { color: #2f80ed; }
+.alpaca-diffchipa, .alpaca-diffchipu { color: #22c55e; }
+.alpaca-diffchipd { color: #ef4444; }
+
+.alpaca-breadcrumb { color: #8a93a6; font-size: 12px; padding: 2px 12px 2px 20px;
+                     border-bottom: 1px solid #1c2230; }
+
+notebook > header { background: #0a0d13; border: none; border-bottom: 1px solid #1c2230;
+                    min-height: 32px; padding: 0; }
+
+notebook > header.top, notebook > header.top:backdrop { box-shadow: none; }
+
+notebook, notebook.frame, notebook:backdrop { box-shadow: none; }
+
+notebook > header > tabs > tab { min-height: 30px; background: transparent;
+                                 border: none; margin: 0; border-radius: 4px 4px 0 0;
+                                 padding: 0; outline: none; box-shadow: none; }
+notebook > header > tabs > tab:checked { background: #111723;
+                                         min-height: 30px; outline: none; box-shadow: none; }
+tab > .alpaca-tab { color: #8a93a6; }
+tab:checked > .alpaca-tab { color: #e6e8ee; }
+tab .alpaca-tabname { color: #8a93a6; }
+tab:checked .alpaca-tabname { color: #e6e8ee; }
+
+notebook > header > tabs > tab:hover { background: @alpaca-hover; }
+
+notebook.alpaca-panes > header { padding: 0; min-height: 28px; }
+
+notebook.alpaca-panes > header > tabs > tab { min-height: 26px; margin: 0;
+                                              border-radius: 4px 4px 0 0; }
+notebook.alpaca-panes > header > tabs > tab:checked { min-height: 28px; }
+.alpaca-panetab { padding: 0 12px; }
+
+.alpaca-panetabname { font-size: 13px; font-weight: 500; color: #8a93a6; padding: 0 0 2px 0; }
+tab:checked .alpaca-panetabname { color: #e6e8ee; }
+
+.alpaca-launch { padding: 28px 38px 8px; }
+
+.alpaca-launchcard { background: #0d1017; border: 1px solid #1c2230;
+                     border-radius: 4px; outline: none; box-shadow: none;
+                     min-height: 0; min-width: 0; margin: 0; border-spacing: 0;
+                     padding: 12px 14px; }
+.alpaca-launchcard:hover { background: #111723; border-color: #2b3448; }
+
+.alpaca-launchcard label:backdrop { color: #e6e8ee; }
+.alpaca-launchname { font-size: 16px; font-weight: 600; color: #e6e8ee; }
+.alpaca-launchtile { background: #0a0d13; border: 1px solid #1c2230;
+                     border-radius: 4px; padding: 9px 12px; }
+.alpaca-launchtile label { font-size: 13px; color: #e6e8ee; }
+.alpaca-launchlang { font-size: 11px; font-weight: 600; }
+.alpaca-lc-blue, .alpaca-lc-blue:backdrop { color: #519aba; }
+.alpaca-lc-green, .alpaca-lc-green:backdrop { color: #8dc149; }
+.alpaca-lc-yellow, .alpaca-lc-yellow:backdrop { color: #cbcb41; }
+.alpaca-lc-purple, .alpaca-lc-purple:backdrop { color: #a074c4; }
+.alpaca-lc-orange, .alpaca-lc-orange:backdrop { color: #e37933; }
+.alpaca-lc-red, .alpaca-lc-red:backdrop { color: #cc3e44; }
+.alpaca-lc-grey, .alpaca-lc-grey:backdrop { color: #6d8086; }
+.alpaca-lc-muted, .alpaca-lc-muted:backdrop { color: #8a93a6; }
+.alpaca-launchbranch, .alpaca-launchbranch:backdrop { font-size: 12px; color: #8a93a6; }
+.alpaca-launchadd { background: #0d1017; border: 1px solid #1c2230;
+                    border-radius: 4px; outline: none; box-shadow: none;
+                    min-height: 0; min-width: 0; margin: 0; border-spacing: 0;
+                    padding: 15px 0; }
+.alpaca-launchadd:hover { background: #1c2431; }
+
+.alpaca-launchicon { padding: 2px; border-radius: 4px;
+                     min-width: 18px; min-height: 18px; }
+.alpaca-launchicon:hover { background: #2b3448; }
+
+.alpaca-wbpoptitle { font-size: 13px; font-weight: 600; color: #8a93a6; }
+.alpaca-wbpoptitle:backdrop { color: #8a93a6; }
+.alpaca-wbcancel, .alpaca-wbok, .alpaca-wbdel {
+    background: #0a0d13; color: #e6e8ee; border: 1px solid #1c2230;
+    border-radius: 4px; outline: none; box-shadow: none; padding: 4px 12px;
+    min-height: 24px; min-width: 0; border-spacing: 0; }
+.alpaca-wbcancel:hover, .alpaca-wbok:hover, .alpaca-wbdel:hover {
+    background: #1c2230; color: #e6e8ee; }
+.alpaca-wbok { background: #12233a; border-color: #2f80ed; }
+.alpaca-wbok:hover { background: #1a3050; }
+.alpaca-wbdel { background: #2a1418; border-color: #cc3e44; }
+.alpaca-wbdel:hover { background: #3a1c22; }
+.alpaca-wbcancel label:backdrop, .alpaca-wbok label:backdrop,
+.alpaca-wbdel label:backdrop { color: #e6e8ee; }
+.alpaca-launchsection { font-size: 13px; font-weight: 600; color: #e6e8ee;
+                        padding-bottom: 6px; border-bottom: 1px solid #1c2230; }
+.alpaca-launchtitle { font-size: 28px; font-weight: 400; color: #e6e8ee; }
+.alpaca-launchby { background: transparent; border: none; box-shadow: none;
+                   outline: none; min-height: 0; min-width: 0; margin: 0;
+                   border-spacing: 0; padding: 2px 4px; font-size: 10px;
+                   color: #5a6375; }
+.alpaca-launchby:hover { color: #8a93a6; }
+.alpaca-launchby label:backdrop { color: #5a6375; }
