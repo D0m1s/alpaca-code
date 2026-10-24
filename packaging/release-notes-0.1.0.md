@@ -21,3 +21,11 @@ That's a porting session, not a packaging tweak — tracked for a later release.
 
 - The `claude` CLI on PATH (`npm install -g @anthropic-ai/claude-code`) for the agent pane; the editor, file tree and git views work without it.
 - Verify your download against `sha256sums.txt`.
+
+## License & notices
+
+- Code is dual-licensed — your choice of [MIT](https://github.com/D0m1s/alpaca-code/blob/v0.1.0/LICENSE-MIT)
+  or [Apache-2.0](https://github.com/D0m1s/alpaca-code/blob/v0.1.0/LICENSE-APACHE)
+  (SPDX `MIT OR Apache-2.0`); both files ship in the repo and the linux tarball.
+- The macOS bundle redistributes the DejaVu fonts; their Bitstream Vera + Arev terms are
+  at [`packaging/fonts/LICENSE`](https://github.com/D0m1s/alpaca-code/blob/v0.1.0/packaging/fonts/LICENSE).

@@ -112,4 +112,8 @@ RustSec audits. Pull requests welcome.
 
 ## License
 
-Dual-licensed under your choice of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
+Dual-licensed under your choice of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) —
+SPDX `MIT OR Apache-2.0`. GitHub's sidebar shows only Apache-2.0 because its detector
+returns a single license for any `LICENSE-MIT`/`LICENSE-APACHE` pair, as it does for
+every dual-licensed Rust repo. The macOS release bundles the DejaVu fonts; their
+Bitstream Vera + Arev terms ship at [packaging/fonts/LICENSE](packaging/fonts/LICENSE).

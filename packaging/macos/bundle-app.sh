@@ -20,6 +20,7 @@ cp packaging/macos/launch.sh "$APP/Contents/MacOS/alpaca-code"
 chmod +x "$APP/Contents/MacOS/alpaca-code"
 cp packaging/fonts/DejaVuSans.ttf packaging/fonts/DejaVuSans-Bold.ttf \
    packaging/fonts/DejaVuSansMono.ttf packaging/fonts/DejaVuSansMono-Bold.ttf \
+   packaging/fonts/LICENSE \
    "$APP/Contents/share/fonts/"
 cp packaging/macos/fonts.conf "$APP/Contents/etc/fonts/fonts.conf"
 cp -R "$BREW/share/glib-2.0/schemas" "$APP/Contents/share/glib-2.0/"

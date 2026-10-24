@@ -115,7 +115,7 @@ jobs:
           d="alpaca-code-$VER-linux-x86_64"
           mkdir -p "$d"
           cp target/release/alpaca-code-rs packaging/install-linux.sh \
-             packaging/io.alpaca.rs.desktop LICENSE README.md "$d/"
+             packaging/io.alpaca.rs.desktop LICENSE-MIT LICENSE-APACHE README.md "$d/"
           for s in 16 32 48 64 128 256; do
               cp "assets/icons/io.alpaca.rs-$s.png" "$d/"
           done
