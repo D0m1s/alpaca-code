@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use gtk4::gio::prelude::FileExt; // delete_workbench_at's trash (no GTK init needed)
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -42,6 +43,11 @@ pub struct ProjectTabs {
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct WorkbenchFile {
     pub name: String,
+    /// card display name (launcher 2026-10-15): the user's name for this
+    /// workbench. The FILE stem stays the uuid (workbench_path sanitize law
+    /// keeps arbitrary text out of paths) and LauncherOpen loads by the stem;
+    /// absent on pre-2026-10-15 files → None → cards fall back to the stem.
+    pub display: Option<String>,
     pub projects: HashMap<String, ProjectSession>,
 }
 
@@ -196,7 +202,11 @@ pub fn parse_workbench(v: &serde_json::Value) -> Option<WorkbenchFile> {
         .filter(|(_k, v)| v.is_object())
         .filter_map(|(k, v)| parse_session(v).map(|s| (k.clone(), s)))
         .collect();
-    Some(WorkbenchFile { name, projects })
+    let display = root
+        .get("display")
+        .and_then(|d| d.as_str())
+        .map(str::to_owned);
+    Some(WorkbenchFile { name, display, projects })
 }
 
 fn parse_session(v: &serde_json::Value) -> Option<ProjectSession> {
@@ -280,6 +290,47 @@ pub fn save_workbench_to(wb: &WorkbenchFile, path: &Path) {
 
 pub fn load_workbench(name: &str) -> Option<WorkbenchFile> {
     load_workbench_from(&workbench_path(name))
+}
+
+/// Trash a workbench file (launcher delete card, 2026-10-15). Trash first
+/// (recoverable); a trash-unsupported filesystem falls back to unlink —
+/// the never-brick contract: best-effort, never raises. True when removed.
+pub fn delete_workbench(name: &str) -> bool {
+    delete_workbench_at(&workbench_path(name))
+}
+
+pub fn delete_workbench_at(p: &Path) -> bool {
+    if !p.exists() {
+        return false;
+    }
+    let f = gtk4::gio::File::for_path(p);
+    let trashed = f.trash(None::<&gtk4::gio::Cancellable>).is_ok();
+    // ponytail: gio trash needs a home-trash dir on the same fs; on an
+    // exotic mount it returns false → unlink fallback keeps the card gone
+    trashed || std::fs::remove_file(p).is_ok()
+}
+
+/// Rewrite a workbench file's display name in place (launcher rename pencil,
+/// 2026-10-15). The file's mtime is RESTORED after the write: card order
+/// rides mtime = the last SAVE — a rename must not ride the top. False when
+/// the file is absent/corrupt (never raises).
+pub fn set_workbench_display(name: &str, display: &str) -> bool {
+    set_workbench_display_at(&workbench_path(name), display)
+}
+
+pub fn set_workbench_display_at(p: &Path, display: &str) -> bool {
+    let Some(mut wb) = load_workbench_from(p) else {
+        return false;
+    };
+    let old_mtime = std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    wb.display = Some(display.to_owned());
+    save_workbench_to(&wb, p);
+    if let Some(t) = old_mtime {
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(p) {
+            let _ = f.set_times(std::fs::FileTimes::new().set_modified(t));
+        }
+    }
+    true
 }
 
 pub fn load_from(path: &Path) -> State {
@@ -463,7 +514,7 @@ mod tests {
     #[test]
     fn workbench_roundtrip_and_corrupt() {
         let p = tmp("wb.json");
-        let mut wb = WorkbenchFile { name: "deadbeef-1234".into(), projects: Default::default() };
+        let mut wb = WorkbenchFile { name: "deadbeef-1234".into(), display: None, projects: Default::default() };
         wb.projects.insert(
             "/w".into(),
             ProjectSession {
@@ -485,6 +536,70 @@ mod tests {
         let q = workbench_path("a/b?c");
         assert!(q.to_string_lossy().contains("bc"));
         std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn workbench_display_roundtrip_and_parse_fallback() {
+        let p = tmp("wbdisp.json");
+        // a saved display name rides the file (launcher rename, 2026-10-15);
+        // the stem stays the uuid — only the card label is display
+        let mut wb = WorkbenchFile {
+            name: "deadbeef-1234".into(),
+            display: Some("My Workbench".into()),
+            projects: Default::default(),
+        };
+        save_workbench_to(&wb, &p);
+        assert_eq!(load_workbench_from(&p), Some(wb.clone()));
+        // pre-2026-10-15 files have no key → None → cards fall back to stem
+        wb.display = None;
+        save_workbench_to(&wb, &p);
+        assert_eq!(load_workbench_from(&p).unwrap().display, None);
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn set_workbench_display_rewrites_and_keeps_mtime() {
+        let dir = std::env::temp_dir().join("alpaca-state-display");
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("a1a1bbbb-0001.json");
+        save_workbench_to(
+            &WorkbenchFile { name: "a1a1bbbb-0001".into(), display: None, projects: Default::default() },
+            &p,
+        );
+        let before = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50)); // a rewrite must differ
+        assert!(set_workbench_display_at(&p, "Nice"));
+        assert_eq!(
+            load_workbench_from(&p).unwrap().display.as_deref(),
+            Some("Nice")
+        );
+        // rename must NOT ride the mtime card order (last save rides first)
+        let after = std::fs::metadata(&p).and_then(|m| m.modified()).unwrap();
+        assert_eq!(after, before);
+        // absent file → false, nothing created
+        let miss = dir.join("nope-0001.json");
+        assert!(!set_workbench_display_at(&miss, "x"));
+        assert!(!miss.exists());
+    }
+
+    #[test]
+    fn delete_workbench_removes_file() {
+        let dir = std::env::temp_dir().join("alpaca-state-delete");
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("b1b1bbbb-0001.json");
+        save_workbench_to(
+            &WorkbenchFile { name: "b1b1bbbb-0001".into(), display: None, projects: Default::default() },
+            &p,
+        );
+        assert!(delete_workbench_at(&p));
+        assert!(!p.exists()); // trashed or unlinked — the card must be gone
+        assert!(!delete_workbench_at(&p)); // absent → false
     }
 
     #[test]

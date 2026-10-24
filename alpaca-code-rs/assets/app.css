@@ -367,6 +367,29 @@ tab:checked .alpaca-panetabname { color: #e6e8ee; }
                     min-height: 0; min-width: 0; margin: 0; border-spacing: 0;
                     padding: 15px 0; }
 .alpaca-launchadd:hover { background: #1c2431; }
+/* hover pencil/trash: plain Box + GestureClick (the close-pill law) — the
+   21px-band law's SQUARE 18×18 patch ruling (image #18) applies here too:
+   14px img + 2px pad, radius from the card family */
+.alpaca-launchicon { padding: 2px; border-radius: 4px;
+                     min-width: 18px; min-height: 18px; }
+.alpaca-launchicon:hover { background: #2b3448; }
+/* popover content rules — launchcard's `label:backdrop` etc. PIERCE them
+   (popovers are css-DOM children of their parent widget), so every label
+   and button here carries its own explicit full rule */
+.alpaca-wbpoptitle { font-size: 13px; font-weight: 600; color: #8a93a6; }
+.alpaca-wbpoptitle:backdrop { color: #8a93a6; }
+.alpaca-wbcancel, .alpaca-wbok, .alpaca-wbdel {
+    background: #0a0d13; color: #e6e8ee; border: 1px solid #1c2230;
+    border-radius: 4px; outline: none; box-shadow: none; padding: 4px 12px;
+    min-height: 24px; min-width: 0; border-spacing: 0; }
+.alpaca-wbcancel:hover, .alpaca-wbok:hover, .alpaca-wbdel:hover {
+    background: #1c2230; color: #e6e8ee; }
+.alpaca-wbok { background: #12233a; border-color: #2f80ed; }
+.alpaca-wbok:hover { background: #1a3050; }
+.alpaca-wbdel { background: #2a1418; border-color: #cc3e44; }
+.alpaca-wbdel:hover { background: #3a1c22; }
+.alpaca-wbcancel label:backdrop, .alpaca-wbok label:backdrop,
+.alpaca-wbdel label:backdrop { color: #e6e8ee; }
 .alpaca-launchsection { font-size: 13px; font-weight: 600; color: #e6e8ee;
                         padding-bottom: 6px; border-bottom: 1px solid #1c2230; }
 .alpaca-launchtitle { font-size: 28px; font-weight: 400; color: #e6e8ee; }

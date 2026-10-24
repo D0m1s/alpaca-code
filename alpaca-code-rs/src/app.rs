@@ -41,11 +41,18 @@ pub enum AppMsg {
     /// launcher card → adopt the file's uuid as this session's workbench,
     /// then route each surviving root through the shared open path
     LauncherOpen(String),
-    /// launcher big + / menu New Workbench → folder picker; the accept
-    /// opens the folder as a FRESH workbench (identity cleared)
-    LauncherAdd,
+    /// launcher big + → the NAME popover commits first → folder picker; the
+    /// accept opens the folder as a FRESH workbench (identity cleared) whose
+    /// display name rides in wb_display until the FIRST save mints the file
+    LauncherAdd(String),
     /// LauncherAdd's picker accept: clear the workbench identity, then open
-    OpenNew(PathBuf),
+    OpenNew(PathBuf, String),
+    /// launcher pencil: display rewrite on the file (mtime preserved — the
+    /// card order stays last-save-first); an adopted identity reloads its base
+    LauncherRename { stem: String, display: String },
+    /// launcher trash (confirmed in its popover): the file is deleted; an
+    /// adopted identity is cleared so the next save mints FRESH (no resurrect)
+    LauncherDelete(String),
     /// tree → editor routing within the tagged workspace
     OpenFile(usize, PathBuf),
     /// editor state flip → snapshot storage + persist debounce
@@ -406,6 +413,10 @@ struct App {
     wb: Option<state::WorkbenchFile>,
     /// the minted workbench name (uuid placeholder) — stable once saved
     wb_name: Option<String>,
+    /// the display name awaiting the FIRST save of a fresh workbench (the
+    /// `+` name prompt): save_all writes it into the minted file; files with
+    /// a saved identity carry display INSIDE the file (wb.display) instead
+    wb_display: Option<String>,
 }
 
 #[relm4::component]
@@ -584,7 +595,11 @@ impl Component for App {
             .launch(())
             .connect_receiver(move |_, out| match out {
                 LauncherOutput::Open(name) => send_l.input(AppMsg::LauncherOpen(name)),
-                LauncherOutput::New => send_l.input(AppMsg::LauncherAdd),
+                LauncherOutput::New(name) => send_l.input(AppMsg::LauncherAdd(name)),
+                LauncherOutput::Rename { stem, display } => {
+                    send_l.input(AppMsg::LauncherRename { stem, display })
+                }
+                LauncherOutput::Delete(stem) => send_l.input(AppMsg::LauncherDelete(stem)),
             });
         stack.add_named(launcher.widget(), Some("launcher"));
 
@@ -609,7 +624,12 @@ impl Component for App {
         menu_btn.set_visible(!on_hub);
         add_btn.set_visible(!on_hub);
 
-        let model = App {
+    // boot adopt (launcher 2026-10-15): wb_name requires the file to LOAD —
+    // a stale last_workbench (manually deleted file) must not resurrect the
+    // file at the next save (it would mint a fresh uuid instead)
+    let boot_wb = st.last_workbench.as_deref().and_then(state::load_workbench);
+    let boot_wb_name = boot_wb.as_ref().map(|w| w.name.clone());
+    let model = App {
             stack,
             proj_box,
             add_btn,
@@ -626,8 +646,13 @@ impl Component for App {
             probe_wb: None,
             probe_wbr: None,
             probe_l: None,
-            wb: st.last_workbench.as_deref().and_then(state::load_workbench),
-            wb_name: st.last_workbench.clone(),
+            // boot adopt (launcher 2026-10-15): wb_name requires the file to
+            // LOAD — a stale last_workbench (manually deleted file) must not
+            // resurrect the file at the next save (it would mint a fresh
+            // uuid instead). wb.name == stem for app-written files.
+            wb: boot_wb,
+            wb_name: boot_wb_name,
+            wb_display: None,
         };
 
         register_actions(&relm4::main_application(), &root, sender.clone());
@@ -698,14 +723,42 @@ impl Component for App {
                 root.set_title(Some("alpaca-code"));
             }
             AppMsg::LauncherOpen(name) => self.open_workbench(&name, sender),
-            AppMsg::LauncherAdd => ask_folder(root, "New Workbench", sender, true),
-            AppMsg::OpenNew(p) => {
+            AppMsg::LauncherAdd(name) => ask_folder(root, "New Workbench", sender, Some(name)),
+            AppMsg::OpenNew(p, name) => {
                 // the launcher's + path: a FRESH workbench identity — the
                 // next Ctrl+Shift+S mints its uuid instead of riding the
-                // previously-adopted workbench's file
+                // previously-adopted workbench's file. The name prompt's
+                // name rides in wb_display until that FIRST save writes it
+                // into the minted file (empty → the folder basename).
                 self.wb = None;
                 self.wb_name = None;
+                self.wb_display = Some(if name.trim().is_empty() {
+                    py_basename(&p.to_string_lossy()).to_string()
+                } else {
+                    name
+                });
                 sender.input(AppMsg::OpenWorkspace(p));
+            }
+            AppMsg::LauncherRename { stem, display } => {
+                // the file's display rewrite (mtime preserved inside — the
+                // card order stays last-save-first); the adopted base
+                // reloads so the next save keeps the display
+                state::set_workbench_display(&stem, &display);
+                if self.wb_name.as_deref() == Some(stem.as_str()) {
+                    self.wb = state::load_workbench(&stem);
+                }
+                self.launcher.emit(LauncherMsg::Build);
+            }
+            AppMsg::LauncherDelete(stem) => {
+                state::delete_workbench(&stem);
+                if self.wb_name.as_deref() == Some(stem.as_str()) {
+                    // deleting the ADOPTED workbench: no identity — the next
+                    // save mints FRESH instead of resurrecting the dead file
+                    self.wb = None;
+                    self.wb_name = None;
+                    self.wb_display = None;
+                }
+                self.launcher.emit(LauncherMsg::Build);
             }
             AppMsg::AddProjectDialog => open_project(root, sender),
             AppMsg::OpenFile(ws, p) => {
@@ -1366,6 +1419,11 @@ impl Component for App {
                             "ln-chrome-hidden",
                             !self.menu_btn.is_visible() && !self.add_btn.is_visible(),
                         );
+                        // boot adopt filter (launcher 2026-10-15): this rig's
+                        // state.json points last_workbench at a MISSING file —
+                        // wb_name must stay None so the next save mints FRESH
+                        // (no resurrection identity for the dead file)
+                        say("ln-boot-stale-no-adopt", self.wb_name.is_none());
                     }
                     1 => {
                         // the REAL click: card 0's activation output →
@@ -1407,11 +1465,163 @@ impl Component for App {
                         );
                     }
                     5 => {
+                        println!("PROBE LN: back to hub");
+                        sender.input(AppMsg::ShowLauncher);
+                    }
+                    6 => {
+                        // hub again + the rename drive part 1: open the pencil
+                        // card's entry popover (the REAL builder, icons
+                        // revealed via the hover law the probe replicates) and
+                        // set the text — the commit rides in step 7 so
+                        // ALPACA_PROBE_LN_HOLD=7 captures the OPEN popover
+                        println!("PROBE LN: rename drive");
+                        say(
+                            "ln-rename-pop-entry",
+                            self.launcher.model().probe_pencil(0).is_some_and(|e| {
+                                e.set_text("Nice wb");
+                                true
+                            }),
+                        );
+                    }
+                    7 => {
+                        // rename drive part 2: the REAL commit on step 6's
+                        // popover — the SAME entry, no rebuild (reopening
+                        // would lose the typed text)
+                        println!("PROBE LN: rename commit");
+                        let ok = self
+                            .launcher
+                            .model()
+                            .probe_pencil_entry(0)
+                            .is_some_and(|e| {
+                                e.emit_activate();
+                                true
+                            });
+                        say("ln-rename-commit", ok);
+                        // the ADOPTED card's rename rides the same chain —
+                        // the LauncherRename arm must RELOAD wb so the next
+                        // save keeps the display (the Ctrl+S path)
+                        say(
+                            "ln-rename-commit-adopted",
+                            self.launcher.model().probe_pencil(1).is_some_and(|e| {
+                                e.set_text("Adopted 0002");
+                                e.emit_activate();
+                                true
+                            }),
+                        );
+                    }
+                    8 => {
+                        println!("PROBE LN: rename asserts");
+                        // card relabeled from the REBUILT strip + the file's
+                        // display field; adopted identity (0002) untouched
+                        let texts = self.launcher.model().probe_texts();
+                        say("ln-rename-label", texts.first().is_some_and(|(n, _)| n == "Nice wb"));
+                        say(
+                            "ln-rename-file",
+                            state::load_workbench("aaaabbbb-0001")
+                                .is_some_and(|w| w.display.as_deref() == Some("Nice wb")),
+                        );
+                        // the ADOPTED file's display: on disk AND in the
+                        // reloaded base (the next save preserves it)
+                        say(
+                            "ln-rename-adopt-file",
+                            state::load_workbench("aaaabbbb-0002")
+                                .is_some_and(|w| w.display.as_deref() == Some("Adopted 0002")),
+                        );
+                        say(
+                            "ln-rename-adopt-base",
+                            self.wb.as_ref().and_then(|w| w.display.as_deref())
+                                == Some("Adopted 0002"),
+                        );
+                        say(
+                            "ln-rename-adopt-untouched",
+                            self.wb_name.as_deref() == Some("aaaabbbb-0002"),
+                        );
+                        // the hub page never left during the edit
+                        say(
+                            "ln-rename-page",
+                            self.stack.visible_child_name().as_deref() == Some("launcher"),
+                        );
+                    }
+                    9 => {
+                        // delete drive on the ADOPTED card (wb_name =
+                        // aaaabbbb-0002 = strip index 1): open THE confirm
+                        // popover, then click its real Delete button
+                        println!("PROBE LN: delete drive");
+                        say(
+                            "ln-del-pop",
+                            self.launcher.model().probe_trash(1)
+                                && self.launcher.model().probe_delete_ok(1),
+                        );
+                    }
+                    10 => {
+                        println!("PROBE LN: delete asserts");
+                        let texts = self.launcher.model().probe_texts();
+                        // the file is gone (only the renamed 0001 card left)
+                        // and the adopted identity was CLEARED: the next save
+                        // mints fresh — no resurrection of the dead file
+                        say("ln-del-card-gone", texts.len() == 1 && texts[0].0 == "Nice wb");
+                        say(
+                            "ln-del-file-gone",
+                            state::load_workbench("aaaabbbb-0002").is_none(),
+                        );
+                        say("ln-del-adopt-cleared", self.wb_name.is_none() && self.wb.is_none());
+                        // no identity → a save here would mint FRESH
+                        say("ln-del-fresh-rearm", self.wb_display.is_none());
+                    }
+                    11 => {
+                        // + flow: the REAL PlusClick routes through update()
+                        // (the previous prompt's teardown law lives there);
+                        // its COMMIT opens the native picker — never driven
+                        println!("PROBE LN: plus click");
+                        self.launcher.emit(LauncherMsg::PlusClick);
+                    }
+                    12 => {
+                        println!("PROBE LN: plus entry asserts");
+                        let e = self.launcher.model().probe_plus_entry();
+                        say("ln-plus-entry", e.is_some());
+                        if let Some(ent) = e {
+                            say("ln-plus-entry-empty", ent.text().is_empty());
+                        }
+                        // then the identity path via OpenNew with a name
+                        let rig = self
+                            .probe_l
+                            .as_ref()
+                            .map(|(d, _)| d.clone())
+                            .unwrap_or_default();
+                        sender.input(AppMsg::OpenNew(rig.join("projA"), "My New Wb".into()));
+                    }
+                    13 => {
+                        println!("PROBE LN: create asserts");
+                        // projA already live → the shared open path SWITCHES
+                        // (no strip growth); fresh identity + the name rides
+                        // in wb_display until the FIRST save
+                        say("ln-new-switch", self.live_len() == 2);
+                        say("ln-new-identity", self.wb_name.is_none() && self.wb.is_none());
+                        say(
+                            "ln-new-display",
+                            self.wb_display.as_deref() == Some("My New Wb"),
+                        );
+                    }
+                    14 => {
                         println!("PROBE LN DONE");
                         self.probe_l = None;
                         return;
                     }
                     _ => {}
+                }
+                // PROBE-ONLY capture gate (ALPACA_PROBE_LN_HOLD=N): run steps
+                // 0..=N-1, then park the app — the S2_HOLD precedent (staged
+                // pixel capture: icons revealed + popover open). The probe
+                // fns reveal the hover icons themselves. Production never
+                // reads this (env unset).
+                if let Some(n) = std::env::var("ALPACA_PROBE_LN_HOLD")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+                    && step + 1 >= n
+                {
+                    println!("PROBE LN HOLD: parked after step {step} — window open for capture");
+                    self.probe_l = None;
+                    return;
                 }
                 if let Some(next) = PROBE_LN_MS.get(step + 1) {
                     self.probe_l.as_mut().unwrap().1 = step + 1;
@@ -1554,7 +1764,9 @@ const PROBE_S4_STEP_MS: [u64; 8] = [500, 700, 700, 700, 700, 500, 700, 700];
 const PROBE_WB_SAVE_MS: [u64; 6] = [500, 700, 700, 700, 700, 700];
 /// PROBE-ONLY (ALPACA_PROBE_LN) — launcher chain: 0 boot asserts, 1 click,
 /// 2 open asserts, 3 blend-click, 4 blend asserts, 5 DONE
-const PROBE_LN_MS: [u64; 6] = [1300, 800, 800, 800, 800, 700];
+const PROBE_LN_MS: [u64; 15] = [
+    1300, 800, 800, 800, 800, 700, 900, 900, 900, 900, 900, 900, 900, 900, 700,
+];
 /// PROBE-ONLY (ALPACA_PROBE_WB_RESTORE) — 0 = click the launcher card,
 /// 1 = restore asserts, 2 = DONE
 const PROBE_WB_RESTORE_MS: [u64; 3] = [500, 1400, 700];
@@ -1907,12 +2119,22 @@ impl App {
             height: root_win.height(),
             maximized: root_win.is_maximized(),
         });
+        let minted = self.wb_name.is_none();
         let name = self
             .wb_name
             .get_or_insert_with(|| glib::uuid_string_random().to_string())
             .clone();
+        // display: a fresh-first save consumes wb_display (the `+` name
+        // prompt); every later save preserves the FILE's display (launcher
+        // renames rewrite the file + reload wb — self.wb carries the latest)
+        let display = if minted {
+            self.wb_display.take()
+        } else {
+            None
+        };
         let mut wb = state::WorkbenchFile {
             name: name.clone(),
+            display,
             projects: Default::default(),
         };
         // sessions survive a project CLOSE this session: previous entries are
@@ -1920,6 +2142,9 @@ impl App {
         // projects harm nothing — boot filters by p.is_dir())
         if let Some(old) = self.wb.take() {
             wb.projects = old.projects;
+            if !minted {
+                wb.display = old.display; // the adopted file's display survives
+            }
         }
         for w in self.ws.iter().flatten() {
             // live read, no mirror: gitpanel forwards both trees, the editor
@@ -2090,7 +2315,9 @@ fn ask_folder(
     root_win: &gtk::ApplicationWindow,
     title: &str,
     sender: ComponentSender<App>,
-    fresh: bool,
+    // Some(display name) = the fresh path (the launcher + name prompt rides
+    // in) → OpenNew; None = the plain adopt-open path → OpenWorkspace
+    fresh: Option<String>,
 ) {
     let dialog = gtk::FileChooserNative::new(
         Some(title),
@@ -2100,6 +2327,7 @@ fn ask_folder(
         Some("Cancel"),
     );
     let sender = sender.clone();
+    let fresh_c = fresh.clone();
     dialog.connect_response(move |d, resp| {
         let path = if resp == gtk::ResponseType::Accept {
             d.file().and_then(|f| f.path())
@@ -2109,8 +2337,8 @@ fn ask_folder(
         d.destroy();
         if let Some(p) = path
             && p.is_dir() {
-                if fresh {
-                    sender.input(AppMsg::OpenNew(p));
+                if let Some(name) = fresh_c.clone() {
+                    sender.input(AppMsg::OpenNew(p, name));
                 } else {
                     sender.input(AppMsg::OpenWorkspace(p));
                 }
@@ -2120,7 +2348,7 @@ fn ask_folder(
 }
 
 fn open_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) {
-    ask_folder(root_win, "Open Project", sender, false);
+    ask_folder(root_win, "Open Project", sender, None);
 }
 
 fn new_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) {
@@ -2219,11 +2447,12 @@ fn register_actions(
     app.add_action(&quit);
 
     // the workbench phase's stubs got REAL targets (launcher, 2026-10-15):
-    // New Workbench = the picker w/ fresh identity; Open Workbench = the hub.
+    // New Workbench = the hub's + (its name prompt → the picker → a fresh
+    // identity); Open Workbench = the hub. One naming path, no menu shortcut.
     {
         let sender = sender.clone();
         let act = gio::SimpleAction::new("new-workbench", None);
-        act.connect_activate(move |_a, _p| sender.input(AppMsg::LauncherAdd));
+        act.connect_activate(move |_a, _p| sender.input(AppMsg::ShowLauncher));
         app.add_action(&act);
     }
     {

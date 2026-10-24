@@ -55,6 +55,10 @@ pub(crate) fn svg_data(name: &str) -> Option<&'static [u8]> {
             env!("CARGO_MANIFEST_DIR"),
             "/assets/icons/folder.svg"
         ))),
+        "pencil.svg" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/icons/pencil.svg"
+        ))),
         "play.svg" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/assets/icons/play.svg"
@@ -74,6 +78,10 @@ pub(crate) fn svg_data(name: &str) -> Option<&'static [u8]> {
         "terminal.svg" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/assets/icons/terminal.svg"
+        ))),
+        "trash.svg" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/icons/trash.svg"
         ))),
         "x-dim.svg" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),

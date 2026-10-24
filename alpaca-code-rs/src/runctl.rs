@@ -71,28 +71,40 @@ pub fn detect(root: &Path) -> Option<RunCmd> {
             _ => None,
         };
     }
-    let top_csproj = |e: &std::fs::DirEntry| {
+    let is_csproj = |e: &std::fs::DirEntry| {
         e.path().extension() == Some(std::ffi::OsStr::new("csproj"))
     };
     if let Ok(rs) = std::fs::read_dir(root)
-        && rs.filter_map(|e| e.ok()).any(|e| top_csproj(&e)) {
+        && rs.filter_map(|e| e.ok()).any(|e| is_csproj(&e)) {
             return Some(RunCmd { argv: vec!["dotnet".into(), "run".into()], label: "dotnet run".into() });
         }
-    // one-level nested: */*.csproj sorted by path, first hit
+    // one-level nested: prefer a RUNNABLE host (Web sdk / exe output — class
+    // libraries can't `dotnet run`), else the old first-lexical-with-csproj law.
+    // ponytail: reads the csproj text only — OutputType set from
+    // Directory.Build.props/conditions falls back to the lexical law below.
+    let runs = |p: &Path| {
+        std::fs::read_to_string(p).ok().is_some_and(|mut s| {
+            s.make_ascii_lowercase();
+            s.contains("microsoft.net.sdk.web") || s.contains("<outputtype>exe")
+        })
+    };
     let mut subdirs: Vec<std::fs::DirEntry> = std::fs::read_dir(root)
         .ok()?
         .filter_map(|e| e.ok())
         .collect();
     subdirs.sort_by_key(|a| a.file_name());
-    for d in subdirs {
-        if std::fs::read_dir(d.path()).ok().is_some_and(|mut rd| {
-            rd.any(|e| e.ok().is_some_and(|e| top_csproj(&e)))
-        }) {
-            let rel = d.file_name().to_string_lossy().into_owned();
-            return Some(RunCmd {
-                argv: vec!["dotnet".into(), "run".into(), "--project".into(), rel.clone()],
-                label: format!("dotnet run --project {rel}"),
-            });
+    for pick in [true, false] {
+        for d in &subdirs {
+            if std::fs::read_dir(d.path()).ok().is_some_and(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .any(|e| is_csproj(&e) && (!pick || runs(&e.path())))
+            }) {
+                let rel = d.file_name().to_string_lossy().into_owned();
+                return Some(RunCmd {
+                    argv: vec!["dotnet".into(), "run".into(), "--project".into(), rel.clone()],
+                    label: format!("dotnet run --project {rel}"),
+                });
+            }
         }
     }
     None
@@ -203,6 +215,64 @@ mod tests {
         assert_eq!(cmd.label, "dotnet run --project sub");
         let bare = dir_with("bare", &[]);
         assert!(detect(&bare).is_none());
+    }
+
+    #[test]
+    fn nested_prefers_runnable_host_over_first_lexical() {
+        // techshop-backend law: class libraries sort before the Web host —
+        // the runnable project must win regardless of name order
+        let d = dir_with("hostpick", &[]);
+        let lib = d.join("aaa_lib");
+        std::fs::create_dir(&lib).unwrap();
+        std::fs::write(
+            lib.join("lib.csproj"),
+            r#"<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup></PropertyGroup></Project>"#,
+        )
+        .unwrap();
+        let web = d.join("zzz_web");
+        std::fs::create_dir(&web).unwrap();
+        std::fs::write(
+            web.join("web.csproj"),
+            r#"<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup></PropertyGroup></Project>"#,
+        )
+        .unwrap();
+        let cmd = detect(&d).unwrap();
+        assert_eq!(cmd.argv, vec!["dotnet", "run", "--project", "zzz_web"]);
+        assert_eq!(cmd.label, "dotnet run --project zzz_web");
+        // plain-Sdk console host (OutputType Exe) runs too
+        let d = dir_with("conpick", &[]);
+        for (dir, body) in [
+            ("aaa_lib", r#"<Project Sdk="Microsoft.NET.Sdk"></Project>"#),
+            (
+            "mmm_con",
+            r#"<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>"#,
+            ),
+        ] {
+            let s = d.join(dir);
+            std::fs::create_dir(&s).unwrap();
+            std::fs::write(s.join("p.csproj"), body).unwrap();
+        }
+        let cmd = detect(&d).unwrap();
+        assert_eq!(cmd.argv, vec!["dotnet", "run", "--project", "mmm_con"]);
+    }
+
+    #[test]
+    fn nested_all_libraries_falls_back_to_first_lexical() {
+        // no runnable project anywhere → the old first-any-csproj law holds
+        let d = dir_with("alllib", &[]);
+        for dir in ["aaa_lib", "zzz_lib"] {
+            let s = d.join(dir);
+            std::fs::create_dir(&s).unwrap();
+            std::fs::write(
+                s.join("p.csproj"),
+                r#"<Project Sdk="Microsoft.NET.Sdk"></Project>"#,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            detect(&d).unwrap().argv,
+            vec!["dotnet", "run", "--project", "aaa_lib"]
+        );
     }
 
     #[test]

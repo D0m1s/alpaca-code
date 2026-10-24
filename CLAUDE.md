@@ -17,6 +17,60 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
 ## Status
 
+- **Workbench naming + deletion (2026-10-15):** the launcher cards gained
+  hover pencil (rename) / trash (delete) and the big `+` gained a NAME
+  prompt. The name lives in the workbench FILE's new `display: Option<String>`
+  field — the file STEM stays the uuid (workbench_path's hex+dash sanitize
+  law keeps arbitrary text out of paths; adopt/Open/last_workbench/mtime
+  laws all still key on the stem). Card label = `display.unwrap_or(stem)`
+  (old files need no migration). Rename = `state::set_workbench_display`
+  (load → set → save) RESTORING the file's mtime after the write (card order
+  = last save; a rename must not ride the top — unit-tested). Delete =
+  `state::delete_workbench` — gio `File::trash()` first (recoverable), unlink
+  fallback on trash-unsupported mounts (never raises; ponytail comment names
+  the ceiling). Popovers = the branchmenu-shape builders (`entry_pop` /
+  `confirm_pop` in launcher.rs): title label + (entry) + Cancel/OK row;
+  Enter or OK commits the TRIMMED text — empty commits TOO and the CALLER
+  decides (rename no-ops, `+` falls back to the folder basename); Esc pops
+  down; ok-css tint `.alpaca-wbok` (blue) / `.alpaca-wbdel` (red) in app.css.
+  The icons are plain Boxes + own GestureClick CLAIMED ON PRESS (the measured
+  `.alpaca-projclose` law; a nested Button never fires) — HIDDEN at rest,
+  revealed by `EventControllerMotion` enter/leave on the card; css `display`
+  doesn't exist on this build (the scrollbar law) — `set_visible` only; the
+  leave arm must NOT hide an icon whose popover is live (an unmapped ancestor
+  unmaps its popover — `popover_open_of` checks first). NEW LAW (measured by
+  the probe's first red run): a popover cannot map on a HIDDEN ancestor —
+  the probe fns reveal the icons before opening (`probe_pencil`/
+  `probe_trash`); production never sees it (hover reveals first). `+` flow =
+  `add.connect_clicked → LauncherMsg::PlusClick → update()'s open_plus`
+  (the prior prompt's popover unparents there — css-DOM children would pile
+  up per click) → output New(name) → `AppMsg::LauncherAdd(name)` →
+  `ask_folder(.., Some(name))` → `OpenNew(p, name)` sets `App.wb_display`
+  (rides in memory; save_all CONSUMES it only when minting a fresh uuid — an
+  adopted save preserves the FILE's `wb.display` instead). The menu New
+  Workbench action now routes ShowLauncher (one naming path — the + prompt).
+  Boot adopt filter: `wb_name` is set ONLY when the workbench file actually
+  loads (stale last_workbench → wb_name None → next save mints fresh, no
+  resurrection; ln-boot-stale-no-adopt probe assert + a preseeded stale
+  state.json in the rig). New icons `pencil.svg` (2 shapes) / `trash.svg`
+  (5 shapes) registered in badges::svg_data + vector GOLDEN (13 entries).
+  Files touched: state.rs (display/delete/_at variants), launcher.rs
+  (namerow/icon_box/wire_click/entry_pop/confirm_pop/walkers), app.rs
+  (AppMsg::LauncherAdd(String)/OpenNew(_, String)/LauncherRename/
+  LauncherDelete + wb_display + boot filter), app.css (launchicon patch +
+  wbpoptitle/wb*button rules with :backdrop restatements — launchcard's
+  `label:backdrop` PIERCES the popovers, css-DOM child law). Probe: LN
+  chain = 15 steps (0-4 untouched, 5 hub, 6+7 rename open/commit —
+  HOLD=7 = the parked popover+revealed-icons capture, 8-10 rename+delete
+  asserts, 11-13 the + prompt (COMMIT never driven — it opens the native
+  picker) + OpenNew identity, 14 DONE; PROBE_LN_MS 15 entries;
+  `ALPACA_PROBE_LN_HOLD=N` parks after step N-1 = the S2_HOLD precedent;
+  /tmp/lnprobe.sh = full chain run, /tmp/lnhold.sh N OUT WAIT = parked
+  capture (WAIT must exceed the chain's ms-sum to the park — a short sleep
+  shoots MID-CHAIN and reads as a different state). 34 asserts green, no
+  parser errors. Entry commit rides `emit_activate()` (probe) — the gesture
+  claim itself stays the measured close-pill law (paint-verified).
+
 - **Workbench Launcher (2026-10-15, workbenches phase step 2):** the hub is a
   GtkStack PAGE (`launcher`) in the main window (no second window):
   launcher.rs lists `~/.config/alpaca-code/workbenches/*.json` as one
@@ -648,6 +702,27 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   path (wsB = name-replace, not the parent /tmp/s2probe — wrong dir =
   diff-presence FAIL + zero commits).
 
+- Commit vs deliberately-untracked files (2026-10-24, techshop incident,
+  measured): a checked path that is worktree-PRESENT but index-REMOVED
+  (`git rm --cached` untracking, file kept on disk, row reads `D `) must
+  never ride `git add` — git refuses index-removed + gitignored pathspecs
+  ("The following paths are ignored by one of your .gitignore files", rc≠0,
+  ONE bad name fails the WHOLE batch = every commit aborted) and silently
+  RE-TRACKS non-ignored ones; `git commit --only` can't carry them either —
+  its temp index takes WORKTREE content for pathspec paths (resurrects the
+  kept files) and resets the real index to the new HEAD (erases other staged
+  work) — both measured. commit() classifies via `staged_removals()`
+  (`git diff --cached --diff-filter=D -z` — NUL-split names, no letter
+  parsing; no HEAD → none) UNION the ¬present selection paths, never adds
+  them, and commits via a temp index: `GIT_INDEX_FILE=<tmp>` copy + read-tree
+  HEAD + `update-index --force-remove` the removals + `--add` the rest, then
+  a plain `git commit` (hooks/idents run normally) and
+  `git rm --cached --ignore-unmatch` to unify the real index — which the
+  temp commit never otherwise touches, so UNSELECTED staged state survives
+  (--only's reset doesn't). The common no-removals selection stays the old
+  add + `--only` flow byte-identical. Regression test
+  `commit_keeps_untracked_kept_staged_removals` (gitstatus.rs).
+
 ## Persistence schema
 
 `~/.config/alpaca-code/state.json` (atomic temp-file + rename write):
@@ -664,7 +739,8 @@ step 2026-10-14; name = `glib::uuid_string_random()` placeholder; tolerant
 `parse_workbench` never raises):
 
 ```json
-{"name": "<uuid>", "projects": {"/abs/project": {
+{"name": "<uuid>", "display": "<user name>|null",  // stem stays the uuid (sanitize law); display = the card label (rename/`+` prompt); absent on old files
+ "projects": {"/abs/project": {
   "language": "rust|null",            // GtkSourceView id from the top ext tally; the launcher's card chip displays it
   "vpane": 592, "hpane": 1161,        // 0/neg = not saved → built-in default
   "scroll": {"rel": "src/main.rs", "frac": 0.37},  // ACTIVE file only; diff pages → null
