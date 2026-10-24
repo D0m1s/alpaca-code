@@ -1,6 +1,3 @@
-//! Git surface — branch/status/porcelain/diff/commit/push. Pure (no gi
-//! imports): safe to run and test
-//! displayless. Every call is `git -C root`; never raises (returns error states).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -10,8 +7,6 @@ use std::time::{Duration, Instant};
 pub type Row = (String, String);
 pub type Rows = Vec<Row>;
 
-/// Status-row vocabulary — consumed by
-/// gitview/branchmenu/gitpanel (S2 landed them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitStatusKind {
     Busy,
@@ -30,15 +25,9 @@ pub struct TreeRow {
 #[derive(Clone, Debug)]
 pub struct Hunk {
     pub lines: Vec<(char, String)>,
-    /// 1-based file line of the hunk's @@ start, per side (from
-    /// `@@ -a +b @@`).
-    pub old_start: usize,
+            pub old_start: usize,
     pub new_start: usize,
 }
-/// editor diff sides — old/new equal-length lines + 0-based tint sets.
-/// old_no/new_no ride the rows 1:1: the 1-based file line each row came
-/// from, 0 where a row has no file position (hunk-gap rows, the OTHER
-/// side of a '<'/'>' pair, pads).
 #[derive(Clone, Debug)]
 pub struct Sides {
     pub old: Vec<String>,
@@ -49,9 +38,6 @@ pub struct Sides {
     pub old_no: Vec<u32>,
     pub new_no: Vec<u32>,
 }
-/// commit_then_push result: (commit_ok, commit_text, push_ok, push_text);
-/// push fields are (false, "") when no push was attempted. ptext — the
-/// Landed handler displays it when pok is false.
 #[derive(Clone, Debug)]
 pub struct FlightOut {
     pub cok: bool,
@@ -60,9 +46,6 @@ pub struct FlightOut {
     pub ptext: String,
 }
 
-// ------------------------------------------------------------------------------
-// subprocess runner — one shared helper
-// ------------------------------------------------------------------------------
 
 fn has_git(root: &str) -> bool {
     !root.is_empty() && std::path::Path::new(root).join(".git").is_dir()
@@ -72,7 +55,6 @@ fn clip400(s: &str) -> String {
     s.trim().chars().take(400).collect()
 }
 
-/// `stderr or stdout or fallback` — raw, unstripped.
 fn either(r: &std::process::Output, fallback: &str) -> String {
     let se = String::from_utf8_lossy(&r.stderr).to_string();
     if !se.is_empty() {
@@ -85,12 +67,6 @@ fn either(r: &std::process::Output, fallback: &str) -> String {
     fallback.to_string()
 }
 
-/// Captured-output git -C root run with a timeout, with
-/// the pipe-deadlock fixed: stdout/stderr are drained to Vec on READER THREADS
-/// (plain try_wait polling with piped children fills the 64KiB pipes on big
-/// diffs). env GIT_TERMINAL_PROMPT=0 only when env_prompt (Command::env
-/// merges onto the inherited environ — it never replaces it).
-/// Timeout / spawn failure / kill → None; never panics.
 fn git_run(
     root: &str,
     args: &[&str],
@@ -100,8 +76,6 @@ fn git_run(
     git_run_env(root, &[], args, env_prompt, timeout)
 }
 
-/// git_run with extra index/session env vars (GIT_INDEX_FILE for the
-/// staged-removal commit; Command::env merges onto the inherited environ).
 fn git_run_env(
     root: &str,
     envs: &[(&str, String)],
@@ -146,8 +120,7 @@ fn git_run_env(
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    // reap on the way out (kill → readers get EOF → join)
-                    let _ = child.kill();
+                                        let _ = child.kill();
                     let _ = t1.join();
                     let _ = t2.join();
                     let _ = child.wait();
@@ -155,8 +128,7 @@ fn git_run_env(
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
-            // Err (child went away): treat as dead
-            Err(_) => {
+                        Err(_) => {
                 let _ = t1.join();
                 let _ = t2.join();
                 return None;
@@ -165,9 +137,6 @@ fn git_run_env(
     }
 }
 
-// ------------------------------------------------------------------------------
-// branch surface
-// ------------------------------------------------------------------------------
 
 pub fn branch_of(root: &str) -> Option<String> {
     if root.is_empty() {
@@ -176,15 +145,13 @@ pub fn branch_of(root: &str) -> Option<String> {
     let f = std::fs::read_to_string(std::path::Path::new(root).join(".git").join("HEAD"));
     let content = f.ok()?.trim().to_string();
     content.strip_prefix("ref: refs/heads/").map(|s| s.to_owned())
-    // no prefix → None: detached HEAD / worktree pointer → hide branch widget
-}
+    }
 
 pub fn branches(root: &str) -> Option<Vec<String>> {
     if !has_git(root) {
         return None;
     }
-    // menu-open sync call — 5s timeout like the status row
-    let r = git_run(root, &["for-each-ref", "refs/heads", "--sort=refname",
+        let r = git_run(root, &["for-each-ref", "refs/heads", "--sort=refname",
                              "--format=%(refname:short)"], false,
                     Duration::from_secs(5))?;
     if !r.status.success() {
@@ -196,8 +163,7 @@ pub fn branches(root: &str) -> Option<Vec<String>> {
 
 fn _checkout(root: &str, args: &[&str]) -> (bool, String) {
     let Some(r) = git_run(root, args, true, Duration::from_secs(60)) else {
-        // stable text here — no exception text embedded
-        return (false, "git checkout failed: timed out".into());
+                return (false, "git checkout failed: timed out".into());
     };
     if !r.status.success() {
         let text = either(&r, "git checkout failed");
@@ -213,9 +179,6 @@ pub fn switch(root: &str, name: &str) -> (bool, String) {
     _checkout(root, &["checkout", name])
 }
 
-/// `checkout -b` from HEAD (create + switch, user ruling). Git validates the
-/// name; the leading-dash guard keeps a "-force" request from being parsed as
-/// flags. Surrounding whitespace around the name is stripped first.
 pub fn create_switch(root: &str, name: &str) -> (bool, String) {
     let name = name.trim();
     if name.is_empty() || name.starts_with('-') {
@@ -224,12 +187,7 @@ pub fn create_switch(root: &str, name: &str) -> (bool, String) {
     _checkout(root, &["checkout", "-b", name])
 }
 
-// ------------------------------------------------------------------------------
-// changes view ops
-// ------------------------------------------------------------------------------
 
-/// ^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ — match-at-start, no end
-/// anchor: everything after the closing "@@" is ignored.
 fn hunk_head(line: &str) -> Option<(usize, usize, usize, usize)> {
     fn num(s: &str) -> Option<(usize, &str)> {
         let nd = s.bytes().take_while(|b| b.is_ascii_digit()).count();
@@ -250,9 +208,6 @@ fn hunk_head(line: &str) -> Option<(usize, usize, usize, usize)> {
     Some((a_start, a_n, b_start, b_n))
 }
 
-/// Unified diff → hunks; kinds '=' context / '<' removed / '>' added. File
-/// headers, mode/summary lines and no-newline markers ('\\') are skipped;
-/// unknown lines inside a hunk are ignored — never raises.
 pub fn parse_unified(text: &str) -> Vec<Hunk> {
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut in_hunk = false;
@@ -277,12 +232,6 @@ pub fn parse_unified(text: &str) -> Vec<Hunk> {
     hunks
 }
 
-/// pairs one change group (a maximal run of '+'/'-' events between '='
-/// lines): the first min(dels,adds) del/add pairs share ONE row (left del
-/// beside right add, 2026-10-14 user ruling — the changed band must interlock
-/// so unchanged content stays vertically matched as far as the counts allow);
-/// surplus events pad the opposite side ("if impossible to cleanly match,
-/// then don't"). Tints: a paired row is in BOTH del and add.
 fn push_change_group(
     old: &mut Vec<String>,
     new: &mut Vec<String>,
@@ -319,9 +268,6 @@ fn push_change_group(
     }
 }
 
-/// (old_lines, new_lines, del_idx, add_idx, hdr_idx) — ready-built
-/// editor sides (0-based line indexes for tinting). Equal lengths by
-/// construction: each event feeds exactly one side and pads the other.
 pub fn build_sides(hunks: &[Hunk]) -> Sides {
     let (mut old, mut new) = (Vec::new(), Vec::new());
     let (mut dl, mut al, mut hdr) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
@@ -333,9 +279,7 @@ pub fn build_sides(hunks: &[Hunk]) -> Sides {
         old_no.push(0);
         new_no.push(0);
         hdr.insert(old.len() - 1);
-        // change-group buffer: consecutive +/- events pair up (see
-        // push_change_group); each '=' line flushes the group
-        let (mut dels, mut adds): (Vec<(String, u32)>, Vec<(String, u32)>) = (Vec::new(), Vec::new());
+                        let (mut dels, mut adds): (Vec<(String, u32)>, Vec<(String, u32)>) = (Vec::new(), Vec::new());
         for (kind, txt) in &hunk.lines {
             match kind {
                 '=' => {
@@ -345,10 +289,7 @@ pub fn build_sides(hunks: &[Hunk]) -> Sides {
                     old_no.push(o);
                     new.push(txt.clone());
                     new_no.push(n);
-                    // full syntax highlighting both sides (user reversal, same
-                    // day as the dim): '=' rows carry NO fg tag — the scheme
-                    // colors them unperturbed
-                    (o, n) = (o + 1, n + 1);
+                                                                                (o, n) = (o + 1, n + 1);
                 }
                 '<' => {
                     dels.push((txt.clone(), o));
@@ -366,15 +307,10 @@ pub fn build_sides(hunks: &[Hunk]) -> Sides {
     Sides { old, new, del: dl, add: al, hdr, old_no, new_no }
 }
 
-/// the number column's field width (digits of the widest real number), floor 2 —
-/// one source of truth for diff_num_text and the pane-width stomp below.
 pub fn diff_num_field_width(no: &[u32]) -> usize {
     no.iter().filter(|n| **n > 0).map(|n| n.to_string().len()).max().unwrap_or(2).max(2)
 }
 
-/// one diff side's number-column text: per row the 1-based file number
-/// (0 = pad/hunk-gap row) right-aligned in a per-side field of width = the
-/// widest number (mono font makes spaces align), floor 2 chars.
 pub fn diff_num_text(no: &[u32]) -> String {
     let w = diff_num_field_width(no);
     no.iter()
@@ -383,26 +319,21 @@ pub fn diff_num_text(no: &[u32]) -> String {
         .join("\n")
 }
 
-/// porcelain v1 -z stdout → rows, path-sorted. Pure (split out of `changes`
-/// so -z edge cases are unit-testable without a repo).
 pub fn parse_porcelain(stdout: &[u8]) -> Option<Rows> {
-    let text = String::from_utf8_lossy(stdout).to_string(); // decode replace
+    let text = String::from_utf8_lossy(stdout).to_string(); 
     let entries: Vec<&str> = text.split('\0').filter(|e| !e.is_empty()).collect();
     let mut out: Rows = Vec::new();
     let mut i = 0usize;
     while i < entries.len() {
         let e = entries[i];
         if e.len() < 4 {
-            // truncated/stray record (submodules emit extras)
-            i += 1;
+                        i += 1;
             continue;
         }
         let xy = &e[..2];
-        // XY+space are ASCII, so byte slicing [3..] never splits a code point
-        let path = &e[3..];
+                let path = &e[3..];
         if xy.as_bytes()[0] == b'R' {
-            // -z format: ORIGINAL path is the next record
-            out.push((path.to_string(), "R".to_string()));
+                        out.push((path.to_string(), "R".to_string()));
             if i + 1 < entries.len() {
                 out.push((entries[i + 1].to_string(), "D".to_string()));
             }
@@ -413,9 +344,7 @@ pub fn parse_porcelain(stdout: &[u8]) -> Option<Rows> {
         let y = xy.as_bytes()[1] as char;
         let mut chosen = if x != ' ' { x.to_string() } else { y.to_string() };
         if x == 'U' || y == 'U' {
-            // unmerged (UU/AA/DD/AU/UA/DU/UD): every unmerged code has a U —
-            // != untracked "?"
-            chosen = "C".to_string();
+                                    chosen = "C".to_string();
         }
         if chosen == "?" {
             chosen = "U".to_string();
@@ -423,8 +352,7 @@ pub fn parse_porcelain(stdout: &[u8]) -> Option<Rows> {
         out.push((path.to_string(), chosen));
         i += 1;
     }
-    // dedup + path sort
-    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     out.dedup();
     Some(out)
 }
@@ -441,11 +369,7 @@ pub fn changes(root: &str) -> Option<Rows> {
     parse_porcelain(&r.stdout)
 }
 
-// ------------------------------------------------------------------------------
-// diff / commit / push
-// ------------------------------------------------------------------------------
 
-/// stdout or None; rc 1 counts (no-index/compare returns it on differences).
 pub fn git_out(root: &str, args: &[&str], timeout_s: u64) -> Option<Vec<u8>> {
     let r = git_run(root, args, false, Duration::from_secs(timeout_s))?;
     if !r.status.success() && r.status.code() != Some(1) {
@@ -454,21 +378,7 @@ pub fn git_out(root: &str, args: &[&str], timeout_s: u64) -> Option<Vec<u8>> {
     Some(r.stdout)
 }
 
-/// (diff text, binary) for one path: worktree-vs-HEAD == the --only commit.
-/// Untracked, or a HEAD-less repo (`git diff HEAD` fails): --no-index vs
-/// /dev/null (all-added). Binary files → ("", True). empty root/rel → a
-/// ("", false) tuple directly (never None — the Option is the harness shape).
-//
-// huge unified context — Rider-style full-file sides: git emits the WHOLE
-// file as one hunk, every unchanged line rides a '=' row and already gets
-// real numbers on both sides (build_sides needs no structural change).
-// No documented cap (git-diff docs); -U2147483647 parsed full-file on
-// 2.56.0 (measured). A file larger than the value just degrades back to
-// the gap-row shape, numbers stay correct (hunk heads re-seed).
-const DIFF_CTX: &str = "-U999999999"; // the full arg (the -U prefix IS the const)
-// ponytail: RefreshDiffs re-runs this (now whole-file) diff every 2s tick
-// per open diff page; the byte-identical dedupe keeps the UI rebuild-free —
-// fingerprint the porcelain instead if a huge-file page ever lags.
+const DIFF_CTX: &str = "-U999999999"; 
 pub fn diff_for(root: &str, rel: &str, is_untracked: bool) -> Option<(String, bool)> {
     if root.is_empty() || rel.is_empty() {
         return Some((String::new(), false));
@@ -477,8 +387,7 @@ pub fn diff_for(root: &str, rel: &str, is_untracked: bool) -> Option<(String, bo
     if !is_untracked {
         stdout = git_out(root, &["diff", "HEAD", "--no-color", DIFF_CTX, "--", rel], 15);
         if stdout.is_none() {
-            // no HEAD: staged files still need seeing
-            stdout = git_out(root, &["diff", "--cached", "--no-color", DIFF_CTX, "--", rel], 15);
+                        stdout = git_out(root, &["diff", "--cached", "--no-color", DIFF_CTX, "--", rel], 15);
         }
     }
     if stdout.is_none() {
@@ -492,15 +401,6 @@ pub fn diff_for(root: &str, rel: &str, is_untracked: bool) -> Option<(String, bo
     Some((text, false))
 }
 
-/// Rel paths among `paths` whose change is a STAGED removal — index already
-/// records the deletion (`git rm --cached` on a keep-on-disk file: the row
-/// reads `D ` although the file still exists). Such a path must NEVER ride
-/// `git add`: git refuses index-removed + gitignored worktree files outright
-/// ("The following paths are ignored by one of your .gitignore files", rc≠0,
-/// failing the WHOLE batch — measured) and silently RE-TRACKS non-ignored
-/// ones, undoing the untracking. `diff --cached` only (unstaged ` D` deletions
-/// commit fine through the `--only` pathspec); `-z` + `--diff-filter=D` =
-/// bare NUL names, no letter/quote parsing.
 fn staged_removals(root: &str, paths: &[String]) -> BTreeSet<String> {
     let mut args: Vec<&str> = vec!["diff", "--cached", "--name-only", "--diff-filter=D", "-z", "--"];
     args.extend(paths.iter().map(|s| s.as_str()));
@@ -510,8 +410,7 @@ fn staged_removals(root: &str, paths: &[String]) -> BTreeSet<String> {
             .map(|s| String::from_utf8_lossy(s).to_string())
             .filter(|s| !s.is_empty())
             .collect(),
-        // no HEAD / spawn fail / timeout → no staged removals; the common flow
-        None => BTreeSet::new(),
+                None => BTreeSet::new(),
     }
 }
 
@@ -522,23 +421,14 @@ pub fn commit(root: &str, paths: &[String], msg: &str) -> (bool, String) {
     if msg.trim().is_empty() {
         return (false, "Empty commit message".into());
     }
-    // `add` is only needed to bring untracked/edited WORKTREE content into the
-    // index; a path existing solely as a staged removal (git rm/mv/rename)
-    // refuses `git add` (fatal pathspec, rc 128 measured) and needs no add —
-    // the pathspec is already staged. Keep the FULL list for --only; add only
-    // what exists (the symlink_metadata check keeps a dangling symlink's typechange addable)
-    // minus staged removals kept on disk (staged_removals law above).
-    let staged_rm = staged_removals(root, paths);
+                            let staged_rm = staged_removals(root, paths);
     let present: Vec<&String> = paths.iter().filter(|p| {
         std::path::Path::new(root).join(*p).symlink_metadata().is_ok()
     }).collect();
     let addable: Vec<&String> = present.iter().copied()
         .filter(|p| !staged_rm.contains(*p))
         .collect();
-    // every selected removal, staged (`D `) or unstaged (` D`) — both must be
-    // force-removed from the commit index: the unstaged one still rides the
-    // real index, the staged one only lives as an index-vs-HEAD difference
-    let mut removals: BTreeSet<String> = paths.iter()
+                let mut removals: BTreeSet<String> = paths.iter()
         .filter(|p| !present.contains(p))
         .cloned().collect();
     removals.extend(staged_rm);
@@ -567,25 +457,18 @@ pub fn commit(root: &str, paths: &[String], msg: &str) -> (bool, String) {
         let first = out.trim().lines().next().unwrap_or("Committed.").to_string();
         return (true, clip400(&first));
     }
-    // Removals selected: `git commit --only` cannot carry them — its temp
-    // index takes WORKTREE content for pathspec paths (it would re-track the
-    // keep-on-disk untracked files and erase the staged state; measured) and
-    // resets the real index to the new HEAD, discarding other staged work.
-    // So: build a temp index (HEAD − removals + selected worktree content)
-    // and commit it whole; the real index is touched only by the final
-    // unify below.
-    let gitdir = match git_out(root, &["rev-parse", "--git-dir"], 5) {
+                                let gitdir = match git_out(root, &["rev-parse", "--git-dir"], 5) {
         Some(b) => String::from_utf8_lossy(b.trim_ascii()).to_string(),
         None => return (false, "git failed: rev-parse".into()),
     };
-    let gitdir = std::path::Path::new(root).join(&gitdir); // relative ".git" → root
+    let gitdir = std::path::Path::new(root).join(&gitdir); 
     let tmpidx = std::env::temp_dir().join(format!(
         "alpaca-commit-{}-{}",
         std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     let envs = [("GIT_INDEX_FILE", tmpidx.to_string_lossy().into_owned())];
-    let _ = std::fs::copy(gitdir.join("index"), &tmpidx); // fresh index ok — read-tree below
+    let _ = std::fs::copy(gitdir.join("index"), &tmpidx); 
     let Some(r) = git_run_env(root, &envs, &["read-tree", "HEAD"], true, Duration::from_secs(15)) else {
         let _ = std::fs::remove_file(&tmpidx);
         return (false, "git failed: timed out".into());
@@ -607,10 +490,7 @@ pub fn commit(root: &str, paths: &[String], msg: &str) -> (bool, String) {
         let _ = std::fs::remove_file(&tmpidx);
         return (false, clip400(&text));
     }
-    // the addable worktree content rides the temp index too (a plain commit
-    // below is index-only — git commit --only's worktree-taking is what we're
-    // avoiding; here it is what we do instead)
-    if !addable.is_empty() {
+                if !addable.is_empty() {
         let mut args: Vec<&str> = vec!["update-index", "--add", "--"];
         args.extend(addable.iter().map(|s| s.as_str()));
         let Some(r) = git_run_env(root, &envs, &args, true, Duration::from_secs(15)) else {
@@ -634,10 +514,7 @@ pub fn commit(root: &str, paths: &[String], msg: &str) -> (bool, String) {
     }
     let out = String::from_utf8_lossy(&r.stdout).to_string();
     let first = out.trim().lines().next().unwrap_or("Committed.").to_string();
-    // Unify the REAL index with the removals it still previews (unstaged
-    // deletions keep their entry; --ignore-unmatch no-ops the already-staged
-    // ones). Untouched for everything else — unlike `--only`, which resets it.
-    let mut args: Vec<&str> = vec!["rm", "--cached", "--ignore-unmatch", "-q", "--"];
+                let mut args: Vec<&str> = vec!["rm", "--cached", "--ignore-unmatch", "-q", "--"];
     args.extend(removals.iter().map(|s| s.as_str()));
     let _ = git_run(root, &args, true, Duration::from_secs(15));
     let _ = std::fs::remove_file(&tmpidx);
@@ -645,8 +522,7 @@ pub fn commit(root: &str, paths: &[String], msg: &str) -> (bool, String) {
 }
 
 pub fn ahead(root: &str) -> usize {
-    // No upstream / not a repo / timeouts → 0 (push() handles the -u bootstrap).
-    if !has_git(root) {
+        if !has_git(root) {
         return 0;
     }
     let Some(r) = git_run(root, &["rev-list", "--count", "@{upstream}..HEAD"], false,
@@ -656,8 +532,7 @@ pub fn ahead(root: &str) -> usize {
     if !r.status.success() {
         return 0;
     }
-    // trimmed-int parse; unparsable → 0
-    String::from_utf8_lossy(&r.stdout).trim().parse::<usize>().unwrap_or(0)
+        String::from_utf8_lossy(&r.stdout).trim().parse::<usize>().unwrap_or(0)
 }
 
 pub fn push(root: &str) -> (bool, String) {
@@ -668,13 +543,11 @@ pub fn push(root: &str) -> (bool, String) {
         return (false, "git push failed: timed out".into());
     };
     if r.status.success() {
-        // bootstrap push output lives on stderr
-        return (true, clip400(&either(&r, "Pushed.")));
+                return (true, clip400(&either(&r, "Pushed.")));
     }
     let mut err = either(&r, "").trim().to_string();
     if err.contains("no upstream") {
-        // first push of a new branch — retry with -u origin <branch>
-        if let Some(branch) = branch_of(root) {
+                if let Some(branch) = branch_of(root) {
             let Some(r2) = git_run(root, &["push", "-u", "origin", &branch], true,
                                    Duration::from_secs(120)) else {
                 return (false, "git push failed: timed out".into());
@@ -691,10 +564,6 @@ pub fn push(root: &str) -> (bool, String) {
     (false, clip400(&err))
 }
 
-/// `git pull` — the no-upstream case has nothing sensible to bootstrap (a
-/// branch without tracking info may have nothing remote to pull); git's own
-/// error text surfaces. `_name` is ignored: the two-arg shape is the
-/// branchmenu op signature (switch/create/pull all share `start`).
 pub fn pull(root: &str, _name: &str) -> (bool, String) {
     if !has_git(root) {
         return (false, "Not a git repository".into());
@@ -703,8 +572,7 @@ pub fn pull(root: &str, _name: &str) -> (bool, String) {
         return (false, "git pull failed: timed out".into());
     };
     if r.status.success() {
-        // fetch/merge progress output lives on stderr
-        return (true, clip400(&either(&r, "Pulled.")));
+                return (true, clip400(&either(&r, "Pulled.")));
     }
     let err = either(&r, "").trim().to_string();
     (false, clip400(&if err.is_empty() { "git pull failed".into() } else { err }))
@@ -716,11 +584,7 @@ pub fn commit_then_push(
     msg: &str,
     phase: Option<&(dyn Fn(&str) + Send + Sync)>,
 ) -> FlightOut {
-    // Empty `paths` = push-only (the auto-detect button rule: a checked
-    // nothing with unpushed commits). The phase closure bakes "Pushing…" —
-    // one call mid-flight just before the push (worker-thread context; the
-    // UI marshals to the mainloop).
-    let (cok, ctext) = if paths.is_empty() {
+                    let (cok, ctext) = if paths.is_empty() {
         (true, String::new())
     } else {
         commit(root, paths, msg)
@@ -736,9 +600,6 @@ pub fn commit_then_push(
     FlightOut { cok: true, ctext, pok, ptext }
 }
 
-// ------------------------------------------------------------------------------
-// changes tree grouping
-// ------------------------------------------------------------------------------
 
 struct Lev {
     dirs: BTreeMap<String, Lev>,
@@ -751,8 +612,6 @@ impl Lev {
     }
 }
 
-/// changes() rows → every changed path's ancestor dirs become dir rows;
-/// parents before children, dirs before files at a level.
 pub fn group_tree(rows: &Rows) -> Vec<TreeRow> {
     let mut sorted: Rows = rows.clone();
     sorted.sort();
@@ -792,9 +651,6 @@ fn walk(node: &Lev, prefix: &str, out: &mut Vec<TreeRow>) {
     }
 }
 
-/// group_tree rows → dir rel → (all descendant files checked, any checked).
-/// all ⊇ any (fully-checked dir → (True, True)); dirs exist only as file
-/// ancestors (group_tree), so each accumulates ≥1 file.
 pub fn checked_dir_state(
     rows: &[TreeRow],
     checked: &BTreeSet<String>,
@@ -837,9 +693,7 @@ mod tests {
         p
     }
 
-    /// Fixture git call, panicking INSIDE the test only (assert keeps the
-    /// production-never-panic law honest for production paths).
-    fn git(repo: &Path, args: &[&str]) {
+            fn git(repo: &Path, args: &[&str]) {
         let out = Command::new("git").arg("-C").arg(repo).args(args).output().unwrap();
         assert!(
             out.status.success(),
@@ -879,20 +733,17 @@ mod tests {
     fn branch_of_reads_head() {
         let p = repo("branch");
         w(&p, "f.txt", "x");
-        // name comes from the repo itself — never assume the default branch name
-        let name = String::from_utf8(
+                let name = String::from_utf8(
             Command::new("git").arg("-C").arg(&p)
                 .args(["symbolic-ref", "--short", "HEAD"])
                 .output().unwrap().stdout,
         ).unwrap().trim().to_string();
         assert_eq!(branch_of(p.to_str().unwrap()).as_deref(), Some(name.as_str()));
-        // (ruling: detach needs a commit — unborn branches cannot detach)
-        git(&p, &["add", "."]);
+                git(&p, &["add", "."]);
         git(&p, &["commit", "-q", "-m", "c"]);
         git(&p, &["checkout", "-q", "--detach"]);
         assert_eq!(branch_of(p.to_str().unwrap()), None, "detached HEAD hides the pill");
-        // detached writes a raw sha — HEAD is no longer "ref:…" but stays readable
-        std::fs::write(p.join(".git").join("HEAD"), b"junk without prefix\n").unwrap();
+                std::fs::write(p.join(".git").join("HEAD"), b"junk without prefix\n").unwrap();
         assert_eq!(branch_of(p.to_str().unwrap()), None);
         std::fs::write(p.join(".git").join("HEAD"), b"ref: refs/heads/feature/x\n").unwrap();
         assert_eq!(branch_of(p.to_str().unwrap()).as_deref(), Some("feature/x"));
@@ -930,8 +781,7 @@ mod tests {
     #[test]
     fn changes_letters_and_untracked() {
         let p = repo("letters");
-        // (ruling: m.txt must be TRACKED to read M — a never-added file is ??)
-        w(&p, "m.txt", "one\n");
+                w(&p, "m.txt", "one\n");
         git(&p, &["add", "."]);
         git(&p, &["commit", "-q", "-m", "base"]);
         w(&p, "u1.txt", "x");
@@ -978,8 +828,7 @@ mod tests {
 
     #[test]
     fn parse_porcelain_synthetic() {
-        // truncated record skipped; ? → U; U-codes → C; rename pair order
-        let bytes = b"?? one.txt\0UU f.txt\0R  new.bin\0old.bin\0A  \0 \0?  two.txt\0";
+                let bytes = b"?? one.txt\0UU f.txt\0R  new.bin\0old.bin\0A  \0 \0?  two.txt\0";
         let got = parse_porcelain(bytes).unwrap();
         let want = rows_of(&[
             ("f.txt", "C"),
@@ -995,9 +844,9 @@ mod tests {
     #[test]
     fn changes_guards() {
         assert_eq!(changes(""), None);
-        assert_eq!(changes("/no/such/root"), None); // no .git dir
+        assert_eq!(changes("/no/such/root"), None); 
         let notrepo = scratch("notrepo");
-        assert_eq!(changes(notrepo.to_str().unwrap()), None); // exists, not a repo
+        assert_eq!(changes(notrepo.to_str().unwrap()), None); 
     }
 
     #[test]
@@ -1008,9 +857,7 @@ mod tests {
         assert_eq!(hunks.len(), 1);
         let s = build_sides(&hunks);
         assert_eq!(s.old.len(), s.new.len(), "equal lengths by construction");
-        // hunk row first, then context/PAIR(context, remove+add rows 2
-        // SHARE a row: 1 del + 1 add pair up; pads only for surplus)
-        assert_eq!(s.old[0], HUNK_ROW);
+                        assert_eq!(s.old[0], HUNK_ROW);
         assert!(s.hdr.contains(&0), "hunk-row index 0 on both sides");
         assert_eq!(s.old[2], "gone");
         assert_eq!(s.new[2], "add", "a 1:1 change group pairs on one shared row");
@@ -1018,28 +865,21 @@ mod tests {
         assert_eq!(s.new[3], "keep2");
         assert!(s.del.contains(&2) && s.add.contains(&2), "a paired row tints BOTH sides");
         assert!(!s.del.contains(&3) && !s.add.contains(&3));
-        // no-count form "@@ -1 +1 @@" parses, defaults n=1
-        assert_eq!(parse_unified("@@ -5 +9 @@\n a\n").len(), 1);
-        assert_eq!(parse_unified("index 123..abc 100644\n").len(), 0); // before first hunk
-        assert_eq!(parse_unified("").len(), 0); // never raises
+                assert_eq!(parse_unified("@@ -5 +9 @@\n a\n").len(), 1);
+        assert_eq!(parse_unified("index 123..abc 100644\n").len(), 0); 
+        assert_eq!(parse_unified("").len(), 0); 
     }
 
     #[test]
     fn sides_numbers_exact() {
-        // mixed del/add/context + a pure-add hunk (a_n=0) and a del-only
-        // hunk (b_n=0). Numbers = the @@ starts, advancing per real row
-        // kind; padding + hunk-gap rows carry 0.
-        let text = "@@ -2,3 +2,4 @@\n ctx\n-del line\n+ADD A\n+ADD B\n ctx2\n@@ -10,0 +10,3 @@\n+pure add 1\n+pure add 2\n@@ -20,2 +23,0 @@\n-del-only 1\n-del-only 2\n";
+                                let text = "@@ -2,3 +2,4 @@\n ctx\n-del line\n+ADD A\n+ADD B\n ctx2\n@@ -10,0 +10,3 @@\n+pure add 1\n+pure add 2\n@@ -20,2 +23,0 @@\n-del-only 1\n-del-only 2\n";
         let hunks = parse_unified(text);
         assert_eq!(hunks[0].old_start, 2);
         assert_eq!(hunks[0].new_start, 2);
-        assert_eq!(hunks[1].old_start, 10); // pure-add start still parses with a_n=0
+        assert_eq!(hunks[1].old_start, 10); 
         assert_eq!(hunks[2].new_start, 23);
         let sides = build_sides(&hunks);
-        // rows: H, ctx, PAIR(del|ADDA), surplus(ADDB), ctx2 | H, add1, add2 | H, del1, del2
-        // 1 del + 2 adds: the first add PAIRS with the del (shared row),
-        // surplus pads the OPPOSITE side. 'ctx' rows advance both sides.
-        assert!(sides.del.contains(&2) && sides.add.contains(&2) && sides.add.contains(&3));
+                                assert!(sides.del.contains(&2) && sides.add.contains(&2) && sides.add.contains(&3));
         assert_eq!(sides.old_no, [0, 2, 3, 0, 4, 0, 0, 0, 0, 20, 21]);
         assert_eq!(sides.new_no, [0, 2, 3, 4, 5, 0, 10, 11, 0, 0, 0]);
         assert_eq!(sides.old.len(), sides.old_no.len());
@@ -1048,28 +888,20 @@ mod tests {
 
     #[test]
     fn diff_num_text_shapes() {
-        // the number column's text: right-align per row in a field as wide
-        // as the widest number (mono spaces), pads → blank lines, floor 2
-        assert_eq!(diff_num_text(&[0, 2, 3]), "  \n 2\n 3");
+                        assert_eq!(diff_num_text(&[0, 2, 3]), "  \n 2\n 3");
         assert_eq!(diff_num_text(&[12, 130, 10]), " 12\n130\n 10");
         assert_eq!(diff_num_text(&[10000]), "10000");
-        // no ceiling: a 6-digit side widens the WHOLE field (mixed widths
-        // would break the alignment; the pane grows to fit)
-        assert_eq!(diff_num_text(&[10, 100000]), "    10\n100000");
+                        assert_eq!(diff_num_text(&[10, 100000]), "    10\n100000");
         assert_eq!(diff_num_text(&[]), "");
-        assert_eq!(diff_num_text(&[0]), "  "); // an all-pad side stays blank
-        // field width = widest number's digits, floor 2 (the width source the
-        // pane stomp uses)
-        assert_eq!(diff_num_field_width(&[0, 2, 3]), 2);
+        assert_eq!(diff_num_text(&[0]), "  "); 
+                        assert_eq!(diff_num_field_width(&[0, 2, 3]), 2);
         assert_eq!(diff_num_field_width(&[12, 130, 10]), 3);
         assert_eq!(diff_num_field_width(&[]), 2);
     }
 
     #[test]
     fn diff_for_full_context() {
-        // whole-file sides (Task 1): the untouched head/tail must ride the
-        // diff TEXT (huge -U) — pins the DIFF_CTX switch against regression
-        let p = repo("fullctx");
+                        let p = repo("fullctx");
         w(&p, "f.txt", "a\nb\nc\nd\ne\n");
         git(&p, &["add", "."]);
         git(&p, &["commit", "-m", "five", "-q"]);
@@ -1085,8 +917,7 @@ mod tests {
         let p = repo("diffchain");
         w(&p, "tracked.txt", "a\n");
         git(&p, &["add", "."]);
-        // UNBORN HEAD: tracked+staged → --cached catches it
-        let (t, b) = diff_for(p.to_str().unwrap(), "tracked.txt", false).unwrap();
+                let (t, b) = diff_for(p.to_str().unwrap(), "tracked.txt", false).unwrap();
         assert!(!b && t.contains("+"), "staged file diffs via --cached");
         w(&p, "untracked.txt", "un\n");
         let (t, b) = diff_for(p.to_str().unwrap(), "untracked.txt", true).unwrap();
@@ -1110,14 +941,12 @@ mod tests {
         w(&p, "keep.txt", "v1\n");
         git(&p, &["add", "."]);
         git(&p, &["commit", "-q", "-m", "base"]);
-        // staged removal whose worktree path no longer exists (present-filter law)
-        w(&p, "gone.txt", "v\n");
+                w(&p, "gone.txt", "v\n");
         git(&p, &["add", "."]);
         git(&p, &["commit", "-q", "-m", "second"]);
         git(&p, &["rm", "-q", "--cached", "gone.txt"]);
         std::fs::remove_file(p.join("gone.txt")).unwrap();
-        // staged-only removal stays addable as a --only pathspec
-        let paths = vec!["gone.txt".to_string()];
+                let paths = vec!["gone.txt".to_string()];
         let (ok, text) = commit(p.to_str().unwrap(), &paths, "rm gone");
         assert!(ok, "staged-only removal commits without add: {text}");
         assert_eq!(commit(p.to_str().unwrap(), &[], "x"), (false, "No files selected".into()));
@@ -1136,13 +965,12 @@ mod tests {
         git(&p, &["add", "."]);
         git(&p, &["commit", "-q", "-m", "c1"]);
         assert_eq!(ahead(p.to_str().unwrap()), 0, "no upstream → 0");
-        // point origin at the bare remote — still no upstream BRANCH configured
-        git(&p, &["remote", "add", "origin", w2.to_str().unwrap()]);
+                git(&p, &["remote", "add", "origin", w2.to_str().unwrap()]);
         w(&p, "b.txt", "two\n");
         git(&p, &["add", "."]);
         git(&p, &["commit", "-q", "-m", "c2"]);
         assert_eq!(ahead(p.to_str().unwrap()), 0, "no upstream branch yet → 0");
-        let (ok, text) = push(p.to_str().unwrap()); // no-upstream → push -u origin main
+        let (ok, text) = push(p.to_str().unwrap()); 
         assert!(ok, "bootstrap push failed: {text}");
         let up = String::from_utf8(Command::new("git").arg("-C").arg(&p)
             .args(["rev-parse", "--abbrev-ref", "@{upstream}"]).output().unwrap().stdout)
@@ -1160,9 +988,7 @@ mod tests {
 
     #[test]
     fn pull_fast_forward_and_errors() {
-        // a repo with an upstream pulls the remote's advance (fast-forward);
-        // no-tracking and not-a-repo surface as (false, text)
-        let p = repo("pull");
+                        let p = repo("pull");
         let mut w2 = scratch("remote4");
         let out = Command::new("git").arg("init").arg("--bare").arg("-q").arg("-b")
             .arg("main").arg(w2.join("remote.git")).output().unwrap();
@@ -1173,8 +999,7 @@ mod tests {
         git(&p, &["commit", "-q", "-m", "c1"]);
         git(&p, &["remote", "add", "origin", w2.to_str().unwrap()]);
         git(&p, &["push", "-q", "-u", "origin", "main"]);
-        // advance the remote, then pull it back into a clean clone
-        w(&p, "a.txt", "one\ntwo\n");
+                w(&p, "a.txt", "one\ntwo\n");
         git(&p, &["commit", "-qam", "c2"]);
         git(&p, &["push", "-q", "origin", "main"]);
         let side = scratch("pullside");
@@ -1184,8 +1009,7 @@ mod tests {
         let (ok, text) = pull(side.to_str().unwrap(), "");
         assert!(ok, "fast-forward pull failed: {text}");
         assert_eq!(std::fs::read_to_string(side.join("a.txt")).unwrap(), "one\ntwo\n");
-        // branch without tracking info → git's own error text
-        let lone = repo("pulllone");
+                let lone = repo("pulllone");
         w(&lone, "b.txt", "base\n");
         git(&lone, &["add", "."]);
         git(&lone, &["commit", "-q", "-m", "b1"]);
@@ -1208,8 +1032,7 @@ mod tests {
         git(&p, &["add", "."]);
         git(&p, &["commit", "-q", "-m", "c1"]);
         git(&p, &["remote", "add", "origin", w2.to_str().unwrap()]);
-        // Send+Sync captures (production phase runs on the worker thread)
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let kind = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let phase = {
             let calls = calls.clone();
@@ -1221,8 +1044,7 @@ mod tests {
                 }
             }
         };
-        // paths empty = push-only: zero phase calls
-        let r = commit_then_push(p.to_str().unwrap(), &[], "ignored", Some(&phase));
+                let r = commit_then_push(p.to_str().unwrap(), &[], "ignored", Some(&phase));
         assert!(r.cok && r.pok, "push-only: {r:?}");
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
         w(&p, "f.txt", "y\n");
@@ -1231,8 +1053,7 @@ mod tests {
         assert!(r.cok && r.pok, "full flight failed: {r:?}");
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1, "one 'busy' phase call");
         assert_eq!(*kind.lock().unwrap(), "busy");
-        // failing commit: no phase, no push attempt
-        let r = commit_then_push(p.to_str().unwrap(), &["f.txt".to_string()], "  ", Some(&phase));
+                let r = commit_then_push(p.to_str().unwrap(), &["f.txt".to_string()], "  ", Some(&phase));
         assert!(!r.cok && !r.pok
                 && calls.load(std::sync::atomic::Ordering::Relaxed) == 1,
                 "commit fail stops the flight: {r:?}");
@@ -1241,23 +1062,14 @@ mod tests {
 
     #[test]
     fn commit_keeps_untracked_kept_staged_removals() {
-        // The techshop incident: `git rm --cached` a keep-on-disk file that is
-        // now gitignored — the batch `git add` errors ("The following paths
-        // are ignored by one of your .gitignore files") and aborts every
-        // commit; and `commit --only` would RE-TRACK the worktree copy. The
-        // removal must skip add and land as a real deletion, file kept.
-        // Also: staged-but-unselected state must not leak into the commit,
-        // and unstaged deletions ride the old --only pathspec as before.
-        let p = repo("rmkeep");
+                                                                let p = repo("rmkeep");
         w(&p, "a.txt", "v1\n");
         w(&p, "ignored.txt", "keep me\n");
         w(&p, "kept.txt", "unignored keeper\n");
         w(&p, "stale.txt", "old\n");
         git(&p, &["add", "."]);
         git(&p, &["commit", "-q", "-m", "base"]);
-        // build the incident: modified a, untrack-and-ignore ignored.txt,
-        // untrack (NOT ignored) kept.txt, unrelated STAGED other.txt
-        git(&p, &["rm", "-q", "--cached", "ignored.txt", "kept.txt"]);
+                        git(&p, &["rm", "-q", "--cached", "ignored.txt", "kept.txt"]);
         w(&p, ".gitignore", "ignored.txt\n");
         w(&p, "a.txt", "v2\n");
         w(&p, "other.txt", "staged, unselected\n");
@@ -1270,8 +1082,7 @@ mod tests {
             "a.txt".into(), "ignored.txt".into(), "kept.txt".into(),
         ], "removals ride the temp index");
         assert!(ok, "commit with kept staged removals failed: {text}");
-        // a's edit committed, BOTH removals committed as deletions
-        let files = Command::new("git").arg("-C").arg(&p).args(
+                let files = Command::new("git").arg("-C").arg(&p).args(
             ["show", "--name-only", "--format="],
         ).output().unwrap();
         let names = String::from_utf8_lossy(&files.stdout);
@@ -1283,17 +1094,14 @@ mod tests {
         let head_ignored = Command::new("git").arg("-C").arg(&p)
             .args(["show", "HEAD:ignored.txt"]).output().unwrap();
         assert!(!head_ignored.status.success(), "ignored.txt must read DELETED at HEAD");
-        // the worktree copies SURVIVE untouched, and neither is re-tracked
-        assert!(p.join("ignored.txt").is_file() && p.join("kept.txt").is_file());
+                assert!(p.join("ignored.txt").is_file() && p.join("kept.txt").is_file());
         let ls = Command::new("git").arg("-C").arg(&p).args(
             ["ls-files"],
         ).output().unwrap();
         let tracked = String::from_utf8_lossy(&ls.stdout);
         assert!(!tracked.contains("ignored.txt") && !tracked.contains("kept.txt"),
                 "untrackings must hold: {tracked}");
-        // staged-and-unselected other.txt did NOT leak into the commit and
-        // SURVIVES as staged (the --only reset law would have erased it)
-        let head_other = Command::new("git").arg("-C").arg(&p)
+                        let head_other = Command::new("git").arg("-C").arg(&p)
             .args(["show", "HEAD:other.txt"]).output().unwrap();
         assert!(!head_other.status.success(), "unselected staged file must not leak");
         let st = Command::new("git").arg("-C").arg(&p).args(
@@ -1301,10 +1109,8 @@ mod tests {
         ).output().unwrap();
         let lines = String::from_utf8_lossy(&st.stdout).replace('\0', "\n");
         assert!(lines.contains("A  other.txt"), "other staged state survives: {lines}");
-        // no ghost rows on the committed paths (the index got unified)
-        assert!(!lines.contains("a.txt"), "committed a.txt clean, no MM ghost: {lines}");
-        // removals-ONLY selection (no addable) still lands
-        git(&p, &["rm", "-q", "--cached", "stale.txt"]);
+                assert!(!lines.contains("a.txt"), "committed a.txt clean, no MM ghost: {lines}");
+                git(&p, &["rm", "-q", "--cached", "stale.txt"]);
         let (ok, text) = commit(p.to_str().unwrap(), &["stale.txt".into()], "deletion only");
         assert!(ok, "deletion-only commit failed: {text}");
         let head_stale = Command::new("git").arg("-C").arg(&p)
@@ -1326,8 +1132,7 @@ mod tests {
             "parents before children, dirs before files at a level"
         );
         assert_eq!(kinds[0], "d");
-        // letters ride the FILE rows only (dirs carry "")
-        assert_eq!(got.iter().find(|r| r.name == "c.txt").unwrap().letter, "M");
+                assert_eq!(got.iter().find(|r| r.name == "c.txt").unwrap().letter, "M");
         assert!(got.iter().all(|r| r.kind != "d" || r.letter.is_empty()));
     }
 
@@ -1338,11 +1143,10 @@ mod tests {
         ]));
         let ck = BTreeSet::from(["a/b/c.txt".to_string()]);
         let st = checked_dir_state(&rows, &ck);
-        assert_eq!(st.get("a/b"), Some(&(true, true)) /* only file checked → all */);
+        assert_eq!(st.get("a/b"), Some(&(true, true)) );
         assert_eq!(st.get("a"), Some(&(false, true)));
         assert_eq!(st.get("e.txt"), None);
-        // all three checked → all + any true
-        let ck: BTreeSet<String> = ["a/b/c.txt", "a/d.txt", "e.txt"]
+                let ck: BTreeSet<String> = ["a/b/c.txt", "a/d.txt", "e.txt"]
             .iter().map(|s| s.to_string()).collect();
         let st = checked_dir_state(&rows, &ck);
         assert_eq!(st.get("a/b"), Some(&(true, true)));

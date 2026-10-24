@@ -1,22 +1,13 @@
-//! vector.rs (S3) — `data/icons/*.svg` parsed into Gsk paths,
-//! drawn as render nodes through a Gdk.Paintable subclass. One parse per file
-//! (frozen art, single source of truth); intrinsic size = round(viewBox units)
-//! so GtkImage allocates the icon 1:1 to the display grid, and GSK tessellates
-//! per frame in device pixels — no pre-rasterized pixbuf in the widget loop
-//! (the double resample that blurred the old pipeline, CLAUDE.md 2026-10-04).
-//! Tree cells and editor tab badges KEEP pixbuf/Texture.
 
 use crate::render::badges;
 use gtk4::gdk;
 use gtk4::prelude::*;
-use gtk4::gdk::subclass::prelude::*; // PaintableImpl + Ext (gdk4 subclass mod prelude)
+use gtk4::gdk::subclass::prelude::*; 
 use gtk4::{glib, gsk, graphene};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
-/// One drawable shape after the inherited-attrs walk
-/// (paint: d, fill, stroke, width, cap, join).
 #[derive(Clone)]
 pub(crate) struct RawShape {
     pub d: String,
@@ -53,15 +44,9 @@ fn tag_name(s: &str) -> &str {
     &s[..end]
 }
 
-/// `name="value"` pairs read by read_attrs
 type Attrs = Vec<(String, String)>;
-/// a walked icon: viewBox units + raw shapes (the !Send cache's payload)
 type ParsedIcon = (f32, Vec<RawShape>);
 
-/// Reads `name="value"` pairs starting after the tag name; returns the pairs,
-/// whether the tag self-closed (`/>`), and the index past `>`. Attribute values
-/// are the quoting char that starts them (art is double-quoted; both quote
-/// kinds are accepted).
 fn read_attrs(text: &str, at: usize) -> Option<(Attrs, bool, usize)> {
     let b = text.as_bytes();
     let mut i = at;
@@ -81,7 +66,7 @@ fn read_attrs(text: &str, at: usize) -> Option<(Attrs, bool, usize)> {
                 {
                     i += 1;
                 }
-                if i == nstart { return None; } // not a name start — malformed tag
+                if i == nstart { return None; } 
                 let name = text[nstart..i].to_string();
                 while i < b.len() && (b[i] as char).is_ascii_whitespace() { i += 1; }
                 if b.get(i) == Some(&b'=') {
@@ -93,37 +78,19 @@ fn read_attrs(text: &str, at: usize) -> Option<(Attrs, bool, usize)> {
                     out.push((name, text[vstart..vstart + rel].to_string()));
                     i = vstart + rel + 1;
                 } else {
-                    out.push((name, String::new())); // valueless attr, skipped by getters
+                    out.push((name, String::new())); 
                 }
             }
         }
     }
 }
 
-/// svg viewBox units + shapes via an inherited-attrs walk (per-element
-/// overrides of fill/stroke/stroke-width/stroke-linecap/
-/// stroke-linejoin, everything below inheriting the merged state).
-///
-/// Art-only XML subset: svg/g/path/rect/circle. Element semantics follow the
-/// walker's child iteration (defs children are reached too; the art has
-/// none). `<polygon>` is real SVG the art never uses — unsupported here and
-/// SAYS SO (the golden count test fails visibly if art ever uses it).
-///
-/// Attribute values are double-quoted (frozen-art rule). viewBox read from the
-/// root svg only: 4 numbers → units = vb[2], else the
-/// width attr, else default 16. A suffixed width string ("16px") is unparsable
-/// and falls back to the default — art uses plain numbers.
 pub(crate) fn walk(text: &str) -> Option<(f32, Vec<RawShape>)> {
     let b = text.as_bytes();
     let n = b.len();
     let mut shapes: Vec<RawShape> = Vec::new();
     let mut ctx: Vec<Ctx> = vec![Ctx::default()];
-    // (tag, pushed_ctx) — shape elements have no children (no inherited ctx
-    // of their own) but
-    // a NON-self-closed `<path></path>` still needs its matching close pop; a
-    // bare String stack would pop the enclosing group's ctx on that closer and
-    // corrupt sibling inheritance
-    let mut open: Vec<(String, bool)> = Vec::new();
+                        let mut open: Vec<(String, bool)> = Vec::new();
     let mut units = 16.0f32;
     let mut i = 0usize;
     while i < n {
@@ -145,9 +112,7 @@ pub(crate) fn walk(text: &str) -> Option<(f32, Vec<RawShape>)> {
         if text[i..].starts_with("</") {
             let p = text[i..].find('>')?;
             let name = tag_name(&text[i + 2..i + p]).to_string();
-            // pop the matching open; stop at the first name match (art is
-            // well-formed so the nearest entry is the right one)
-            while let Some((tag, pushed)) = open.pop() {
+                                    while let Some((tag, pushed)) = open.pop() {
                 if pushed {
                     ctx.pop();
                 }
@@ -196,9 +161,7 @@ pub(crate) fn walk(text: &str) -> Option<(f32, Vec<RawShape>)> {
             "rect" => {
                 let (x, y) = (num(&attrs, "x", 0.0), num(&attrs, "y", 0.0));
                 let (w, h) = (num(&attrs, "width", 0.0), num(&attrs, "height", 0.0));
-                // rx="0" falls
-                // through to the ry value (rx-or-ry fallback)
-                let rx = get("rx").and_then(|v| v.trim().parse::<f64>().ok())
+                                                let rx = get("rx").and_then(|v| v.trim().parse::<f64>().ok())
                     .filter(|v| *v != 0.0)
                     .unwrap_or_else(|| num(&attrs, "ry", 0.0));
                 shapes.push(RawShape {
@@ -223,20 +186,16 @@ pub(crate) fn walk(text: &str) -> Option<(f32, Vec<RawShape>)> {
                 false
             }
             "polygon" => { println!("vector: unsupported element <polygon>"); false }
-            _ => true, // g/defs/any group: carries the merged ctx for children
+            _ => true, 
         };
         if _self_closing {
-            // shapes already emitted above; a self-closed group has no
-            // children to inherit — track nothing (leaf element)
-        } else if group {
+                                } else if group {
             open.push((name, true));
             ctx.push(merged);
         } else {
             open.push((name, false));
         }
-        // scope law: shape elements never push inheritance — siblings
-        // of the same group read the GROUP's ctx, which stays on the stack
-    }
+                    }
     Some((units, shapes))
 }
 
@@ -244,11 +203,7 @@ fn rrect_d(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
     let r = r.min(w / 2.0).min(h / 2.0);
     let k = 0.5523 * r;
     let (x2, y2) = (x + w, y + h);
-    // chain, positional: M{x+r} {y}L{x2-r} {y}C(x2-r+k) {y} (x2) (y+r-k)
-    // (x2) {y+r}L{x2} {y2-r}C(x2) (y2-r+k) (x2-r+k) {y2} (x2-r) {y2}L{x+r} {y2}
-    // C(x+r-k) {y2} (x) (y2-r+k) (x) {y2-r}L{x} {y+r}C(x) (y+r-k) (x+r-k) {y}
-    // (x+r) {y}Z — M2 L2 C6 ×4 = 34 numbers
-    format!(
+                    format!(
         "M{} {}L{} {}C{} {} {} {} {} {}L{} {}C{} {} {} {} {} {}L{} {}C{} {} {} {} {} {}L{} {}C{} {} {} {} {} {}Z",
         x + r, y,
         x2 - r, y,
@@ -264,8 +219,7 @@ fn rrect_d(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
 
 fn circle_d(cx: f64, cy: f64, r: f64) -> String {
     let k = 0.5523;
-    // M(cx) (cy-r) then four cubics around: right, bottom, left, top
-    format!(
+        format!(
         "M{} {}C{} {} {} {} {} {}C{} {} {} {} {} {}C{} {} {} {} {} {}C{} {} {} {} {} {}Z",
         cx, cy - r,
         cx + k * r, cy - r, cx + r, cy - k * r, cx + r, cy,
@@ -291,8 +245,6 @@ fn join_of(s: &str) -> gsk::LineJoin {
     match s { "round" => gsk::LineJoin::Round, "bevel" => gsk::LineJoin::Bevel, _ => gsk::LineJoin::Miter }
 }
 
-/// Shape-build loop: parse each d, skip unparsable paths and
-/// shapes that paint nothing (fill AND stroke both None).
 fn build(name: &str, raw: &[RawShape]) -> Vec<Shape> {
     let mut out = Vec::new();
     for rs in raw {
@@ -338,10 +290,7 @@ impl ObjectSubclass for VecIconImp {
     const NAME: &'static str = "AlpacaVecIcon";
     type Type = VecIcon;
     type ParentType = glib::Object;
-    // runtime GType interface registration — wrapper!'s @implements is
-    // compile-time only; without this, PaintableExt::snapshot panics on
-    // upcast (measured: glib object.rs:122 is::<T>() assert)
-    type Interfaces = (gdk::Paintable,);
+                type Interfaces = (gdk::Paintable,);
 }
 
 impl ObjectImpl for VecIconImp {}
@@ -355,13 +304,8 @@ impl PaintableImpl for VecIconImp {
         if s <= 0.0 {
             return;
         }
-        // do_snapshot: aspect-fit — translate so the units box centers
-        // in the bounds, then scale to fill the shorter side exactly
-        let Some(sn) = snapshot.downcast_ref::<gtk4::Snapshot>() else {
-            // GTK snapshots ARE Gsk-recording in practice; a non-gsk snapshot
-            // cannot draw fill/stroke nodes anyway — same visual as an empty
-            // drawable, no panic
-            return;
+                        let Some(sn) = snapshot.downcast_ref::<gtk4::Snapshot>() else {
+                                                return;
         };
         sn.translate(&graphene::Point::new((w - s * units) / 2.0, (h - s * units) / 2.0));
         sn.scale(s, s);
@@ -376,10 +320,7 @@ impl PaintableImpl for VecIconImp {
     }
 
     fn flags(&self) -> gdk::PaintableFlags {
-        // the wanted pair is SIZE | CONTENTS — same two bits; this
-        // build's C enum carries only the STATIC_ members (measured:
-        // gdkpaintable.h 4.22 — SIZE/CONTENTS no longer exist)
-        gdk::PaintableFlags::STATIC_SIZE | gdk::PaintableFlags::STATIC_CONTENTS
+                                gdk::PaintableFlags::STATIC_SIZE | gdk::PaintableFlags::STATIC_CONTENTS
     }
     fn intrinsic_width(&self) -> i32 { self.units.get().round() as i32 }
     fn intrinsic_height(&self) -> i32 { self.units.get().round() as i32 }
@@ -397,11 +338,6 @@ fn load(name: &str) -> Option<(f32, Vec<RawShape>)> {
     Some((units, raw))
 }
 
-/// Cached one-time SVG walk for data/icons/name — None on missing/broken
-/// (call sites keep symbolic fallbacks). The plan's cache held
-/// VecIcon OBJECTS, but glib Object wrappers and gsk::Path are !Send — a
-/// static Mutex can't hold either — so the cache holds the parse instead and
-/// each call builds a fresh (cheap) VecIcon over the same parsed shapes.
 pub(crate) fn icon(name: &str) -> Option<VecIcon> {
     static CACHE: LazyLock<Mutex<HashMap<String, Option<ParsedIcon>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -429,13 +365,7 @@ mod tests {
     use crate::render::badges::svg_data;
 
     const GOLDEN: [(&str, f32, usize); 13] = [
-        // (icon, viewBox units, walked raw shape count) — frozen against the
-        // art on 2026-10-08 (per-file: path+rect+circle element counts:
-        // bot 4+1+0=5, branch 2+0+2=4, chevron-down 1, chevron 1, folder 2,
-        // play 1, plus 2, prompt 2+1=3, stop 1, terminal 2, x-dim 2;
-        // launcher 2026-10-15: pencil 2 = body outline + nib line, trash 5).
-        // A count change means art or walker drifted — re-walk, don't edit.
-        ("bot.svg", 16.0, 5),
+                                                        ("bot.svg", 16.0, 5),
         ("branch.svg", 16.0, 4),
         ("chevron-down.svg", 16.0, 1),
         ("chevron.svg", 16.0, 1),
@@ -463,8 +393,7 @@ mod tests {
 
     #[test]
     fn vecicon_snapshot_records_nodes() {
-        // displayless-safe: gtk4::init opens no display until a widget is shown
-        gtk4::init().unwrap();
+                gtk4::init().unwrap();
         for (name, _, _) in GOLDEN {
             let v = icon(name).unwrap_or_else(|| panic!("{name}: icon None"));
             let snap = gtk4::Snapshot::new();

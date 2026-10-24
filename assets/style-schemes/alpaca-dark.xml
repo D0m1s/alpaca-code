@@ -1,8 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- palette from the Figma mockup ("Agentic App – Dark IDE"): lavender keywords,
-     gold functions, orange strings, blue booleans; card surface #0d1017.
-     Languages address styles as def:* (gtksource def.lang namespace); the bare
-     aliases are kept so older callers stay colored. -->
+
 <style-scheme id="alpaca-dark" _name="alpaca dark" version="1.0">
   <style name="text"         foreground="#e6e8ee" background="#0d1017"/>
   <style name="line-numbers" foreground="#5a6375" background="#0d1017"/>

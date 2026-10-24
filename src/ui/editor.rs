@@ -1,14 +1,4 @@
-//! Editor component — file tabs: open/close/save/restore/watches/tombstone/
-//! binary/dirty dots/badges (file-page S1; diff pages + `_TabDistributor` is
-//! S2/S3).
-//!
-//! Rust keeps a parallel page model (`PageState`, index-aligned with the
-//! notebook) instead of dangling attributes on the page GtkWidget — the
-//! wrapper-identity trap CLAUDE.md warns about is avoided by construction, and
-//! the dirty dot / tabname labels are held directly instead of re-found by
-//! walking `get_first_child()`.
 
-// 4.10-deprecated dialog API (the VTE open-with dialog) — S3 polish modernizes.
 #![allow(deprecated)]
 
 use std::cell::{Cell, RefCell};
@@ -19,7 +9,7 @@ use std::rc::Rc;
 use relm4::gtk::{self, gio, glib, pango, prelude::*};
 use relm4::gtk::subclass::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
-use sourceview5::prelude::*; // BufferExt: set_style_scheme/set_language
+use sourceview5::prelude::*; 
 
 use crate::render::vector;
 use crate::render::badges;
@@ -28,13 +18,8 @@ use crate::git::gitstatus::{self, Sides};
 pub const GONE_NOTE: &str = "‹file has been deleted›";
 pub const BINARY_NOTE: &str = "‹file changed on disk — not UTF-8 text›";
 
-/// chrome subtracted before sharing a tab's width: badge slot + ✕ + label/
-/// head paddings (measured @13px; 62 is the starting hypothesis —
-/// re-measure live if `max(wide) > share` ever trips)
 const TAB_CHROME: i32 = 62;
 
-/// walk a widget tree hunting a descendant carrying the tab-name class
-/// (used by both the distributor's tab walk and ProbeTrace)
 fn find_tabname(w: &gtk4::Widget) -> Option<gtk4::Widget> {
     if w.has_css_class("alpaca-tabname") {
         return Some(w.clone());
@@ -53,30 +38,15 @@ fn find_tabname(w: &gtk4::Widget) -> Option<gtk4::Widget> {
     None
 }
 
-/// `_TabDistributor`: the layout manager of the
-/// vertical wrapper Box around the notebook strip. GTK 4.22 pins scrollable
-/// notebook tabs at their minimum width even with room to spare, and scroll
-/// mode's visible tail grows WIDER as the window narrows — this layout
-/// manager instead floors every tab-name label at
-/// min(share, natural): req = (wrap_width − end_action_w) // n − CHROME.
-/// Recomputes only on (width, n) change.
 #[derive(Default)]
 pub struct TabDistributorImp {
-    last: Cell<Option<(i32, i32)>>, // (wrap width, nb page count) — last-seen memo
+    last: Cell<Option<(i32, i32)>>, 
 }
 
 glib::wrapper! {
     pub struct TabDistributor(ObjectSubclass<TabDistributorImp>) @extends gtk::BoxLayout, gtk::LayoutManager;
 }
 
-/// TabDistributor's C instance struct. glib's basic InstanceStruct embeds
-/// `<TabDistributor as ObjectType>::GlibType` = ffi::GtkBoxLayout, which gir
-/// emitted OPAQUE (0 bytes — GtkBoxLayout exposes no public fields), so
-/// registration computed instance size 0 and GObject rejected the type
-/// ("instance size smaller than GTypeInstance size"). Pad the C layout to the
-/// real GtkBoxLayout instance footprint (GObject + LayoutManager + BoxLayout
-/// privates — ~84B on this build, well under 128): the imp's PrivateStruct is
-/// appended AFTER the instance struct by g_type_add_instance_private.
 #[repr(C)]
 pub struct TabDistributorInstance {
     parent: gtk::ffi::GtkBoxLayout,
@@ -87,11 +57,6 @@ unsafe impl glib::subclass::types::InstanceStruct for TabDistributorInstance {
     type Type = TabDistributorImp;
 }
 
-// gtk4 0.11.5 registers IsSubclassable for LayoutManager but generates none
-// for BoxLayout (it has no overridable vfuncs, so gir skipped the link) —
-// the subclass chain between ParentType=BoxLayout and LayoutManager needs it.
-// Concrete T (not generic): the orphan rule only allows implementing the foreign
-// trait for a foreign type when a LOCAL type appears in the impl.
 unsafe impl IsSubclassable<TabDistributorImp> for gtk::BoxLayout {}
 
 #[glib::object_subclass]
@@ -112,9 +77,7 @@ impl LayoutManagerImpl for TabDistributorImp {
         if n == 0 || self.last.get() == Some((width, n as i32)) {
             return;
         }
-        // act_w = end-action widget's allocated width; never set in
-        // this app → no widget → 0 (kept None-safe)
-        let act = nb
+                        let act = nb
             .action_widget(gtk::PackType::End)
             .map_or(0, |w| w.allocated_width());
         let req = i32::max((width.saturating_sub(act)) / n as i32 - TAB_CHROME, 0);
@@ -129,8 +92,6 @@ impl LayoutManagerImpl for TabDistributorImp {
     }
 }
 
-/// decode UTF-8; reject NUL bytes (a lossy buffer
-/// plus Ctrl+S would rewrite the file with truncated/replacement garbage).
 pub fn readable_text(raw: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(raw).ok()?;
     if text.contains('\0') {
@@ -139,7 +100,6 @@ pub fn readable_text(raw: &[u8]) -> Option<String> {
     Some(text.to_owned())
 }
 
-/// os.stat().st_mtime_ns via std (negative for pre-epoch mtimes).
 fn mtime_ns(path: &Path) -> Option<i64> {
     let t = std::fs::metadata(path).ok()?.modified().ok()?;
     match t.duration_since(std::time::UNIX_EPOCH) {
@@ -148,16 +108,12 @@ fn mtime_ns(path: &Path) -> Option<i64> {
     }
 }
 
-// os.path.basename — the last component (empty for paths ending in /).
 pub fn basename(p: &Path) -> String {
     p.file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
 
-/// os.path.relpath(path, root). Tabs always live under the open root (opened
-/// from the tree, restored by joining), so this covers only the under-root
-/// shape; an outside-root path keeps its absolute spelling.
 fn relpath(path: &Path, root: &Path) -> String {
     let pa: Vec<_> = path.components().collect();
     let rb: Vec<_> = root.components().collect();
@@ -175,10 +131,8 @@ fn relpath(path: &Path, root: &Path) -> String {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FileState {
     Live,
-    /// file gone on disk: clean buffer → tombstone note, dirty keeps user text
-    Deleted,
-    /// disk content unreadable: view frozen (edit-off), note placed
-    Binary,
+        Deleted,
+        Binary,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -189,65 +143,40 @@ pub struct EditorSnapshot {
 
 #[derive(Debug)]
 pub enum EditorMsg {
-    /// set_root + open still-existing tabs (the only set path); the 4th arg
-    /// is the saved active file's scroll (rel, frac) — workbench restore
-    Restore(PathBuf, Vec<String>, i64, Option<(String, f64)>),
+            Restore(PathBuf, Vec<String>, i64, Option<(String, f64)>),
     OpenFile(PathBuf),
     SaveActive,
-    /// PROBE-ONLY (ALPACA_PROBE_S3) — tab allocation trace (taballoc line);
-    /// production never sends it (no S3 chain)
-    ProbeTrace(String),
-    /// PROBE-ONLY (ALPACA_PROBE_WB_SAVE) — scroll the active page's vadj to
-    /// frac·(upper−page_size) — a REAL nonzero scroll for the save-run probe;
-    /// production never sends it
-    ProbeScroll(f64),
-    /// commit flow flushes dirty buffers among the named abs paths
-    SaveOpen(Vec<PathBuf>),
-    /// CHANGES row click → side-by-side diff page
-    OpenDiff {
+            ProbeTrace(String),
+                ProbeScroll(f64),
+        SaveOpen(Vec<PathBuf>),
+        OpenDiff {
         root: PathBuf,
         rel: String,
         letter: String,
     },
-    /// fresh git data → refetch sides for every open diff page still present
-    /// in the change set; rel→fresh-letter rows
-    RefreshDiffs {
+            RefreshDiffs {
         root: PathBuf,
         letters: Vec<(String, String)>,
     },
-    /// repaint every dirty dot + emit the snapshot (modified-changed, open…)
-    StateTick,
+        StateTick,
     Undo,
     Redo,
     Cut,
     Copy,
     Paste,
     SelectAll,
-    /// probe-only: exercise the Edit-menu op target on the active diff page
-    /// and report which side it lands on (the Edit-menu focus route);
-    /// production never sends it
-    ProbeClip,
-    /// PROBE-ONLY (ALPACA_PROBE_S2) — diff-page scrollbar-policy + dual-axis
-    /// scroll-pairing asserts; production never sends it (no chain)
-    ProbeDiffScroll,
-    // internal
-    /// post-emission re-stamp: fires after switch-page lands, when current_page()
-    /// is already the new index (the staleness window is inside the emission only)
-    Switched,
-    /// a file monitor fired
-    FsEvent(PathBuf),
-    /// the 120ms settle elapsed
-    FsSettled(PathBuf),
+                ProbeClip,
+            ProbeDiffScroll,
+                Switched,
+        FsEvent(PathBuf),
+        FsSettled(PathBuf),
     ClosePage(usize, bool),
 }
 
 #[derive(Debug)]
 pub enum EditorOutput {
     StateChanged(EditorSnapshot),
-    /// ack of the SaveOpen flush — ALWAYS fires, even with zero flushed pages
-    /// (drives T7's pending-commit chain; a missing ack would strand the
-    /// eager-busy buttons)
-    Flushed,
+                Flushed,
 }
 
 #[derive(Debug)]
@@ -265,24 +194,12 @@ const DIFF_DEL_BG: &str = "#25181c";
 const DIFF_ADD_BG: &str = "#15261d";
 const DIFF_HDR_FG: &str = "#5a6375";
 
-/// per-direction, per-axis scroll-pairing dedupe: the adjustment each axis
-/// last linked to. Belt-only now — hooking is single-shot at open (the
-/// pairing-law comment at the machinery); the identity guard just makes a
-/// stray second diff_link on the same pair a no-op.
 #[derive(Default)]
 struct LinkedAxes {
     v: Option<gtk::Adjustment>,
     h: Option<gtk::Adjustment>,
 }
 
-/// both diff sides' scroll pairing state: the widgets the live renewal
-/// refills, plus each view's linked-adjustment dedupe (one per direction).
-/// `v_r` stays so the refill can retarget the right side's buffer in place
-/// (the measured churn law says keep the widget tree: swapping the views
-/// tears the page down and the visible page jumps — see refresh_diff).
-/// `diff_text` is the raw text the sides came
-/// from: the renewal flight dedupes against it (a byte-identical diff must
-/// not tear the page down every tick).
 struct DiffWidgets {
     sw_l: gtk::ScrolledWindow,
     sw_r: gtk::ScrolledWindow,
@@ -290,19 +207,11 @@ struct DiffWidgets {
     diff_text: Option<String>,
     linked_l: Rc<RefCell<LinkedAxes>>,
     linked_r: Rc<RefCell<LinkedAxes>>,
-    /// the resizable b/a divider (the paned widget is retained across
-    /// renewals — only buffers swap)
-    paned: gtk::Paned,
-    /// the single full-width h bar (Task 3) — bound to sw_r's hadj
-    bar: gtk::Scrollbar,
-    /// number panes (Task 4): one per side, buffers = `diff_num_text` of the
-    /// sides' number rows; each view SHARES its main's vadjustment object
-    /// (lockstep without push races — see probe asserts)
-    num_l: sourceview5::View,
+            paned: gtk::Paned,
+        bar: gtk::Scrollbar,
+                num_l: sourceview5::View,
     num_r: sourceview5::View,
-    /// the panes' own sws: refresh re-stamps their width (a renewed side
-    /// can gain a number digit, 99→100 — the fixed sw would clip mid-glyph)
-    sw_num_l: gtk::ScrolledWindow,
+            sw_num_l: gtk::ScrolledWindow,
     sw_num_r: gtk::ScrolledWindow,
 }
 
@@ -317,9 +226,8 @@ struct PageState {
     badge_slot: gtk::Box,
     fs: FileState,
     conflict: bool,
-    load_mtime: Option<i64>, // st_mtime_ns
-    // diff page fields (S2) — path stays None so save/reload/fs paths guard out
-    diff_of: Option<String>,   // "diff:<rel>" key
+    load_mtime: Option<i64>, 
+        diff_of: Option<String>,   
     diff_letter: String,
     diff: Option<DiffWidgets>,
 }
@@ -327,8 +235,7 @@ struct PageState {
 pub struct Editor {
     nb: gtk::Notebook,
     pages: Vec<PageState>,
-    /// workspace root for relpaths (crumb + snapshot); None until SetRoot
-    root: Option<PathBuf>,
+        root: Option<PathBuf>,
     lm: sourceview5::LanguageManager,
     scheme: Option<sourceview5::StyleScheme>,
     watchers: HashMap<PathBuf, gio::FileMonitor>,
@@ -367,19 +274,15 @@ impl Component for Editor {
 
         let snd = sender.clone();
         nb.connect_switch_page(move |_, _, _| {
-            // close law: Notebook dispose reselects a page → input() would
-            // panic on the dropped runtime (measured live: S4 close-probe
-            // abort inside drop_glue — EnsureCurrent(Some(0)))
-            let _ = snd.input_sender().send(EditorMsg::Switched);
+                                                let _ = snd.input_sender().send(EditorMsg::Switched);
         });
 
-        // Ctrl+S saves the active page
-        let svc = gtk::ShortcutController::new();
+                let svc = gtk::ShortcutController::new();
         let snd = sender.clone();
         let trig = gtk::ShortcutTrigger::parse_string("<Control>s");
         let act = gtk::CallbackAction::new(move |_w, _a| {
             snd.input(EditorMsg::SaveActive);
-            glib::Propagation::Proceed // propagate
+            glib::Propagation::Proceed 
         });
         let sc = gtk::Shortcut::new(trig, Some(act));
         svc.add_shortcut(sc);
@@ -387,10 +290,7 @@ impl Component for Editor {
 
         let dist: TabDistributor = glib::Object::builder::<TabDistributor>().build();
         let tabs_wrap = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
-        // the wrap must take the full row width — a
-        // HORIZONTAL Box gives a non-hexpand child only its own minimum (measured
-        // 900px wrap → 280px nb); VERTICAL makes x the cross axis where children FILL
-        tabs_wrap.set_layout_manager(Some(dist)); // widget refs the object; local keeps the borrow
+                                tabs_wrap.set_layout_manager(Some(dist)); 
         tabs_wrap.append(&nb);
         root.append(&tabs_wrap);
 
@@ -430,12 +330,7 @@ impl Component for Editor {
                     ws.join(","), ms.join(","));
             }
             EditorMsg::SaveOpen(paths) => {
-                // commit flow flush: dirty buffers among the named abs paths go
-                // to disk BEFORE the commit runs. Flushed ALWAYS fires — the
-                // chain must not strand on an I/O error (eager-busy gate);
-                // a failed write still pops the error dialog so the commit
-                // never lands stale disk content silently.
-                for idx in 0..self.pages.len() {
+                                                                                                for idx in 0..self.pages.len() {
                     let flush = self.pages[idx]
                         .path
                         .as_ref()
@@ -455,34 +350,18 @@ impl Component for Editor {
                 let _ = sender.output(EditorOutput::Flushed);
             }
             EditorMsg::OpenDiff { root, rel, letter } => {
-                // root snapshot rides into the flight (App passes its live
-                // root; no guard beyond the snapshot)
-                sender.spawn_command(move |out| {
+                                                sender.spawn_command(move |out| {
                     let (text, binary) = gitstatus::diff_for(
                         &root.to_string_lossy(),
                         &rel,
                         letter == "U",
                     )
-                    // git failed/timeout → "" → the same no-diff gate
-                    .unwrap_or_default();
+                                        .unwrap_or_default();
                     out.emit(EditorCommand::DiffData { rel, letter, text, binary });
                 });
             }
             EditorMsg::RefreshDiffs { root, letters } => {
-                // per OPEN diff page still present in the change set; resolved
-                // tabs stay as-is. The fetch flight is a responsiveness
-                // improvement only, identical behavior when it lands.
-                //
-                // The flight dedupes byte-identical renewals (each page's
-                // shown text + letter captured here, fresh ones compared
-                // in-thread): pre-fix rust renewed on EVERY probe
-                // tick and tore the visible page down with it (measured: 6
-                // full rebuilds of one unchanged diff in 10s, both sides'
-                // scroll adj flapping 320→0→320 — the "diff jumps around"
-                // glitch). Same guard class as gitview's identical-porcelain
-                // Apply skip. A stale page (diff_text None) reads as text ""
-                // and letter "" → never deduped, always refreshed.
-                let map: HashMap<String, String> = letters.into_iter().collect();
+                                                                                                                                                                                                                                let map: HashMap<String, String> = letters.into_iter().collect();
                 let mut pairs: Vec<(String, String, String, String)> = Vec::new();
                 for pg in &self.pages {
                     let Some(key) = pg.diff_of.as_deref() else { continue };
@@ -505,10 +384,10 @@ impl Component for Editor {
                         )
                         .unwrap_or_default();
                         if binary {
-                            continue; // the tab stays stale rather than die
+                            continue; 
                         }
                         if text == old_text && fresh_letter == old_letter {
-                            continue; // already on screen — no teardown for it
+                            continue; 
                         }
                         let parsed = gitstatus::build_sides(&gitstatus::parse_unified(&text));
                         fresh.push((rel, text, parsed, fresh_letter));
@@ -536,8 +415,7 @@ impl Component for Editor {
                     }
                 }
             }
-            // clipboard ops ride the view's own actions
-            EditorMsg::Cut => self.clip_op("cut-clipboard"),
+                        EditorMsg::Cut => self.clip_op("cut-clipboard"),
             EditorMsg::Copy => self.clip_op("copy-clipboard"),
             EditorMsg::Paste => self.clip_op("paste-clipboard"),
             EditorMsg::SelectAll => {
@@ -550,10 +428,7 @@ impl Component for Editor {
                 self.refresh_restamps(&sender);
                 let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
             }
-            // probe-only fix-3 instrument: resolve the SAME widget the
-            // production Edit-menu route targets on a diff page, and report
-            // whether it is the focused (right) side view
-            EditorMsg::ProbeClip => {
+                                                EditorMsg::ProbeClip => {
                 let Some(idx) = self.active() else {
                     println!("PROBE clip-target: none");
                     return;
@@ -564,11 +439,9 @@ impl Component for Editor {
                     .and_then(|d| d.sw_r.child())
                     .and_then(|w| w.downcast_ref::<sourceview5::View>().cloned());
                 if let Some(ref rv) = right {
-                    rv.grab_focus(); // the user's pointer/focus is on this side
+                    rv.grab_focus(); 
                 }
-                // the production op route (op_target after fix-3): must land
-                // on the focused right view now
-                let hit = match &right {
+                                                let hit = match &right {
                     Some(rv) => self
                         .op_target(idx)
                         .and_then(|w| w.downcast_ref::<sourceview5::View>().cloned())
@@ -581,15 +454,7 @@ impl Component for Editor {
                     if hit { "right-view" } else { "left-or-wrong" }
                 );
             }
-            // PROBE-ONLY diff scroll/policy asserts — NOT ProbeClip's job: the
-            // step-4 (+400ms post-open) timing is racy on a live display
-            // (measured 2026-10-13: vertical span still 0 and h values
-            // unsettled on some runs with the SAME binary — the pairing is
-            // not, the measurement is). The chain's PRE-SWITCH window runs
-            // 5-11 (step 12's SetWorkspace closes every page), so the assert
-            // rides step 9 — ~2s post-open, both sides' allocations and the
-            // pairing long settled, still wsA.
-            EditorMsg::ProbeDiffScroll => {
+                                                                                                            EditorMsg::ProbeDiffScroll => {
                 let Some(idx) = self.active() else {
                     println!("PROBE assert: diff-presence: FAIL (no active page)");
                     return;
@@ -598,25 +463,15 @@ impl Component for Editor {
                     let swept = PROBE_DIFF_SWEEP.with(|c| c.get());
                     probe_diff_scroll_asserts(dw, &self.pages[idx].view.clone());
                     if swept {
-                        // post-renewal re-run: every assert above printed
-                        // against a page whose buffers were swapped by the
-                        // refresh_diff flight (an open tab + a git tick — the
-                        // frequently-run path). PASS line here = asserts held
-                        // across renewal: no flap, share + links survived.
-                        println!("PROBE renewal-assert: PASS");
+                                                                                                                                                println!("PROBE renewal-assert: PASS");
                     }
                 } else {
                     println!("PROBE assert: diff-presence: FAIL (not a diff page)");
                 }
-                // arm once (probe-only): mutate the fixture + drive the
-                // renewal directly
-                if !PROBE_DIFF_SWEEP.with(|c| c.get()) {
+                                                if !PROBE_DIFF_SWEEP.with(|c| c.get()) {
                     PROBE_DIFF_SWEEP.with(|c| c.set(true));
                     let mut mutated = false;
-                    // belt: the append must be a PROBE fixture, never a user
-                    // workspace (the message is probe-only, but the chain's
-                    // fixture conventions live at root = wsA)
-                    if let Some(root) = &self.root
+                                                                                if let Some(root) = &self.root
                         && root.file_name() == Some(std::ffi::OsStr::new("wsA"))
                     {
                         let f = root.join("a.txt");
@@ -629,10 +484,7 @@ impl Component for Editor {
                     if mutated
                         && let Some(root) = self.root.clone()
                     {
-                        // the flight refetches; the fresh (non-identical) diff
-                        // defeats the byte-identical dedupe, so refresh_diff
-                        // RUNS on the open page; 500ms = flight + landing
-                        sender.input(EditorMsg::RefreshDiffs {
+                                                                                                sender.input(EditorMsg::RefreshDiffs {
                             root,
                             letters: vec![("a.txt".into(), "M".into())],
                         });
@@ -640,8 +492,7 @@ impl Component for Editor {
                         glib::timeout_add_local(
                             std::time::Duration::from_millis(500),
                             move || {
-                                // close law: input() panics on a dropped runtime
-                                if snd.input_sender().send(EditorMsg::ProbeDiffScroll).is_err() {
+                                                                if snd.input_sender().send(EditorMsg::ProbeDiffScroll).is_err() {
                                     return glib::ControlFlow::Break;
                                 }
                                 glib::ControlFlow::Break
@@ -678,8 +529,7 @@ impl Component for Editor {
                     return;
                 }
                 let sides = gitstatus::build_sides(&gitstatus::parse_unified(&text));
-                // sides.old is the OLD side — len==0 means no content
-                if sides.old.is_empty() {
+                                if sides.old.is_empty() {
                     self.error(
                         &format!("No diff: {rel}"),
                         "git produced no diff hunks for this path.",
@@ -702,10 +552,7 @@ impl Editor {
         self.nb.current_page().map(|c| c as usize)
     }
 
-    /// The active file's (rel path, top-scroll fraction) for the workbench
-    /// save — live read, no mirror. Diff pages carry None from snapshot()'s
-    /// filter, so an active diff page saves nothing (tabs skip diffs too).
-    pub fn scroll_state(&self) -> Option<(String, f64)> {
+                pub fn scroll_state(&self) -> Option<(String, f64)> {
         let idx = self.active()?;
         let pg = self.pages.get(idx)?;
         let p = pg.path.as_ref()?;
@@ -714,15 +561,13 @@ impl Editor {
         Some((rel, frac_of(&pg.sw)))
     }
 
-    /// the toplevel window (dialogs are transient for it)
-    fn window_widget(&self) -> Option<gtk::Window> {
+        fn window_widget(&self) -> Option<gtk::Window> {
         self.nb.root().and_downcast::<gtk::Window>()
     }
 
-    /// modal CLOSE MessageDialog, transient for the window.
-    fn error(&self, primary: &str, secondary: &str) {
+        fn error(&self, primary: &str, secondary: &str) {
         let Some(win) = self.window_widget() else { return };
-        #[allow(deprecated)] // 4.10-deprecated upstream (S3 polish)
+        #[allow(deprecated)] 
         let d = gtk::MessageDialog::builder()
             .transient_for(&win)
             .modal(true)
@@ -738,28 +583,21 @@ impl Editor {
         self.pages.iter().position(|pg| pg.path.as_deref() == Some(path))
     }
 
-    /// diff tabs key off "diff:<rel>"; the exact
-    /// path match `page_of` stays file-tab-only
-    fn page_of_key(&self, key: &str) -> Option<usize> {
+            fn page_of_key(&self, key: &str) -> Option<usize> {
         self.pages.iter().position(|pg| pg.diff_of.as_deref() == Some(key))
     }
 
-    /// basename of a rel path (os.path.basename — the last '/' segment)
-    fn rel_base(rel: &str) -> &str {
+        fn rel_base(rel: &str) -> &str {
         rel.rsplit_once('/').map(|(_, b)| b).unwrap_or(rel)
     }
 
-    // ---- lifecycle ------------------------------------------------------------
-
-    /// records the root, closes everything.
-    fn set_root(&mut self, root: PathBuf) {
+    
+        fn set_root(&mut self, root: PathBuf) {
         self.root = Some(root);
         self.close_all();
     }
 
-    /// set_root + open still-existing tabs + clamp by
-    /// min(tab, n-1) (a saved index past the end re-clamps) + refresh.
-    fn restore(
+            fn restore(
         &mut self,
         root: &Path,
         tabs: Vec<String>,
@@ -771,32 +609,25 @@ impl Editor {
         for rel in tabs {
             let p = root.join(rel);
             if p.is_file() {
-                // stale persisted tabs vanish silently
-                self.open_file(&p, sender);
+                                self.open_file(&p, sender);
             }
         }
         let n = self.nb.n_pages() as i64;
-        // GTK ignores a negative set_current_page; u32::try_from(None-maps it)
-        self.nb
+                self.nb
             .set_current_page(u32::try_from(active.min((n - 1).max(0))).ok());
-        // the scroll rides ONLY the file it was captured for: a clamped active
-        // index (saved tab vanished) drifted to a different page and the frac
-        // must drop, not spray onto an unrelated file
-        if let Some((rel, frac)) = scroll
+                                if let Some((rel, frac)) = scroll
             && let Some(idx) = self.nb.current_page().map(|c| c as usize)
             && let Some(pg) = self.pages.get(idx)
             && let Some(p) = pg.path.as_ref()
             && relpath(p, root) == rel
         {
-            restore_frac(&pg.sw, frac); // the measured reload-path tool
+            restore_frac(&pg.sw, frac); 
         }
         self.refresh_restamps(sender);
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    /// PROBE-ONLY (ALPACA_PROBE_WB_SAVE): park the active page's vadj at
-    /// frac·(upper−page_size) — no-op without a real file page.
-    fn probe_scroll(&mut self, frac: f64) {
+            fn probe_scroll(&mut self, frac: f64) {
         if let Some(idx) = self.active()
             && let Some(pg) = self.pages.get(idx)
         {
@@ -816,8 +647,7 @@ impl Editor {
         }
     }
 
-    // ---- open -----------------------------------------------------------------
-
+    
     fn open_file(&mut self, path: &Path, sender: &ComponentSender<Self>) {
         if let Some(k) = self.page_of(path) {
             self.nb.set_current_page(Some(k as u32));
@@ -826,8 +656,7 @@ impl Editor {
         }
         let raw = match std::fs::read(path) {
             Ok(bytes) => Some(bytes),
-            // vanished since the tree rendered it → tombstone tab, never a popup
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
                 self.error(
                     "Couldn't open file",
@@ -836,9 +665,7 @@ impl Editor {
                 return;
             }
         };
-        // refusing at open is the only safe point: a lossy buffer + Ctrl+S
-        // would rewrite the file with truncated/replacement garbage
-        let text = match &raw {
+                        let text = match &raw {
             Some(bytes) => match readable_text(bytes) {
                 Some(t) => t,
                 None => {
@@ -860,9 +687,7 @@ impl Editor {
         if let Some(lang) = self.lm.guess_language(Some(base.as_str()), None) {
             buf.set_language(Some(&lang));
         }
-        // GtkSource.Buffer(text=…) is born modified — an open must not show
-        // the dirty dot
-        buf.set_modified(false);
+                        buf.set_modified(false);
         if raw.is_none() {
             Self::tag_muted(&buf);
         }
@@ -872,8 +697,8 @@ impl Editor {
             .buffer(&buf)
             .show_line_numbers(true)
             .wrap_mode(gtk::WrapMode::None)
-            .pixels_above_lines(2) // line pitch ~20 @ 13px mono (VS Code density)
-            .left_margin(12)       // code column inset after the line-number gutter
+            .pixels_above_lines(2) 
+            .left_margin(12)       
             .css_classes(["alpaca-mono"])
             .build();
         let page_box = gtk::Box::builder()
@@ -887,12 +712,11 @@ impl Editor {
         let crumb = gtk::Label::builder()
             .label(crumbs)
             .xalign(0.0)
-            .ellipsize(pango::EllipsizeMode::Middle) // a deep path must not widen the page min
+            .ellipsize(pango::EllipsizeMode::Middle) 
             .css_classes(["alpaca-breadcrumb"])
             .build();
         page_box.append(&crumb);
-        // ref kept: reload restores its scroll
-        let sw = gtk::ScrolledWindow::builder()
+                let sw = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .child(&view)
             .build();
@@ -901,8 +725,7 @@ impl Editor {
         let fs = if raw.is_some() { FileState::Live } else { FileState::Deleted };
         let load_mtime = if raw.is_some() { mtime_ns(path) } else { None };
 
-        // tab head: dirty ● FIRST, badge slot, name, close
-        let dot = gtk::Label::builder()
+                let dot = gtk::Label::builder()
             .label("●")
             .css_classes(["alpaca-dirty"])
             .visible(false)
@@ -912,10 +735,7 @@ impl Editor {
             .css_classes(["alpaca-tabname"])
             .ellipsize(pango::EllipsizeMode::Middle)
             .build();
-        // tabname floor: GTK 4.22 pins scrollable-notebook tabs at their
-        // minimum even with space to spare — bare ellipsize floors the text at
-        // '…' and GTK4 GtkLabel has no min-width-chars (GTK3-only).
-        name.set_size_request(72, -1);
+                                name.set_size_request(72, -1);
         let close = gtk::Button::new();
         if let Some(vec) = vector::icon("x-dim.svg") {
             close.set_child(Some(&gtk::Image::from_paintable(Some(&vec))));
@@ -930,9 +750,8 @@ impl Editor {
             .css_classes(["alpaca-tab"])
             .valign(gtk::Align::Center)
             .build();
-        head.append(&dot); // must stay first
-        // per-file type badge; restamped by refresh
-        let slot = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
+        head.append(&dot); 
+                let slot = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
         head.append(&slot);
         head.append(&name);
         head.append(&close);
@@ -940,14 +759,12 @@ impl Editor {
             slot.append(&gtk::Image::from_pixbuf(Some(&want)));
         }
         let index = self.nb.append_page(&page_box, Some(&head));
-        self.nb.set_current_page(Some(index)); // append does not switch; a new tab must take focus
-        // resolve the (possibly shifted) index at click time via the page widget
-        let nb2 = self.nb.clone();
+        self.nb.set_current_page(Some(index)); 
+                let nb2 = self.nb.clone();
         let pg_widget = page_box.clone();
         let snd = sender.clone();
         close.connect_clicked(move |_| {
-            // page Some only while the page exists
-            let idx = nb2.page_num(&pg_widget).map(|i| i as usize);
+                        let idx = nb2.page_num(&pg_widget).map(|i| i as usize);
             if let Some(idx) = idx {
                 snd.input(EditorMsg::ClosePage(idx, false));
             }
@@ -972,19 +789,17 @@ impl Editor {
         if fs != FileState::Live {
             self.paint_tab_deleted(self.pages.len() - 1, true);
         }
-        self.refresh_restamps(sender); // switch-page alone misses opens that don't change pages
+        self.refresh_restamps(sender); 
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    // ---- tab state / dots -----------------------------------------------------
-
+    
     fn paint_dot(&self, idx: usize) {
         let pg = &self.pages[idx];
-        // red while locally modified, amber while ALSO changed on disk
-        pg.dot.set_visible(pg.buf.is_modified() || pg.conflict);
+                pg.dot.set_visible(pg.buf.is_modified() || pg.conflict);
         let mut classes = vec!["alpaca-dirty".to_owned()];
         if pg.conflict {
-            classes.push("conflict".to_owned()); // amber
+            classes.push("conflict".to_owned()); 
         }
         let classes: Vec<&str> = classes.iter().map(|s| s.as_str()).collect();
         pg.dot.set_css_classes(&classes);
@@ -1006,11 +821,9 @@ impl Editor {
     }
 
     fn refresh_restamps(&self, sender: &ComponentSender<Self>) {
-        // every tab carries its file's type badge (user overrode the mockup's
-        // hash-for-inactive rule: a selected tab must not erase the others')
-        for pg in &self.pages {
+                        for pg in &self.pages {
             if pg.diff_of.is_some() {
-                continue; // diff tab: badge_slot already holds its letter chip
+                continue; 
             }
             while let Some(c) = pg.badge_slot.first_child() {
                 pg.badge_slot.remove(&c);
@@ -1023,17 +836,13 @@ impl Editor {
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    // ---- close ----------------------------------------------------------------
-
+    
     fn close_index(&mut self, index: usize, force: bool, sender: &ComponentSender<Self>) {
         if index >= self.pages.len() {
             return;
         }
         if self.pages[index].buf.is_modified() && !force {
-            // dirty → "Discard changes to X?" CANCEL/Discard; the Discard
-            // click re-enters forced. The index is resolved at response time
-            // via the page widget — tabs may shift while the dialog is open
-            let Some(win) = self.window_widget() else { return };
+                                                let Some(win) = self.window_widget() else { return };
             let name = self.pages[index]
                 .path
                 .as_ref()
@@ -1044,7 +853,7 @@ impl Editor {
             let pg_widget = self.pages[index].page.clone();
             let snd = sender.clone();
             d.connect_response(move |dd, r| {
-                dd.destroy(); // destroy in the response handler
+                dd.destroy(); 
                 if r == gtk::ResponseType::Accept {
                     let idx = nb2.page_num(&pg_widget).map(|i| i as usize);
                     if let Some(idx) = idx {
@@ -1060,23 +869,20 @@ impl Editor {
         if let Some(path) = p.path {
             self.cancel_watch(&path);
         }
-        self.refresh_restamps(sender); // closing the active tab flips tabs
+        self.refresh_restamps(sender); 
     }
 
-    // ---- save -----------------------------------------------------------------
-
+    
     fn write_page(&mut self, idx: usize) -> Result<(), std::io::Error> {
         let path = self.pages[idx].path.clone().expect("write_page: file page");
         let text = self.pages[idx]
             .buf
             .text(&self.pages[idx].buf.start_iter(), &self.pages[idx].buf.end_iter(), false);
         std::fs::write(&path, text.as_str())?;
-        // conflict cleared BEFORE set_modified(false) — the fired
-        // modified-changed repaints the dot (order matters)
-        self.pages[idx].conflict = false;
+                        self.pages[idx].conflict = false;
         self.pages[idx].buf.set_modified(false);
         if let Some(m) = mtime_ns(&path) {
-            self.pages[idx].load_mtime = Some(m); // latch the save — the settle must not reload what we wrote
+            self.pages[idx].load_mtime = Some(m); 
         }
         Ok(())
     }
@@ -1084,10 +890,10 @@ impl Editor {
     fn save_active(&mut self, _sender: &ComponentSender<Self>) {
         let Some(idx) = self.active() else { return };
         if self.pages[idx].path.is_none() {
-            return; // diff page (S2): Ctrl+S is a no-op
+            return; 
         }
         if !self.pages[idx].buf.is_modified() {
-            return; // clean Ctrl+S never resurrects a tombstone note
+            return; 
         }
         if let Err(e) = self.write_page(idx) {
             let name = self.pages[idx]
@@ -1099,15 +905,8 @@ impl Editor {
         }
     }
 
-    // ---- diff pages (S2) ------------------------------------------------------
-
-    /// diff-side buffer — fresh GtkSource buffer (scheme +
-    /// lang), bg tint over the marked lines, header fg, `set_modified` AFTER
-    /// the tags ("diff tabs never dirty"). Full syntax highlighting both
-    /// sides — the '=' rows get NO fg tag (user reversal 2026-10-14: the
-    /// Rider-dim tag out-specced the scheme's token colors). Shared by the
-    /// page build and the refresh refill.
-    fn diff_buf(
+    
+                            fn diff_buf(
         &self,
         lines: &[String],
         idxs: &BTreeSet<usize>,
@@ -1122,17 +921,14 @@ impl Editor {
         if let Some(lang) = lang {
             buf.set_language(Some(lang));
         }
-        // a bad hex stays transparent (fresh Gdk.RGBA())
-        let tint = rgba(hexcol);
+                let tint = rgba(hexcol);
         let tag = gtk::TextTag::builder().background_rgba(&tint).build();
         let fg = gtk::TextTag::builder()
             .foreground_rgba(&rgba(DIFF_HDR_FG))
             .build();
         buf.tag_table().add(&tag);
         buf.tag_table().add(&fg);
-        // negative-index clamp — parse never stores negatives, so the usize
-        // compare kills a wrapped usize::MAX too (untracked full-del rows)
-        for &i in idxs.iter() {
+                        for &i in idxs.iter() {
             if i >= buf.line_count() as usize || i == usize::MAX {
                 continue;
             }
@@ -1152,13 +948,11 @@ impl Editor {
                 buf.apply_tag(&fg, &a, &b);
             }
         }
-        // born modified (invariant); diff tabs never dirty
-        buf.set_modified(false);
+                buf.set_modified(false);
         buf
     }
 
-    /// one diff side: the buffer above + non-editable unnumbered mono view.
-    fn diff_side(
+        fn diff_side(
         &self,
         lines: &[String],
         idxs: &BTreeSet<usize>,
@@ -1169,7 +963,7 @@ impl Editor {
         let buf = self.diff_buf(lines, idxs, hdr, hexcol, lang);
         let view = sourceview5::View::builder()
             .buffer(&buf)
-            .show_line_numbers(false) // padded sides would falsify numbers
+            .show_line_numbers(false) 
             .editable(false)
             .wrap_mode(gtk::WrapMode::None)
             .pixels_above_lines(2)
@@ -1179,11 +973,7 @@ impl Editor {
         (view, buf)
     }
 
-    /// a CHANGES row's side-by-side diff page: left
-    /// (del, red tint) / right (add, green tint), linked scroll, letter chip
-    /// in the tab head ("diff tabs never dirty" → no dot). Reuses the file
-    /// page's widget fields for the LEFT side.
-    fn open_diff(
+                    fn open_diff(
         &mut self,
         rel: &str,
         sides: &Sides,
@@ -1201,16 +991,7 @@ impl Editor {
         let (v_l, b_l) = self.diff_side(&sides.old, &sides.del, &sides.hdr, DIFF_DEL_BG, lang.as_ref());
         let (v_r, _b_r) = self.diff_side(&sides.new, &sides.add, &sides.hdr, DIFF_ADD_BG, lang.as_ref());
 
-        // before side ships chrome-free (user ruling 2026-10-13): the after
-        // side hosts the ONLY v bar and the ONLY h bar. Hiding rides the
-        // widget layer (hide_scrollbars below): PolicyType::Never UNCLAMPS the
-        // child's natural size on this build (measured via the S2 diff asserts
-        // the day this landed: viewport grew to the full 1740px content
-        // height, upper==page_size on both axes, nothing scrollable anywhere),
-        // and css `display` is NOT a property here (theme parser rejects it —
-        // probe13-19 logs: "No property named display"; the rule was a no-op).
-        // Widget-visibility keeps the viewport clamped + pairing live.
-        let sw_l = gtk::ScrolledWindow::builder()
+                                                                                let sw_l = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .hexpand(true)
             .child(&v_l)
@@ -1221,20 +1002,9 @@ impl Editor {
             .hexpand(true)
             .child(&v_r)
             .build();
-        // single full-width h bar (user ruling 2026-10-13): the panes' own
-        // h bars hidden, ONE Scrollbar under the paned pair bound to sw_r's
-        // hadj — the sw owns its adjustments and refresh_diff never
-        // re-children, so a one-time bind is stable (adj identity
-        // persists — the pairing law comment). sw_r's v bar stays.
-        hide_scrollbars(&sw_r, &[gtk::Orientation::Horizontal]);
+                                                hide_scrollbars(&sw_r, &[gtk::Orientation::Horizontal]);
         let hbar = gtk::Scrollbar::new(gtk::Orientation::Horizontal, Some(&sw_r.hadjustment()));
-        // style-match the standalone bar (user 2026-10-14: "its style differs
-        // from the vertical scroll bar"): the panes' in-sw bars are styled by
-        // the classes the sw's overlay machinery puts on them; a standalone
-        // Scrollbar carries only `horizontal` and Breeze paints its classic
-        // light trough. Inherit the reference bar's classes (sw_r's kept v
-        // bar — the ONLY visible one), orientation swapped.
-        let ref_cls: Vec<glib::GString> = {
+                                                        let ref_cls: Vec<glib::GString> = {
             let mut c = sw_r.first_child();
             loop {
                 match c {
@@ -1255,72 +1025,36 @@ impl Editor {
             .collect();
         cls.push("horizontal".into());
         if !cls.iter().any(|c| c == "alpaca-diffhbar") {
-            cls.push("alpaca-diffhbar".into()); // css hook for capture-law tuning
+            cls.push("alpaca-diffhbar".into()); 
         }
         hbar.set_css_classes(&cls.iter().map(String::as_str).collect::<Vec<_>>());
-        // number panes (Task 4): the line-number columns. Same line-box
-        // params as the mains (alpaca-mono + pixels_above_lines(2)) so row
-        // heights match 1:1; fixed-width panes (see the size_request below —
-        // hug-natural does NOT work under an hexpand'd sibling); focusable
-        // (false) keeps clipboard ops on the content side. Buffers are
-        // swapped on renewal exactly like the mains' — one shared adjustment
-        // per side below means one set_buffer-law reset event, and
-        // restore_frac on that same object re-applies once.
-        let num_l = diff_num_view(&sides.old_no);
+                                                                        let num_l = diff_num_view(&sides.old_no);
         let num_r = diff_num_view(&sides.new_no);
         let sw_num_l = gtk::ScrolledWindow::builder().child(&num_l).build();
         hide_scrollbars(&sw_num_l, &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical]);
         let sw_num_r = gtk::ScrolledWindow::builder().child(&num_r).build();
         hide_scrollbars(&sw_num_r, &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical]);
-        // pane widths: an sw's natural width for a SCROLLABLE child is ~its
-        // minimum (measured r3 red28: number panes collapsed to 0px — the
-        // hexpand'd mains ate everything; even the hug-natural assumption was
-        // wrong there). Fixed floors from the RENDERED field width — the old
-        // view.measure() at open-time under-reported the mono field and the
-        // hidden h bar let it clip digits mid-glyph (2026-10-14 clip fix);
-        // ONE shared width so the two number columns line up.
-        let numw = diff_num_pane_width(&sides.old_no, &num_l)
+                                                                let numw = diff_num_pane_width(&sides.old_no, &num_l)
             .max(diff_num_pane_width(&sides.new_no, &num_r));
         sw_num_l.set_size_request(numw, -1);
         sw_num_r.set_size_request(numw, -1);
-        // lockstep law: the num view's vadjustment IS its main's object — so
-        // the num pane's own wheel drives the SAME adj the main scrolls; no
-        // push race, no extra linked cells. The set MUST ride AFTER the num
-        // sw's set_child AND after the MAIN sw's set_child — the
-        // ScrolledWindow installs its own adjustments onto its child at
-        // child-set (measured r2 green20: a pre-set_child share was
-        // clobbered; dbg22: a share taken pre-sw_r bound to v_r's
-        // pre-clobber own adj — set_child rewired v_r and left num_r
-        // stranded. POST-child-set, the sw's adjustment-watcher rebinds its
-        // bars to the child's new adj — measured on the left side). The h
-        // axis stays private: the panes' page sizes differ, and one
-        // adjustment can't hold two.
-        if let Some(va) = v_l.vadjustment() {
+                                                                                                        if let Some(va) = v_l.vadjustment() {
             num_l.set_vadjustment(Some(&va));
         }
         if let Some(va) = v_r.vadjustment() {
             num_r.set_vadjustment(Some(&va));
         }
-        // resizable split (user ruling 2026-10-13): the 1px alpaca-diffsep
-        // Box becomes a paned divider (app.css's paned > separator 6px rule
-        // makes the knob grabbable; no wide_handle — this stays compact).
-        // GTK4 paned's OWN unset position is UNRELIABLE here (measured r2:
-        // start child collapsed to its 1px minimum with text-view children),
-        // and no allocation-notify exists — the one-shot 50% rides the sw's
-        // hadjustment 'changed' (the same allocation-adjacent event
-        // restore_frac legally uses: page_size lands when the split area
-        // first allocates; the set lands before the user can touch it).
-        let sw_l_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        sw_l_wrap.append(&sw_num_l); // numbers LEFT of the before side
+                                                                                let sw_l_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        sw_l_wrap.append(&sw_num_l); 
         sw_l_wrap.append(&sw_l);
         let sw_r_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        sw_r_wrap.append(&sw_num_r); // numbers at the after pane's left edge
+        sw_r_wrap.append(&sw_num_r); 
         sw_r_wrap.append(&sw_r);
         let paned = gtk::Paned::builder()
             .orientation(gtk::Orientation::Horizontal)
             .vexpand(true)
             .hexpand(true)
-            .css_classes(["alpaca-diffpaned"]) // hairline separator paint (app.css)
+            .css_classes(["alpaca-diffpaned"]) 
             .start_child(&sw_l_wrap)
             .end_child(&sw_r_wrap)
             .build();
@@ -1335,12 +1069,7 @@ impl Editor {
                 let w = p2.allocated_width();
                 if w > 0 {
                     pos_flag.set(true);
-                    // set_position fired MID-CASCADE is discarded by the
-                    // paned's own allocation (S3's same-step law: "the split
-                    // never applied") — readback was 482 with children still
-                    // at the 1|958 unset compute; the set must land at idle,
-                    // after the cascade, where it re-allocates for real
-                    let pw = w / 2;
+                                                                                                                        let pw = w / 2;
                     let p3 = p2.clone();
                     glib::idle_add_local_once(move || p3.set_position(pw));
                 }
@@ -1353,16 +1082,14 @@ impl Editor {
         let crumb = gtk::Label::builder()
             .label(rel.split('/').collect::<Vec<_>>().join("  ›  "))
             .xalign(0.0)
-            .ellipsize(pango::EllipsizeMode::Middle) // a deep path must not widen the page min
+            .ellipsize(pango::EllipsizeMode::Middle) 
             .css_classes(["alpaca-breadcrumb"])
             .build();
         page.append(&crumb);
         page.append(&paned);
         page.append(&hbar);
 
-        // tab head: letter chip slot FIRST, name, close — and no dirty dot.
-        // an orphan dot for paint_dot parity (diff tabs never dirty)
-        let slot = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
+                        let slot = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
         if !letter.is_empty() {
             let chip = gtk::Label::builder()
                 .label(letter)
@@ -1400,9 +1127,8 @@ impl Editor {
             .build();
 
         let index = self.nb.append_page(&page, Some(&head));
-        self.nb.set_current_page(Some(index)); // append does not switch; a new tab must take focus
-        // resolve the (possibly shifted) index at click time via the page widget
-        let nb2 = self.nb.clone();
+        self.nb.set_current_page(Some(index)); 
+                let nb2 = self.nb.clone();
         let pg_widget = page.clone();
         let snd = sender.clone();
         close.connect_clicked(move |_| {
@@ -1426,10 +1152,7 @@ impl Editor {
             sw_num_l: sw_num_l.clone(),
             sw_num_r: sw_num_r.clone(),
         };
-        // linking hooks once at wire time (views own their adjustments from
-        // construction — pairing law comment at the machinery); dst captured
-        // so the handler pushes into THIS page's opposite side
-        diff_link(&v_l, &v_r, &diff.linked_l);
+                                diff_link(&v_l, &v_r, &diff.linked_l);
         diff_link(&v_r, &v_l, &diff.linked_r);
 
         self.pages.push(PageState {
@@ -1452,9 +1175,7 @@ impl Editor {
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    /// live renewal of an open diff page — same trigger/fraction/letter-chip
-    /// contract, measured-churn-safe body (see the comment inside).
-    fn refresh_diff(
+            fn refresh_diff(
         &mut self,
         rel: &str,
         sides: &Sides,
@@ -1465,19 +1186,10 @@ impl Editor {
         let key = format!("diff:{rel}");
         let Some(idx) = self.page_of_key(&key) else { return };
         let (frac_l, frac_r) = {
-            let dw = self.pages[idx].diff.as_ref().unwrap(); // diff pages always carry theirs
+            let dw = self.pages[idx].diff.as_ref().unwrap(); 
             (frac_of(&dw.sw_l), frac_of(&dw.sw_r))
         };
-        // refresh_diff — live renewal of an open diff page. NOT the
-        // swap-the-child-VIEWS shape: measured churn law —
-        // every widget swap re-allocates the visible page and its scroll
-        // adjustments reset/flap; the swap raced restore_frac too. The views,
-        // ScrolledWindows and scroll pairing here are RETAINED and only the
-        // side buffers are swapped in (the reload path's shape, swap_text:
-        // adj identity persists → linked_l/linked_r stay live, no re-wire,
-        // no set_child). The byte-identical dedupe lives in the RefreshDiffs
-        // flight — this path runs only when the diff really changed.
-        let lang = self.lm.guess_language(Some(Self::rel_base(rel)), None);
+                                                                                let lang = self.lm.guess_language(Some(Self::rel_base(rel)), None);
         let (b_l, b_r) = (
             self.diff_buf(&sides.old, &sides.del, &sides.hdr, DIFF_DEL_BG, lang.as_ref()),
             self.diff_buf(&sides.new, &sides.add, &sides.hdr, DIFF_ADD_BG, lang.as_ref()),
@@ -1487,22 +1199,15 @@ impl Editor {
                 let dw = self.pages[idx].diff.as_ref().unwrap();
                 (dw.sw_l.clone(), dw.sw_r.clone(), dw.sw_num_l.clone(), dw.sw_num_r.clone(), dw.v_r.clone(), dw.num_l.clone(), dw.num_r.clone())
             };
-            self.pages[idx].view.set_buffer(Some(&b_l)); // left view kept
-            v_r.set_buffer(Some(&b_r)); // right view kept
-            // number panes ride along (Task 4): fresh sides' numbers, same
-            // set_buffer shape — their vadj IS the main's (shared object),
-            // so the reset happens once per side and restore_frac re-applies
-            num_l.set_buffer(Some(&sourceview5::Buffer::builder()
+            self.pages[idx].view.set_buffer(Some(&b_l)); 
+            v_r.set_buffer(Some(&b_r)); 
+                                                num_l.set_buffer(Some(&sourceview5::Buffer::builder()
                 .text(gitstatus::diff_num_text(&sides.old_no))
                 .build()));
             num_r.set_buffer(Some(&sourceview5::Buffer::builder()
                 .text(gitstatus::diff_num_text(&sides.new_no))
                 .build()));
-            // refreshed sides can GAIN a number digit (99→100 lines) — the
-            // fixed sw would clip the widened field mid-glyph again (the h
-            // bar here is hidden). Re-derive, same shape as open_diff. The
-            // re-stamp rides AFTER the buffers: pango needs the fields only.
-            let numw = diff_num_pane_width(&sides.old_no, &num_l)
+                                                            let numw = diff_num_pane_width(&sides.old_no, &num_l)
                 .max(diff_num_pane_width(&sides.new_no, &num_r));
             sw_num_l.set_size_request(numw, -1);
             sw_num_r.set_size_request(numw, -1);
@@ -1531,15 +1236,8 @@ impl Editor {
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    // ---- clip / edit ops ------------------------------------------------------
-
-    /// Edit-menu op target (review fix-3):
-    /// buffer pages → the page's own view; diff pages → the CURRENTLY FOCUSED
-    /// text view (either side panel), so Cut/Copy/Paste/Select-All act on the
-    /// side the user actually has focus in; anything not focusable cleanly
-    /// no-ops the activate_action. diff pages carry no editable buffer — the
-    /// stored left view (PageState.view) is NOT the right target there.
-    fn op_target(&self, idx: usize) -> Option<gtk4::Widget> {
+    
+                            fn op_target(&self, idx: usize) -> Option<gtk4::Widget> {
         if self.pages[idx].diff.is_some() {
             self.nb
                 .root()
@@ -1557,44 +1255,32 @@ impl Editor {
             }
     }
 
-    // ---- live file changes: no popups, disk is the truth ----------------------
-
+    
     fn cancel_watch(&mut self, path: &Path) {
         if let Some(mon) = self.watchers.remove(path) {
             mon.cancel();
         }
     }
 
-    /// one FileMonitor per open path.
-    fn arm_watch(&mut self, path: &Path, sender: &ComponentSender<Self>) {
+        fn arm_watch(&mut self, path: &Path, sender: &ComponentSender<Self>) {
         self.cancel_watch(path);
         let file = gio::File::for_path(path);
-        // an absent path may have no watchable inode: tombstone stays until reopened
-        let mon = match file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
+                let mon = match file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
             Ok(m) => m,
             Err(_) => return,
         };
         let snd = sender.clone();
         let p = path.to_path_buf();
         mon.connect_changed(move |_, _, _, _| {
-            // No popups (live spec). Every event — delete, atomic replace
-            // (agents save via temp+rename), re-create — funnels into ONE
-            // debounced disk check.
-            snd.input(EditorMsg::FsEvent(p.clone()));
+                                                snd.input(EditorMsg::FsEvent(p.clone()));
         });
         self.watchers.insert(path.to_path_buf(), mon);
     }
 
     fn arm_settle(&self, path: PathBuf, sender: &ComponentSender<Self>) {
-        // the cancel-then-arm reset shape is out: SourceId::remove
-        // PANICS on an already-fired id (measured: one touch+delete race kills the
-        // app). fs_settled is idempotent, so stale settles are harmless — arm
-        // without cancelling.
-        let snd = sender.clone();
+                                        let snd = sender.clone();
         glib::timeout_add(std::time::Duration::from_millis(120), move || {
-            // close law: input() panics on a dropped runtime — send()
-            // reports; a dead send retires the timer
-            if snd.input_sender().send(EditorMsg::FsSettled(path.clone())).is_err() {
+                                    if snd.input_sender().send(EditorMsg::FsSettled(path.clone())).is_err() {
                 return glib::ControlFlow::Break;
             }
             glib::ControlFlow::Break
@@ -1608,19 +1294,18 @@ impl Editor {
             return;
         };
         if self.pages[k].fs == FileState::Live && Some(mtime) == self.pages[k].load_mtime {
-            return; // our own open/Ctrl+S echo
+            return; 
         }
         if self.pages[k].buf.is_modified() {
             if self.pages[k].fs != FileState::Live {
-                // dirty buffer on a placeholder tab: the note dies, text lives
-                self.pages[k].fs = FileState::Live;
+                                self.pages[k].fs = FileState::Live;
                 self.paint_tab_deleted(k, false);
             }
             self.pages[k].conflict = true;
             self.paint_dot(k);
             return;
         }
-        self.reload(k, mtime, sender); // clean buffer follows the disk (also un-tombstones)
+        self.reload(k, mtime, sender); 
     }
 
     fn reload(&mut self, idx: usize, mtime: i64, sender: &ComponentSender<Self>) {
@@ -1633,16 +1318,14 @@ impl Editor {
             self.fs_binary(idx, sender);
             return;
         };
-        // cursor line/col + scroll value preserved across the seamless swap
-        let (line, col, scroll) = {
+                let (line, col, scroll) = {
             let pg = &self.pages[idx];
             let ins = pg.buf.get_insert();
             let it = pg.buf.iter_at_mark(&ins);
             (it.line(), it.line_offset(), pg.sw.vadjustment().value())
         };
         self.swap_text(idx, &text, sender);
-        // place_cursor clamped to the new buffer's shape
-        let pg = &mut self.pages[idx];
+                let pg = &mut self.pages[idx];
         let n = pg.buf.line_count();
         if let Some(mut it) = pg.buf.iter_at_line(line.min(n - 1)) {
             it.forward_chars(col.min((it.chars_in_line() - 1).max(0)));
@@ -1662,8 +1345,7 @@ impl Editor {
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    /// fresh buffer (style + language carried over); the view keeps its place
-    fn swap_text(&mut self, idx: usize, text: &str, sender: &ComponentSender<Self>) {
+        fn swap_text(&mut self, idx: usize, text: &str, sender: &ComponentSender<Self>) {
         let (sch, lang) = {
             let pg = &self.pages[idx];
             (pg.buf.style_scheme(), pg.buf.language())
@@ -1675,7 +1357,7 @@ impl Editor {
         if let Some(l) = lang {
             nb.set_language(Some(&l));
         }
-        nb.set_modified(false); // born modified (invariant) — a reload must not raise the dot
+        nb.set_modified(false); 
         let snd = sender.clone();
         nb.connect_modified_changed(move |_| snd.input(EditorMsg::StateTick));
         let pg = &mut self.pages[idx];
@@ -1684,10 +1366,7 @@ impl Editor {
     }
 
     fn fs_tombstone(&mut self, idx: usize, sender: &ComponentSender<Self>) {
-        // file gone while open: italic, dimmed tab; a CLEAN buffer becomes the
-        // tombstone note, a DIRTY one keeps the user's text (Ctrl+S recreates
-        // the file). A later re-created file un-tombstones via reload.
-        if self.pages[idx].fs == FileState::Deleted {
+                                if self.pages[idx].fs == FileState::Deleted {
             return;
         }
         {
@@ -1705,11 +1384,7 @@ impl Editor {
     }
 
     fn fs_binary(&mut self, idx: usize, sender: &ComponentSender<Self>) {
-        // disk content unreadable: the buffer could never round-trip it, so
-        // freeze the view and note why. The unmodified note can never be saved
-        // back over the binary file (dirty save guard); a later readable file
-        // un-freezes via reload.
-        if self.pages[idx].fs == FileState::Binary {
+                                        if self.pages[idx].fs == FileState::Binary {
             return;
         }
         {
@@ -1730,8 +1405,7 @@ impl Editor {
         self.pages[idx].buf.set_modified(false);
     }
 
-    /// muted italic whole-buffer tag (placeholder notes)
-    fn tag_muted(buf: &sourceview5::Buffer) {
+        fn tag_muted(buf: &sourceview5::Buffer) {
         let tag = gtk::TextTag::builder()
             .foreground_rgba(&gtk::gdk::RGBA::parse("#5a6375").unwrap())
             .style(gtk::pango::Style::Italic)
@@ -1750,14 +1424,13 @@ impl Editor {
                 None => p.to_string_lossy().into_owned(),
             })
             .collect();
-        // index, not a path; restore re-clamps via min(saved, n-1)
-        let active_tab = self.nb.current_page().map(i64::from).unwrap_or(0);
+                let active_tab = self.nb.current_page().map(i64::from).unwrap_or(0);
         EditorSnapshot { open_tabs, active_tab }
     }
 
 }
 
-#[allow(deprecated)] // 4.10-deprecated upstream (S3 polish)
+#[allow(deprecated)] 
 fn discard_dialog(win: &gtk::Window, text: &str) -> gtk::MessageDialog {
     let d = gtk::MessageDialog::builder()
         .transient_for(win)
@@ -1769,17 +1442,7 @@ fn discard_dialog(win: &gtk::Window, text: &str) -> gtk::MessageDialog {
     d
 }
 
-// diff-page pairing law (2026-10-13, replaces the "placeholder
-// swap at first allocation" story): a View owns BOTH its adjustments from
-// construction; the ScrolledWindow binds those very objects to its
-// scrollbars (adjtrace: view-getter == sw-getter — identity measured held
-// across refresh_diff renewals — the only-buffer-swap contract); GTK's
-// notify::allocation NEVER fires on this build, so linking hooks ONCE at
-// open (LinkedAxes dedupe) and never retries — the notify/idle
-// retries were measured inert and deleted.
 
-/// fresh Gdk.RGBA() (transparent) that parse() fills in
-/// place; a bad hex stays transparent (an invisible tag, not a panic)
 fn rgba(hexcol: &str) -> gtk::gdk::RGBA {
     let mut c = gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0);
     if let Ok(p) = gtk::gdk::RGBA::parse(hexcol) {
@@ -1788,9 +1451,8 @@ fn rgba(hexcol: &str) -> gtk::gdk::RGBA {
     c
 }
 
-/// capture the scroll fraction BEFORE a re-child
 fn frac_of(sw: &gtk::ScrolledWindow) -> f64 {
-    let adj = sw.vadjustment(); // inherent getter: non-Option (only views are)
+    let adj = sw.vadjustment(); 
     let span = (adj.upper() - adj.page_size()).max(0.0);
     if span > 0.0 {
         (adj.value() / span).min(1.0)
@@ -1799,16 +1461,8 @@ fn frac_of(sw: &gtk::ScrolledWindow) -> f64 {
     }
 }
 
-// measured law (broadway adjlaw probe): set_buffer's relayout RESETS the adj
-// value (100→0 even with a growing upper; 100→10 on an identical set_text) —
-// the reset rides the bounds-update burst of GtkAdjustment::changed, which is
-// synchronous within one frame. Re-apply the captured fraction on every changed
-// fire for a short window: the burst ends with frac*current-span in place
-// BEFORE paint — no top-flash, no timed race. The window expires, so no stale
-// frac sticks to later user scrolling (value changes never fire changed).
-// Unallocated page: nothing fires; when it maps, the bounds change re-applies.
 fn restore_frac(sw: &gtk::ScrolledWindow, frac: f64) {
-    let adj = sw.vadjustment(); // inherent getter: non-Option
+    let adj = sw.vadjustment(); 
     let id = adj.connect_changed(move |a| {
         let span = (a.upper() - a.page_size()).max(0.0);
         if span > 0.0 {
@@ -1817,20 +1471,10 @@ fn restore_frac(sw: &gtk::ScrolledWindow, frac: f64) {
     });
     let adj2 = adj.clone();
     glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
-        adj2.disconnect(id); // window expired — later bounds changes are the user's business
+        adj2.disconnect(id); 
     });
 }
 
-/// hide a ScrolledWindow's scrollbar WIDGETS while keeping the viewport
-/// clamped and scrollable — filtered to the given orientations. NOT
-/// PolicyType::Never (unclamps the child — window grew to the content
-/// height, measured 2026-10-13) and NOT css `display: none` (this GTK has no
-/// `display` property — the theme parser rejects it, measured in the
-/// probe13-19 logs), both attempted and rolled back same day.
-/// Widget-visibility walk = the menu-button-arrow walk pattern (CLAUDE.md).
-/// GTK's overlay reveal is css-class/opacity machinery, not set_visible, so a
-/// one-shot hide sticks — the ProbeDiffScroll asserts re-check AFTER driving
-/// the scroll for exactly that.
 fn hide_scrollbars(sw: &gtk::ScrolledWindow, axes: &[gtk::Orientation]) {
     let mut c = sw.first_child();
     while let Some(w) = c {
@@ -1844,13 +1488,6 @@ fn hide_scrollbars(sw: &gtk::ScrolledWindow, axes: &[gtk::Orientation]) {
     }
 }
 
-/// PROBE-ONLY (ALPACA_PROBE_S2, chain step 9 — ~2s post-open, PRE-switch:
-/// step 12's SetWorkspace closes every page and step 4 was measured racy on
-/// the live display, 2026-10-13): the before side's scrolled window is truly
-/// chrome-free (its internal GtkScrollbar widgets walked to !visible AFTER
-/// the pairing drives below — GTK's overlay reveal must not resurrect them),
-/// its policies still Automatic (Never would unclamp — see open_diff), and
-/// BOTH pairing directions settle at equal values per axis.
 fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
     let ok = |name: String, got: bool| {
         println!("PROBE assert: diff-{name}: {}", if got { "PASS" } else { "FAIL" });
@@ -1866,12 +1503,7 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
         }
         out
     };
-    // sw's inherent getters are non-Option (the real adjs); the pairing hooks
-    // the same objects through the views. Assert the settled value, not the
-    // set target: the narrower side caps both (feedback settles = equal).
-    // Skip an axis when EITHER side can't span (vacuous equalities mask a
-    // dead pairing); drive and check r→l AND l→r — the user wheels either.
-    for (axis, src, dst) in [
+                        for (axis, src, dst) in [
         ("v", dw.sw_r.vadjustment(), dw.sw_l.vadjustment()),
         ("h", dw.sw_r.hadjustment(), dw.sw_l.hadjustment()),
     ] {
@@ -1886,26 +1518,17 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
         dst.set_value(dspan.min(60.0));
         ok(format!("sync-{axis}-lr"), (src.value() - dst.value()).abs() < 0.5);
     }
-    // bar visibility AFTER the drives (overlay reveal resurrection check) —
-    // ≥2 on each side so an unexpected GTK child-shape change reads FAIL, not
-    // a vacuous pass.
-    let bars_l = bars(&dw.sw_l);
+                let bars_l = bars(&dw.sw_l);
     ok(
         "bars-l".into(),
         bars_l.len() >= 2 && bars_l.iter().all(|b| !b.is_visible()),
     );
     ok("policy-v".into(), dw.sw_l.vscrollbar_policy() == gtk::PolicyType::Automatic);
     ok("policy-h".into(), dw.sw_l.hscrollbar_policy() == gtk::PolicyType::Automatic);
-    // merged bar (Task 3): one Scrollbar under the pair, bound to sw_r's
-    // (stable-identity) hadj — the bind is checked by identity so a detached
-    // adjustment (the placeholder RED build) reads FAIL, and the drive below
-    // proves the whole chain bar→sw_r→(pairing)→sw_l. gtk4-rs' adjustment()
-    // getter is non-Option: an unbound bar carries a fresh default adj.
-    let badj = dw.bar.adjustment();
+                        let badj = dw.bar.adjustment();
     let dr = dw.sw_r.hadjustment();
     ok("bar-adj".into(), format!("{badj:?}") == format!("{dr:?}"));
-    // bars-r: h hidden (merged bar replaced it), v kept
-    let bars_r = bars(&dw.sw_r);
+        let bars_r = bars(&dw.sw_r);
     let r_h = bars_r
         .iter()
         .find(|b| b.orientation() == gtk::Orientation::Horizontal);
@@ -1917,15 +1540,12 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
         r_h.map(|b| !b.is_visible()).unwrap_or(false)
             && r_v.map(|b| b.is_visible()).unwrap_or(false),
     );
-    // the standalone h bar's styling classes (capture rig: it must inherit
-    // the reference v bar's set — see open_diff)
-    println!(
+            println!(
         "PROBE classes: ref-v={:?} bar={:?}",
         r_v.map(|b| b.css_classes()),
         dw.bar.css_classes()
     );
-    // driving the MERGED bar must carry BOTH panes (h via the bar's bound adj)
-    let span = (badj.upper() - badj.page_size()).max(0.0);
+        let span = (badj.upper() - badj.page_size()).max(0.0);
     if span > 0.0 {
         badj.set_value(span.min(60.0));
         ok(
@@ -1935,43 +1555,23 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
     } else {
         println!("PROBE assert: diff-bar-drive: SKIPPED (no span/unbound)");
     }
-    // paned divider (Task 2): assert the one-shot 50% init (rides the sw's
-    // hadj 'changed' → idle set) landed and holds: position ≈ half of the
-    // paned's live allocation.
-    let pw = dw.paned.allocated_width() as f64;
+                let pw = dw.paned.allocated_width() as f64;
     ok(
         "paned-50".into(),
         pw > 0.0 && (dw.paned.position() as f64 - pw / 2.0).abs() <= 4.0,
     );
-    // number panes (Task 4): row counts 1:1 + the shared-vadjustment lockstep
-    // law — the num view's vadjustment IS its main's object (GTK's sw adopts
-    // the child's adj objects; sharing the OBJECT is lockstep with no push
-    // races and restore_frac keeps working on the one shared adj). Row
-    // height parity rides the views' own naturals: same line-box params
-    // must give the same total height, or the numbers point at wrong rows.
-    ok(
+                            ok(
         "num-rows".into(),
         dw.num_l.buffer().line_count() == view_l.buffer().line_count()
             && dw.num_r.buffer().line_count() == dw.v_r.buffer().line_count(),
     );
-    // full-file sides (Task 1 2026-10-14): huge-ctx diff covers the entire
-    // file, so the first data row IS file line 1 (the old -U3 hunks started
-    // at 2+ on this fixture) — sentinel that the -U switch stays put
-    let buf_l = dw.num_l.buffer();
+                let buf_l = dw.num_l.buffer();
     let t = buf_l.text(&buf_l.start_iter(), &buf_l.end_iter(), true);
     ok(
         "num-filestart".into(),
         t.split('\n').nth(1).map(str::trim) == Some("1"),
     );
-    // number panes' widths (measured 2026-10-14 live-render bug, user shot:
-    // an sw's natural for a scrollable child ≈ its MINIMUM → under hexpand'd
-    // siblings the columns collapsed to 0px and no digits painted — the old
-    // asserts counted rows and compared adj identity, never width). NOW the
-    // pane is stamped from the pango-rendered widest field, so the LIVE
-    // allocation must cover field px + the view's left margin (the old floor
-    // 20 passed while digits were clipped mid-glyph; the h bar is hidden —
-    // an under-measure here can't be recovered by hand-scrolling).
-    let field_w = |v: &sourceview5::View| -> i32 {
+                                    let field_w = |v: &sourceview5::View| -> i32 {
         let buf = v.buffer();
         let n = buf
             .text(&buf.start_iter(), &buf.end_iter(), true)
@@ -1981,7 +1581,7 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
             .unwrap_or(2)
             .max(2);
         let (px, _) = v.create_pango_layout(Some(&"0".repeat(n))).pixel_size();
-        px + 4 // + left_margin(4)
+        px + 4 
     };
     ok(
         "num-width".into(),
@@ -2005,9 +1605,6 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
     }
 }
 
-/// the number-column side (Task 4): a
-/// non-editable, unfocusable, fixed-narrow source view over the side's
-/// per-row file numbers; line-box params MUST track diff_side's (row 1:1).
 fn diff_num_view(no: &[u32]) -> sourceview5::View {
     let buf = sourceview5::Buffer::builder()
         .text(gitstatus::diff_num_text(no))
@@ -2024,33 +1621,12 @@ fn diff_num_view(no: &[u32]) -> sourceview5::View {
         .build()
 }
 
-/// the fixed number pane's width, from the RENDERED field width (2026-10-14
-/// clip fix, user shot: a digit was cut mid-glyph at the pane's clip edge —
-/// the sw's h bar is hidden so nothing recovers). The old view.measure() at
-/// open time under-reported the mono field; a pango layout over the widest
-/// padded field reads the view's css-resolved font (.alpaca-mono) directly.
-/// Used at open AND on renewal (a refreshed side can grow a digit).
-/// ponytail: relies on the css font resolving at measure time — probe
-/// assert `num-width` fails loudly if it ever drifts (see the chain).
 fn diff_num_pane_width(no: &[u32], view: &sourceview5::View) -> i32 {
-    let probe = "0".repeat(gitstatus::diff_num_field_width(no)); // mono digits uniform
+    let probe = "0".repeat(gitstatus::diff_num_field_width(no)); 
     let (px, _) = view.create_pango_layout(Some(&probe)).pixel_size();
-    (px + 4 + 4).max(24) // left_margin 4 + antialias slack 4
+    (px + 4 + 4).max(24) 
 }
 
-/// the diff scroll-link machinery — drive `dst`'s scroll
-/// from `v`'s, BOTH axes. True = a NEW link was made on either axis
-/// (equal-value set_value fires no changed signal → no loop, so the
-/// destination never needs a guard). Each axis links independently (see
-/// LinkedAxes). MEASURED 2026-10-13 (broadway probes + app probe runs
-/// on broadway AND the real display): a View owns BOTH its adjustments from
-/// construction — hooks land at open_diff's wire time, the sw binds those
-/// very objects to its scrollbars (adjtrace: view-getter == sw-getter,
-/// identity held across refresh_diff renewals), and GTK's notify::allocation
-/// NEVER fires for widgets here — the allocation-notify retry +
-/// idle-resync timers were measured inert and are gone. `linked` keeps the
-/// identity-dedup so a stray second call can't double-hook. Closed page:
-/// v → handler → dst is a DAG (no cycle); ownership frees the chain.
 fn diff_link(
     v: &sourceview5::View,
     dst: &sourceview5::View,
@@ -2062,10 +1638,7 @@ fn diff_link(
             l.v = Some(va.clone());
             let dst2 = dst.clone();
             va.connect_value_changed(move |a| {
-                // view adjustments exist from construction (measured r2); the
-                // ScrollableExt getter merely RETURNS Option on this API;
-                // equal-value set_value fires nothing anyway
-                if let Some(dadj) = dst2.vadjustment() {
+                                                                if let Some(dadj) = dst2.vadjustment() {
                     dadj.set_value(a.value());
                 }
             });
@@ -2084,11 +1657,6 @@ fn diff_link(
     }
 }
 
-// PROBE-ONLY (ALPACA_PROBE_S2) — ProbeDiffScroll's first run arms the
-// renewal sweep: mutate the fixture on disk, drive RefreshDiffs directly
-// (deterministic landing — the 2s git-tick phase would be racy), then
-// re-assert on the settled page: covers refresh_diff's buffer+number swap
-// on a LIVE page (the frequently-run path: an open diff tab + a git tick).
 thread_local! {
     static PROBE_DIFF_SWEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -2100,9 +1668,9 @@ mod tests {
     #[test]
     fn readable_text_rules() {
         assert_eq!(readable_text(b"hello\nworld").as_deref(), Some("hello\nworld"));
-        assert!(readable_text(b"caf\xc3\xa9").is_some()); // valid UTF-8 non-ASCII opens
-        assert_eq!(readable_text(b"caf\xe9"), None); // invalid UTF-8
-        assert_eq!(readable_text(b"a\0b"), None); // NUL truncation trap
-        assert_eq!(readable_text(b""), Some(String::new())); // empty file is fine
+        assert!(readable_text(b"caf\xc3\xa9").is_some()); 
+        assert_eq!(readable_text(b"caf\xe9"), None); 
+        assert_eq!(readable_text(b"a\0b"), None); 
+        assert_eq!(readable_text(b""), Some(String::new())); 
     }
 }

@@ -5,11 +5,9 @@ edition = "2024"
 
 [dependencies]
 relm4 = "0.11"
-# Version features must be enabled by the app (nothing else in the tree does):
-# without v4_10+ the ffi's accessible/at_context symbols stay cfg'd out and
-# gtk4's generated code fails on missing `gtk_accessible_*` fns.
-gtk4 = { version = "=0.11.5", features = ["v4_22"] } # matches system gtk 4.22.5
-gdk-pixbuf = "0.22" # badges: cached pixbufs for tree cells (gtk4 re-exports cairo)
+
+gtk4 = { version = "=0.11.5", features = ["v4_22"] }
+gdk-pixbuf = "0.22"
 sourceview5 = "0.11"
 vte4 = "0.10"
 libc = "0.2"

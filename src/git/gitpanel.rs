@@ -1,7 +1,3 @@
-//! GitPanel card — the file browser with git modes: the file tree, the
-//! changes view, the branch pill and a status row behind
-//! one chrome. The tree's chrome was trimmed here (Task 6); this file owns
-//! head/search/mode-tabs/stack/status-row and the git status plumbing.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -15,16 +11,10 @@ use crate::fs::filetree::{FileTree, FileTreeMsg, FileTreeOutput};
 use crate::git::gitstatus::{self, GitStatusKind, Rows};
 use crate::git::gitview::{ChangesView, GitViewMsg, GitViewOutput};
 
-/// Probe-only child driver: T8's probe sends child inputs through the panel so
-/// probe-driven flights behave exactly like real ones (child outputs still
-/// route through the panel's receivers). Production never constructs it.
-/// NOT Clone (FileTreeMsg carries TreePath) — the probe sends each value once.
 #[derive(Debug)]
 pub enum ProbeChild {
     Changes(GitViewMsg),
-    /// probe drives the filetree directly (WB save-run's expand step; each
-    /// value sent once, no Clone)
-    Tree(FileTreeMsg),
+            Tree(FileTreeMsg),
 }
 
 #[derive(Debug)]
@@ -33,45 +23,26 @@ pub enum GitPanelMsg {
     ModeTree,
     ModeChanges,
     EntryChanged(String),
-    /// Ctrl+Shift+F → put the caret in the shared search entry. No text
-    /// touched here (set_text("") queues the delayed Search("") wipe) — the
-    /// entry routes itself: EntryChanged already fans out per mode
-    /// (tree → FileTreeMsg::Search, changes → GitViewMsg::Filter).
-    FocusSearch,
-    /// gitview + branchmenu status reports land here (window wiring's target)
-    ChildStatus(GitStatusKind, String),
+                    FocusSearch,
+        ChildStatus(GitStatusKind, String),
     ChildBusy(bool),
     Count(usize),
-    /// the 2s probe timer's single recurring tick
-    ProbeTick,
-    /// The ok pulse's timeout fires once per generation token (the gen IS the
-    /// token); a PulseFired for a superseded gen is discarded.
-    PulseFired(u64),
-    /// HEAD monitor + window focus hook (T7 wires the focus arm)
-    RefreshGit,
-    /// T7's flush chain: editor Flushed → App → StartCommit relay
-    StartCommit {
+        ProbeTick,
+            PulseFired(u64),
+        RefreshGit,
+        StartCommit {
         root: PathBuf,
         paths: Vec<String>,
         msg: String,
     },
-    /// probe-only child proxy — production never sends it
-    ProbeChild(ProbeChild),
-    /// probe-only: fill the real search entry so its (delayed) search-changed
-    /// signal fires the REAL EntryChanged route; production never sends it
-    ProbeEntry(String),
-    /// PROBE-ONLY (ALPACA_PROBE_S3) — filetree min-width assert; production
-    /// never sends it
-    TreeMin,
-    /// boot restore (workbench step): saved tree-open dirs (abs) + changes
-    /// closed dirs (rel). Workspace::new sends it right after SetRoot.
-    SetTreeState {
+        ProbeChild(ProbeChild),
+            ProbeEntry(String),
+            TreeMin,
+            SetTreeState {
         expanded: Vec<String>,
         closed: Vec<String>,
     },
-    /// the DEFERRED replay of the tree half — the idle hops past SetRoot's
-    /// queued EntryChanged("") (its Search("") wipe), see the handler
-    RestoreTree(Vec<String>),
+            RestoreTree(Vec<String>),
 }
 
 #[derive(Debug)]
@@ -86,25 +57,18 @@ pub enum GitPanelOutput {
         paths: Vec<String>,
         msg: String,
     },
-    /// T7 consumes: diff-tab hook (editor RefreshDiffs)
-    GitChanged(Rows),
+        GitChanged(Rows),
 }
 
 #[derive(Debug)]
 pub enum GitPanelCommand {
     ProbeLanded {
         root: String,
-        /// branch_of moved INTO the flight (it's a `.git/HEAD` read, not a
-        /// subprocess — was recomputed sync on the UI thread at every landing)
-        branch: Option<String>,
+                        branch: Option<String>,
         raw: Option<Rows>,
         ahead: usize,
     },
-    /// the sync path's flight (set_root, HEAD monitor, pulse end, window
-    /// focus): this used to be one blocking `git status` + `ahead`; a slow or
-    /// hung git no longer freezes focus-in / mode entry. A workspace switch
-    /// mid-flight drops the landing (the probe's root guard).
-    StatusLanded {
+                    StatusLanded {
         root: String,
         branch: Option<String>,
         raw: Option<Rows>,
@@ -114,15 +78,11 @@ pub enum GitPanelCommand {
 
 pub struct GitPanel {
     root: Option<PathBuf>,
-    /// the card mode — "tree" | "changes"
-    mode: &'static str,
-    /// a commit/push flight owns the row
-    git_busy: bool,
+        mode: &'static str,
+        git_busy: bool,
     probe_busy: bool,
     changes_busy: bool,
-    /// the status pulse's generation counter; SourceId::
-    /// remove is forbidden (timer law) and cancel happens BY GENERATION
-    pulse_gen: u64,
+            pulse_gen: u64,
     head_mon: Option<gio::FileMonitor>,
     entry: gtk::SearchEntry,
     dot: gtk::Box,
@@ -132,8 +92,7 @@ pub struct GitPanel {
     ws_btn: gtk::Button,
     ch_btn: gtk::Button,
     stack: gtk::Stack,
-    // stored controllers — T8's probe drives child inputs through them
-    ft: relm4::Controller<FileTree>,
+        ft: relm4::Controller<FileTree>,
     changes: relm4::Controller<ChangesView>,
     branch: relm4::Controller<BranchMenu>,
 }
@@ -149,20 +108,13 @@ impl Component for GitPanel {
         #[root]
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
-            set_css_classes: &["alpaca-card"], // card css MOVED here from filetree (block 11)
-            set_overflow: gtk::Overflow::Hidden, // clip children to the card's rounded corners
+            set_css_classes: &["alpaca-card"], 
+            set_overflow: gtk::Overflow::Hidden, 
         }
     }
 
     fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        // ---- child components FIRST (their widgets feed the assembly below)
-        // each receiver routes the child's outputs through the panel as real
-        // inputs/outputs — the same path real flights take (T8's ProbeChild
-        // rides it too)
-        // sub-component bridges. close law: an independent sub-runtime can
-        // outlive this panel's own shutdown by turns (relm4 select! races) —
-        // its late output must not input() into a dead parent channel.
-        let snd_ft = sender.clone();
+                                                                let snd_ft = sender.clone();
         let ft = FileTree::builder().launch(()).connect_receiver(move |_, out| match out {
             FileTreeOutput::OpenFile(p) => {
                 let _ = snd_ft.output(GitPanelOutput::OpenFile(p));
@@ -195,8 +147,7 @@ impl Component for GitPanel {
             }
         });
 
-        // ---- card chrome
-        let head = gtk::Box::builder()
+                let head = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
             .margin_start(14)
@@ -223,21 +174,13 @@ impl Component for GitPanel {
             .margin_end(12)
             .margin_bottom(6)
             .build();
-        // 30px floor: the entry renders ~36 (Breeze searchentry min, swept to
-        // the floor in the app CSS) — the request only keeps it honest below that
-        entry.set_size_request(-1, 30);
+                        entry.set_size_request(-1, 30);
         let snd_eg = sender.clone();
         entry.connect_search_changed(move |e| {
             snd_eg.input(GitPanelMsg::EntryChanged(e.text().to_string()));
         });
 
-        // WORKSPACE / CHANGES mode tabs (spec §1): text-only section-label type.
-        // has_frame(false) + the transparent .alpaca-tabbtn rule keep them bare
-        // text; set_mode moves the `alpaca-on` class as the selection. Full
-        // width: the hairline under this strip is the box's own border-bottom —
-        // margins sit OUTSIDE the border box (measured breadcrumb gotcha), so
-        // the inset is padding and margin_top only.
-        let btns = gtk::Box::builder()
+                                                        let btns = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(10)
             .margin_top(6)
@@ -247,14 +190,14 @@ impl Component for GitPanel {
         let ws_btn = gtk::Button::builder()
             .label("WORKSPACE")
             .has_frame(false)
-            .css_classes(["alpaca-tabbtn", "alpaca-on"]) // tree mode on by default
+            .css_classes(["alpaca-tabbtn", "alpaca-on"]) 
             .build();
         let ch_btn = gtk::Button::builder()
             .label("CHANGES")
             .has_frame(false)
             .css_classes(["alpaca-tabbtn"])
             .build();
-        ch_btn.set_visible(false); // outside-repo policy (§2); _refresh_status decides
+        ch_btn.set_visible(false); 
         let snd_ws = sender.clone();
         ws_btn.connect_clicked(move |_| snd_ws.input(GitPanelMsg::ModeTree));
         let snd_cm = sender.clone();
@@ -262,10 +205,7 @@ impl Component for GitPanel {
         btns.append(&ws_btn);
         btns.append(&ch_btn);
 
-        // mode host (§1): zero-transition swap between the tree and the changes
-        // view. vexpand on the Stack — GtkBox gives non-expanding children only
-        // their minimum, and the card must fill below the tab row
-        let stack = gtk::Stack::builder()
+                                let stack = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::None)
             .vexpand(true)
             .build();
@@ -282,7 +222,7 @@ impl Component for GitPanel {
             .margin_bottom(0)
             .css_classes(["alpaca-statusbar"])
             .build();
-        bar.append(branch.widget()); // branchbtn rides FIRST in the row
+        bar.append(branch.widget()); 
         let dot = gtk::Box::builder()
             .css_classes(["alpaca-status-dot"])
             .valign(gtk::Align::Center)
@@ -301,7 +241,7 @@ impl Component for GitPanel {
             .build();
         git_label.set_visible(false);
         let count_label = gtk::Label::new(None);
-        let spacer = gtk::Box::builder().hexpand(true).build(); // spacer pushes file count right
+        let spacer = gtk::Box::builder().hexpand(true).build(); 
         bar.append(&dot);
         bar.append(&spin);
         bar.append(&git_label);
@@ -314,21 +254,9 @@ impl Component for GitPanel {
         root.append(&stack);
         root.append(&bar);
 
-        // ---- live git probe (2s recurrence; timer law — ms form)
-        // every 2s the porcelain status runs in a worker thread and lands on
-        // the UI thread — covers agent edits anywhere in the tree (dir monitors
-        // only see dirs we've opened). Skipped while a flight owns the row or a
-        // probe/commit is busy.
-        let snd_tick = sender.clone();
-        // LOCAL: the closure is main-thread-only and does NOT need Send
-        // (GitPanelMsg contains TreePath via ProbeChild — unsafe for a
-        // cross-thread Sender; the local sources dodge the bound entirely)
-        glib::timeout_add_local(Duration::from_millis(2000), move || {
-            // close-shutdown law: relm4's ComponentSender::input PANICS on a
-            // dropped runtime — a workspace close drops this panel while the
-            // source lives. send() reports instead; a dead send retires the
-            // timer (the forever probe's only stop condition).
-            if snd_tick.input_sender().send(GitPanelMsg::ProbeTick).is_err() {
+                                                let snd_tick = sender.clone();
+                                glib::timeout_add_local(Duration::from_millis(2000), move || {
+                                                            if snd_tick.input_sender().send(GitPanelMsg::ProbeTick).is_err() {
                 return glib::ControlFlow::Break;
             }
             glib::ControlFlow::Continue
@@ -374,55 +302,31 @@ impl Component for GitPanel {
             GitPanelMsg::ProbeTick => self.probe_tick(&sender),
             GitPanelMsg::PulseFired(g) => {
                 if g == self.pulse_gen {
-                    // End of the ok pulse: stop owning the row, re-sync to the
-                    // real state (the gen check discards stale ids)
-                    self.refresh_status(&sender);
+                                                            self.refresh_status(&sender);
                 }
             }
             GitPanelMsg::RefreshGit => self.refresh_status(&sender),
             GitPanelMsg::StartCommit { root, paths, msg } => {
-                self.changes.emit(GitViewMsg::StartCommit { root, paths, msg }); // T7's flush chain lands here
+                self.changes.emit(GitViewMsg::StartCommit { root, paths, msg }); 
             }
             GitPanelMsg::ProbeChild(pc) => match pc {
                 ProbeChild::Changes(m) => self.changes.emit(m),
                 ProbeChild::Tree(m) => self.ft.emit(m),
             },
             GitPanelMsg::SetTreeState { expanded, closed } => {
-                // gitview half lands NOW: `closed` replays from fill()'s
-                // expand pass on every later changes-mode fill, and gitview's
-                // own SetRoot (queued before this, FIFO) has already cleared
-                // its stale set
-                self.changes.emit(GitViewMsg::SetClosed(closed));
-                // filetree half must NOT forward directly, as belt for the
-                // re-root-with-entry-text case: set_root's
-                // entry.set_text("") is a NO-OP on the boot's empty entry
-                // (identical text emits nothing), so no wipe is queued
-                // today — but any future path that re-roots a panel whose
-                // entry holds text would queue EntryChanged("") → ft
-                // Search("") → populate_root (clears store+open) ~150ms
-                // later (search-delay), AFTER an idle direct forward, and
-                // erase it. The deferred idle keeps the restore past any
-                // such wipe (the same sequencing filetree's own search-clear
-                // restore uses).
-                let snd = sender.clone();
+                                                                                self.changes.emit(GitViewMsg::SetClosed(closed));
+                                                                                                                                                                                                let snd = sender.clone();
                 glib::idle_add_local_once(move || {
-                    // close law: the idle can outlive the runtime (guarded)
-                    if snd.input_sender().send(GitPanelMsg::RestoreTree(expanded)).is_err() {
-                        // runtime gone — restore dies with the session, fine
-                    }
+                                        if snd.input_sender().send(GitPanelMsg::RestoreTree(expanded)).is_err() {
+                                            }
                 });
             }
             GitPanelMsg::RestoreTree(expanded) => {
-                // the wipe has drained by now; RestoreTree reexpands
-                // parents-first with lazy load_children (filetree's own tool)
-                if let Some(root) = self.root.clone() {
+                                                if let Some(root) = self.root.clone() {
                     self.ft.emit(FileTreeMsg::RestoreTree(root, expanded, 0.0));
                 }
             }
-            // probe-only: typing through the real entry — its delayed
-            // search-changed fires the same EntryChanged route a user's
-            // keystroke does
-            GitPanelMsg::ProbeEntry(t) => self.entry.set_text(&t),
+                                                GitPanelMsg::ProbeEntry(t) => self.entry.set_text(&t),
             GitPanelMsg::TreeMin => {
                 let min = self.ft.widget().measure(gtk::Orientation::Horizontal, -1).0;
                 let ok = min <= 170;
@@ -435,15 +339,12 @@ impl Component for GitPanel {
         match cmd {
             GitPanelCommand::ProbeLanded { root, branch, raw, ahead } => {
                 self.probe_busy = false;
-                // landing guard — same three terms; root compares as
-                // String vs Option: map the stored path first
-                let cur = self.root.as_ref().map(|p| p.to_string_lossy().into_owned());
+                                                let cur = self.root.as_ref().map(|p| p.to_string_lossy().into_owned());
                 if cur.as_deref() != Some(root.as_str()) || self.git_busy || self.changes_busy {
                     return;
                 }
                 self.paint_status(branch.as_deref(), raw.as_ref().map(|r| r.len()));
-                // order: paint, then the hook, then the open view
-                if let Some(raw) = raw {
+                                if let Some(raw) = raw {
                     let _ = sender.output(GitPanelOutput::GitChanged(raw.clone()));
                     if self.mode == "changes" {
                         self.changes.emit(GitViewMsg::Apply { raw: Some(raw), ahead, keep: true });
@@ -451,16 +352,12 @@ impl Component for GitPanel {
                 }
             }
             GitPanelCommand::StatusLanded { root, branch, raw, ahead } => {
-                // workspace switched mid-flight → drop (the probe landing's root
-                // guard)
-                let cur = self.root.as_ref().map(|p| p.to_string_lossy().into_owned());
+                                                let cur = self.root.as_ref().map(|p| p.to_string_lossy().into_owned());
                 if cur.as_deref() != Some(root.as_str()) {
                     return;
                 }
                 self.paint_status(branch.as_deref(), raw.as_ref().map(|r| r.len()));
-                // git_busy NOT a drop condition: paint_status silently keeps the
-                // flight-owned row while the outputs still fire
-                if let Some(raw) = raw {
+                                                if let Some(raw) = raw {
                     let _ = sender.output(GitPanelOutput::GitChanged(raw.clone()));
                     if self.mode == "changes" {
                         self.changes.emit(GitViewMsg::Apply {
@@ -475,39 +372,25 @@ impl Component for GitPanel {
     }
 }
 
-// ---- git status plumbing ---------------------------------------------------
 
 impl GitPanel {
-    /// Both trees' expansion state as save-time data — filetree's open set
-    /// (abs paths) + gitview's closed set (rel paths). The workbench save
-    /// reads this; model access follows the panes.model().live_pids() law.
-    pub fn tree_state(&self) -> (Vec<String>, Vec<String>) {
+                pub fn tree_state(&self) -> (Vec<String>, Vec<String>) {
         (self.ft.model().open_dirs(), self.changes.model().closed_dirs())
     }
 
-    /// set_root, step for step.
-    fn set_root(&mut self, root: PathBuf, sender: &ComponentSender<Self>) {
+        fn set_root(&mut self, root: PathBuf, sender: &ComponentSender<Self>) {
         if let Some(m) = self.head_mon.take() {
-            m.cancel(); // monitors cancel at set_root top
+            m.cancel(); 
         }
         self.root = Some(root.clone());
-        // fires EntryChanged("") queued — rely on that same fire (the old
-        // search-changed ran synchronously; the filetree's own queued
-        // Search("") repeats match — see its set_root comment)
-        self.entry.set_text("");
-        self.ft.emit(FileTreeMsg::SetRoot(root.clone())); // populate + count
-        self.set_mode("tree"); // a fresh workspace opens on the file tree (spec §1)
+                                self.entry.set_text("");
+        self.ft.emit(FileTreeMsg::SetRoot(root.clone())); 
+        self.set_mode("tree"); 
         self.changes.emit(GitViewMsg::SetRoot(root.clone()));
-        // fixed latent bug: the branchmenu root input was NEVER fed —
-        // T4's fix lands here
-        self.branch.emit(BranchMenuMsg::SetRoot(Some(root.clone())));
+                        self.branch.emit(BranchMenuMsg::SetRoot(Some(root.clone())));
         let head = root.join(".git").join("HEAD");
         if head.is_file() {
-            // the HEAD monitor's changed → refresh; Rust's single
-            // RefreshGit input covers monitor + focus (T7 wires the focus arm)
-            // editor's watcher law: absent/unwatchable → no monitor; the 2s
-            // probe keeps the status honest (degrade, never fail)
-            if let Ok(mon) = gio::File::for_path(&head)
+                                                            if let Ok(mon) = gio::File::for_path(&head)
                 .monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
             {
                 let snd = sender.clone();
@@ -518,12 +401,7 @@ impl GitPanel {
         self.refresh_status(sender);
     }
 
-    /// Search routing: tree mode filters the tree; changes mode
-    /// applies the needle to the EXISTING rows — filter(text) only,
-    /// no re-fetch; the mode-entry refresh
-    /// lives in set_mode (review fix-2: a `git status` + `rev-list` sync per
-    /// keystroke on the UI thread is a behavioral deviation).
-    fn entry_changed(&mut self, text: &str) {
+                        fn entry_changed(&mut self, text: &str) {
         if self.mode == "tree" {
             self.ft.emit(FileTreeMsg::Search(text.to_string()));
         } else {
@@ -531,8 +409,7 @@ impl GitPanel {
         }
     }
 
-    /// The probe tick's gate + probe thread (flight here).
-    fn probe_tick(&mut self, sender: &ComponentSender<Self>) {
+        fn probe_tick(&mut self, sender: &ComponentSender<Self>) {
         if self.probe_busy || self.git_busy || self.changes_busy {
             return;
         }
@@ -541,34 +418,21 @@ impl GitPanel {
         };
         self.probe_busy = true;
         sender.spawn_command(move |out| {
-            // probe-only fix-1 assert instrument: the wrapper times these
-            // lines — a landed commit must NOT keep this flight from firing
-            if std::env::var("ALPACA_PROBE_S2").is_ok() {
+                                    if std::env::var("ALPACA_PROBE_S2").is_ok() {
                 println!("PROBE probe-flight: root={root} ts={}", crate::ui::app::epoch_ms());
             }
-            // old-probe order restored: changes()/ahead() fired regardless of
-            // branch_of — a detached-HEAD repo still yields rows + GitChanged
-            // (gating on branch would silently drop those repos' diffs)
-            let raw = gitstatus::changes(&root); // snapshot: a workspace switch mid-flight drops it (guard in ProbeLanded)
+                                                let raw = gitstatus::changes(&root); 
             let ahead = if raw.is_some() { gitstatus::ahead(&root) } else { 0 };
             let branch = gitstatus::branch_of(&root);
             out.emit(GitPanelCommand::ProbeLanded { root, branch, raw, ahead });
         });
     }
 
-    /// show_git_status: busy → spinner + phase text; ok →
-    /// green dot pulse, the row re-syncs itself after 2s; err → red dot + the
-    /// error's first line, full git output as a tooltip. The busy guard keeps
-    /// mid-flight refreshes (HEAD monitor, mode switches) from clobbering the
-    /// spinner.
-    fn show_git_status(&mut self, kind: GitStatusKind, text: String, sender: &ComponentSender<Self>) {
-        self.pulse_gen += 1; // cancel BY GENERATION: a fresh state outranks a stale pulse
+                        fn show_git_status(&mut self, kind: GitStatusKind, text: String, sender: &ComponentSender<Self>) {
+        self.pulse_gen += 1; 
         let g = self.pulse_gen;
         self.git_busy = kind == GitStatusKind::Busy;
-        // the gate used to be re-evaluated per click — here it pushes the
-        // value on every status change (busy included,
-        // or the gate would stay open mid-flight)
-        self.branch.emit(BranchMenuMsg::Gate(!self.git_busy));
+                                self.branch.emit(BranchMenuMsg::Gate(!self.git_busy));
         if kind == GitStatusKind::Busy {
             self.spin.set_visible(true);
             self.spin.start();
@@ -587,10 +451,8 @@ impl GitPanel {
                 self.git_label.set_text(&text);
                 self.git_label.set_tooltip_text(Some(""));
                 let snd = sender.clone();
-                // g is closure-baked from this call — the gen IS the token
-                glib::timeout_add_local(Duration::from_millis(2000), move || {
-                    // dead-runtime send PANICS via input() — same close law
-                    if snd.input_sender().send(GitPanelMsg::PulseFired(g)).is_err() {
+                                glib::timeout_add_local(Duration::from_millis(2000), move || {
+                                        if snd.input_sender().send(GitPanelMsg::PulseFired(g)).is_err() {
                         return glib::ControlFlow::Break;
                     }
                     glib::ControlFlow::Break
@@ -602,17 +464,11 @@ impl GitPanel {
                 let tip: Option<String> = if text.is_empty() { None } else { Some(text) };
                 self.git_label.set_tooltip_text(tip.as_deref());
             }
-            GitStatusKind::Busy => unreachable!(), // handled above
+            GitStatusKind::Busy => unreachable!(), 
         }
     }
 
-    /// Sync path (set_root, HEAD monitor, pulse end, window focus) as a
-    /// command flight — this used to be one blocking `git status` (10s) +
-    /// `ahead` (5s) on the UI thread; the shape is the probe flight's. (No seq
-    /// token: two overlapping refreshes may land out of order — the row
-    /// self-heals on the next 2s probe; serializing everything would trade
-    /// that risk for a full UI freeze.)
-    fn refresh_status(&mut self, sender: &ComponentSender<Self>) {
+                            fn refresh_status(&mut self, sender: &ComponentSender<Self>) {
         let Some(root) = self.root.as_ref().map(|p| p.to_string_lossy().into_owned()) else {
             return;
         };
@@ -624,29 +480,24 @@ impl GitPanel {
         });
     }
 
-    /// Statusbar rendering only — git data comes in from callers (the sync
-    /// path above or the live probe's worker thread). The commit/push flight
-    /// owns the row while busy; `git status` runs OFF-THREAD in both paths.
-    fn paint_status(&mut self, branch: Option<&str>, dirty: Option<usize>) {
+                fn paint_status(&mut self, branch: Option<&str>, dirty: Option<usize>) {
         if self.git_busy {
-            return; // commit/push flight owns the row (pulse re-syncs)
+            return; 
         }
         let is_git = branch.is_some();
         self.branch.emit(BranchMenuMsg::Update(branch.map(str::to_string)));
         self.dot.set_visible(is_git);
         self.git_label.set_visible(is_git);
-        self.spin.set_visible(false); // idle state: the dot, never the spinner
+        self.spin.set_visible(false); 
         self.ch_btn.set_visible(is_git);
         if !is_git && self.mode == "changes" {
-            self.set_mode("tree"); // repo vanished (HEAD deleted) while reading it
+            self.set_mode("tree"); 
         }
         if !is_git {
             return;
         }
-        self.git_label.set_tooltip_text(Some("")); // a past err's tooltip must not outlive the row's re-sync
-        // count = porcelain rows (untracked listed per-file, -z -uall) — same
-        // number the changes view shows; one git call feeds both
-        match dirty {
+        self.git_label.set_tooltip_text(Some("")); 
+                        match dirty {
             None => {
                 self.git_label.set_text("");
                 self.dot.set_visible(false);
@@ -664,11 +515,7 @@ impl GitPanel {
         }
     }
 
-    /// set_mode: swap the card between the file tree and the
-    /// changes view. Entering CHANGES re-syncs the list (§2 refresh trigger:
-    /// view becomes active); the selected tab's css class holds it bright,
-    /// hover brightens the idle one.
-    fn set_mode(&mut self, mode: &'static str) {
+                    fn set_mode(&mut self, mode: &'static str) {
         if mode == self.mode {
             return;
         }
@@ -687,18 +534,12 @@ impl GitPanel {
             Some("Filter changes…")
         });
         if mode == "tree" {
-            // the shared entry text survives the tab switch (and its view may
-            // be displaced by the last search): a needle re-filters the tree, an
-            // empty box restores the displaced sheet instead of leaving the
-            // last flat results stuck with no way back (the tree's
-            // Search("") = its populate+restore, one input)
-            let text = self.entry.text().to_string();
+                                                                        let text = self.entry.text().to_string();
             self.ft.emit(FileTreeMsg::Search(text));
         }
         if mode == "changes" {
-            self.changes.emit(GitViewMsg::Refresh { keep: true }); // fresh data (re-applies the view's own needle)
-            // entry text outranks a stale needle (tree-mode search wrote it)
-            let text = self.entry.text().to_string();
+            self.changes.emit(GitViewMsg::Refresh { keep: true }); 
+                        let text = self.entry.text().to_string();
             self.changes.emit(GitViewMsg::Filter(text));
         }
     }

@@ -1,16 +1,4 @@
-//! CHANGES view: git-change tree (group_tree rows) with checkboxes and a
-//! commit bar. Pure helpers testable displayless;
-//! widget-layer is gated by the T8 probe (S1 precedent).
-//!
-//! The store is REBUILT per refresh (the filetree
-//! invariant: value-only updates are safe under expanded rows, structural
-//! mutation collapses them — surgical patching is off the table here).
 
-// The module's whole API surface is consumed by GitPanel and app wiring
-// (proven by the landed callers). NO dead-code allowance survives the T4
-// sweep — the deprecation allowance below is LIVE, not transitional: the
-// tree-store/iter code uses 81 4.10-deprecated gtk methods (TreeModelExt::iter
-// et al., measured — deleting the allow resurrects all 81 warnings).
 #![allow(deprecated)]
 
 use std::cell::Cell;
@@ -25,10 +13,6 @@ use crate::fs::filetree::icon_of;
 use crate::git::gitstatus::{self, FlightOut, GitStatusKind, Rows};
 use crate::fs::treehover::{HoverTree, toggle_hit};
 
-/// CHANGES strip icon law — WORKSPACE parity (filetree.rs push_row): chip art
-/// when the extension has a badge, else the themed symbolic fallback when it
-/// doesn't (`.rs`, no ext, …). Dirs keep folder art; blank only if that art
-/// itself failed (embedded asset — never misses).
 pub fn strip_icons(name: &str, is_dir: bool) -> (Option<gdk_pixbuf::Pixbuf>, Option<&'static str>) {
     let art = if is_dir {
         badges::folder_pixbuf()
@@ -40,8 +24,6 @@ pub fn strip_icons(name: &str, is_dir: bool) -> (Option<gdk_pixbuf::Pixbuf>, Opt
     (art, fallback)
 }
 
-/// Letter colors — M amber, A/U green, D red,
-/// R blue (+T typechange), C conflict red (I1).
 pub fn letter_color(letter: &str) -> &'static str {
     match letter {
         "M" => "#f2c94c",
@@ -49,12 +31,10 @@ pub fn letter_color(letter: &str) -> &'static str {
         "D" => "#ef4444",
         "R" | "T" => "#2f80ed",
         "C" => "#ef4444",
-        _ => "#f2c94c", // LETTER_DEFAULT
+        _ => "#f2c94c", 
     }
 }
 
-/// Filter — name/rel substring, case-insensitive; empty needle →
-/// the same Vec (identity).
 pub fn filtered(rows: &Rows, needle: &str) -> Rows {
     let n = needle.trim().to_ascii_lowercase();
     if n.is_empty() {
@@ -69,9 +49,6 @@ pub fn filtered(rows: &Rows, needle: &str) -> Rows {
         .collect()
 }
 
-/// Toggle set law, decision-extracted: f flips; d/s use the
-/// visible-descendant law (all-under ⇒ clear, else add-all). Dir with no
-/// visible descendants → |= ∅ (Some, unchanged). Unknown kind → None.
 pub fn toggled_checked(
     kind: &str,
     rel: &str,
@@ -107,7 +84,6 @@ pub fn toggled_checked(
     Some(out)
 }
 
-// store column indexes (column i = the row layout index i)
 const COL_NAME: i32 = 0;
 const COL_REL: i32 = 1;
 const COL_KIND: i32 = 2;
@@ -135,14 +111,8 @@ pub enum GitViewMsg {
     RowCollapsed(gtk::TreePath),
     CommitClicked,
     StartCommit { root: PathBuf, paths: Vec<String>, msg: String },
-    /// boot restore (workbench step): the saved user-collapsed dir rels —
-    /// fill()'s expand pass replays them on every (re)fill, so no immediate
-    /// replay is needed (boot opens in tree mode; the first changes fill is
-    /// later)
-    SetClosed(Vec<String>),
-    /// probe-only: sets the commit-bar entry text (T8's step — the entry is a
-    /// user-typed widget; production never constructs this)
-    ProbeMsg(String),
+                    SetClosed(Vec<String>),
+            ProbeMsg(String),
 }
 
 #[derive(Debug, Clone)]
@@ -157,11 +127,7 @@ pub enum GitViewOutput {
 pub enum GitViewCommand {
     Phase,
     Landed(FlightOut),
-    /// the refresh flight's landing (the refresh used to run sync on the UI
-    /// thread — a slow/hung git no longer freezes CHANGES-mode entry or
-    /// commit-land re-sync). seq = newest request wins; root = stale-flight
-    /// drop on a workspace switch.
-    Refreshed { root: PathBuf, seq: u64, raw: Option<Rows>, ahead: usize, keep: bool },
+                    Refreshed { root: PathBuf, seq: u64, raw: Option<Rows>, ahead: usize, keep: bool },
 }
 
 pub struct ChangesView {
@@ -169,16 +135,14 @@ pub struct ChangesView {
     checked: BTreeSet<String>,
     visible: BTreeSet<String>,
     needle: String,
-    closed: HashSet<String>, // user-collapsed dir rels (dirs render OPEN unless closed)
+    closed: HashSet<String>, 
     rows: Rows,
     shown: Rows,
     ahead: usize,
-    /// refresh-flight token: the newest request wins (same law as the
-    /// branchmenu hover gens — no SourceId::remove)
-    refresh_seq: u64,
+            refresh_seq: u64,
     busy: bool,
     flight: bool,
-    tog_w: Cell<Option<i32>>, // toggle slot width, measured lazily once
+    tog_w: Cell<Option<i32>>, 
     store: gtk::TreeStore,
     view: HoverTree,
     col: gtk::TreeViewColumn,
@@ -199,35 +163,33 @@ impl Component for ChangesView {
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
             set_css_classes: &["alpaca-card"],
-            set_overflow: gtk::Overflow::Hidden, // clip children to rounded corners
+            set_overflow: gtk::Overflow::Hidden, 
         }
     }
 
     fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        // store columns — 12 base +2 here (rust
-        // only): WORKSPACE's symbolic fallback for artless exts (filetree law)
-        let store = gtk::TreeStore::new(&[
-            glib::Type::STRING,                // 0 name
-            glib::Type::STRING,                // 1 rel
-            glib::Type::STRING,                // 2 kind
-            glib::Type::STRING,                // 3 letter
-            gdk_pixbuf::Pixbuf::static_type(), // 4 chevron
-            gdk_pixbuf::Pixbuf::static_type(), // 5 badge
-            gdk_pixbuf::Pixbuf::static_type(), // 6 chip
-            glib::Type::BOOL,                  // 7 checked
-            glib::Type::BOOL,                  // 8 inconsist
-            glib::Type::BOOL,                  // 9 badge-vis
-            glib::Type::BOOL,                  // 10 chip-vis
-            glib::Type::BOOL,                  // 11 toggle-vis
-            glib::Type::STRING,                // 12 symbolic icon-name (artless exts)
-            glib::Type::BOOL,                  // 13 icon-vis
+                        let store = gtk::TreeStore::new(&[
+            glib::Type::STRING,                
+            glib::Type::STRING,                
+            glib::Type::STRING,                
+            glib::Type::STRING,                
+            gdk_pixbuf::Pixbuf::static_type(), 
+            gdk_pixbuf::Pixbuf::static_type(), 
+            gdk_pixbuf::Pixbuf::static_type(), 
+            glib::Type::BOOL,                  
+            glib::Type::BOOL,                  
+            glib::Type::BOOL,                  
+            glib::Type::BOOL,                  
+            glib::Type::BOOL,                  
+            glib::Type::STRING,                
+            glib::Type::BOOL,                  
         ]);
 
         let view = HoverTree::default();
         view.set_model(Some(&store));
         view.set_headers_visible(false);
         view.set_activate_on_single_click(true);
-        view.set_show_expanders(false); // our own chevron cell draws the affordance
+        view.set_show_expanders(false); 
         view.set_level_indentation(16);
         view.set_tooltip_column(1);
 
@@ -237,29 +199,22 @@ impl Component for ChangesView {
             .build();
         root.append(&tree_page);
 
-        // ONE merged column: all visual cells pack into one
-        // tree column so level indentation shifts the whole strip together;
-        // set_expand(true) on the COLUMN — an ellipsized cell's natural is its
-        // minimum, slack must ride the column (spec §29)
-        let chev = gtk::CellRendererPixbuf::new();
+                                        let chev = gtk::CellRendererPixbuf::new();
         chev.set_property("xpad", 2u32);
         chev.set_property("ypad", 2u32);
-        chev.set_property("yalign", 2.0f32 / 3.0f32); // bottom-pin: same law as filetree
-        // checkbox: NOT activatable — clicks route through press geometry
-        let tog = gtk::CellRendererToggle::new();
+        chev.set_property("yalign", 2.0f32 / 3.0f32); 
+                let tog = gtk::CellRendererToggle::new();
         tog.set_activatable(false);
-        // letter chip: chip-vis (=col10) binds `not is_dir` — a letterless FILE
-        // row keeps its slot (blank pixbuf); dirs hide it
-        let chip = gtk::CellRendererPixbuf::new();
+                        let chip = gtk::CellRendererPixbuf::new();
         chip.set_property("xpad", 2u32);
         chip.set_property("ypad", 2u32);
-        chip.set_property("yalign", 1.0f32); // bottom-pin at the 22px row
+        chip.set_property("yalign", 1.0f32); 
         let badge = gtk::CellRendererPixbuf::new();
         badge.set_property("xpad", 2u32);
         badge.set_property("ypad", 2u32);
         badge.set_property("yalign", 1.0f32);
         let name = gtk::CellRendererText::new();
-        name.set_property("xpad", 2u32); // WORKSPACE parity: ink at art+4
+        name.set_property("xpad", 2u32); 
         name.set_property("ypad", 2u32);
         name.set_property("ellipsize", pango::EllipsizeMode::Middle);
         let col = gtk::TreeViewColumn::new();
@@ -275,23 +230,20 @@ impl Component for ChangesView {
         col.pack_start(&badge, false);
         col.add_attribute(&badge, "pixbuf", COL_BADGE);
         col.add_attribute(&badge, "visible", COL_BADGE_VIS);
-        // emblem fallback (filetree.rs cells): themed symbolic icon when the
-        // chip art is absent — same strip, badge hidden that row
-        let icon = gtk::CellRendererPixbuf::new();
+                        let icon = gtk::CellRendererPixbuf::new();
         icon.set_property("xpad", 2u32);
         icon.set_property("ypad", 2u32);
-        icon.set_property("yalign", 1.0f32); // bottom-pin: same law as the badge cell
+        icon.set_property("yalign", 1.0f32); 
         col.pack_start(&icon, false);
         col.add_attribute(&icon, "icon-name", COL_ICON);
         col.add_attribute(&icon, "visible", COL_ICON_VIS);
-        col.pack_start(&name, true); // text cell LAST with expand=True — pins the strip left
+        col.pack_start(&name, true); 
         col.add_attribute(&name, "text", COL_NAME);
         col.set_expand(true);
         view.append_column(&col);
         view.set_css_classes(&["alpaca-tree"]);
 
-        // commit bar
-        let bar = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                let bar = gtk::Box::new(gtk::Orientation::Vertical, 6);
         bar.set_margin_start(12);
         bar.set_margin_end(12);
         bar.set_margin_top(6);
@@ -305,22 +257,18 @@ impl Component for ChangesView {
         msg.set_size_request(-1, 30);
         let btn = gtk::Button::builder()
             .label("Commit and Push")
-            .hexpand(true) // full-width pill: same width as the field above
+            .hexpand(true) 
             .css_classes(["alpaca-barbtn"])
             .build();
         bar.append(&msg);
         bar.append(&btn);
         root.append(&bar);
 
-        // signals
-        let snd = sender.clone();
+                let snd = sender.clone();
         view.connect_row_activated(move |_, path, _| {
             snd.input(GitViewMsg::Activated(path.clone()));
         });
-        // the expand-state walker runs on the RowExpanded/RowCollapsed inputs —
-        // Activated's dir branch only calls expand/collapse_row and the SIGNAL
-        // owns the bookkeeping
-        let snd = sender.clone();
+                                let snd = sender.clone();
         view.connect_row_expanded(move |_, _, path| {
             snd.input(GitViewMsg::RowExpanded(path.clone()));
         });
@@ -328,14 +276,12 @@ impl Component for ChangesView {
         view.connect_row_collapsed(move |_, _, path| {
             snd.input(GitViewMsg::RowCollapsed(path.clone()));
         });
-        // hover band must follow store mutations (rows inserted/deleted while
-        // the pointer stays put)
-        let v2 = view.clone();
+                        let v2 = view.clone();
         store.connect_row_inserted(move |_, _, _| v2.refresh_hover());
         let v3 = view.clone();
         store.connect_row_deleted(move |_, _| v3.refresh_hover());
         let snd = sender.clone();
-        msg.connect_activate(move |_| snd.input(GitViewMsg::CommitClicked)); // Enter = commit
+        msg.connect_activate(move |_| snd.input(GitViewMsg::CommitClicked)); 
         let snd = sender.clone();
         btn.connect_clicked(move |_| snd.input(GitViewMsg::CommitClicked));
 
@@ -367,25 +313,17 @@ impl Component for ChangesView {
         match msg {
             GitViewMsg::SetRoot(root) => {
                 self.root = Some(root);
-                self.closed.clear(); // new repo: remembered collapses are stale
-                self.refresh(false, &sender); // fresh view selects all
-                // needle NOT touched here: the panel clears its entry and
-                // routes Filter("") on a root switch.
-            }
+                self.closed.clear(); 
+                self.refresh(false, &sender); 
+                                            }
             GitViewMsg::Refresh { keep } => self.refresh(keep, &sender),
             GitViewMsg::Apply { raw, ahead, keep } => self.apply(raw, ahead, keep),
             GitViewMsg::Filter(needle) => {
-                // identical-needle guard (the apply guard's twin): mode entry
-                // refires Filter with the unchanged entry text — the store
-                // already shows that lens. Compare normalized (filtered()
-                // lowercases+strips per use).
-                let n = needle.trim().to_lowercase();
+                                                                                let n = needle.trim().to_lowercase();
                 if n == self.needle.trim().to_lowercase() {
                     return;
                 }
-                // stored AS-GIVEN; filtered() strips+lowercases per use —
-                // checked untouched (view-only lens)
-                self.needle = needle;
+                                                self.needle = needle;
                 let shown = filtered(&self.rows, &self.needle);
                 self.fill(&shown);
             }
@@ -394,7 +332,7 @@ impl Component for ChangesView {
             GitViewMsg::RowExpanded(tpath) => self.expand_toggle(&tpath, true),
             GitViewMsg::RowCollapsed(tpath) => self.expand_toggle(&tpath, false),
             GitViewMsg::CommitClicked => self.commit_clicked(&sender),
-            GitViewMsg::ProbeMsg(t) => self.msg.set_text(&t), // probe-only
+            GitViewMsg::ProbeMsg(t) => self.msg.set_text(&t), 
             GitViewMsg::SetClosed(v) => self.closed = v.into_iter().collect(),
             GitViewMsg::StartCommit { root, paths, msg } => {
                 self.start_commit(root, paths, msg, &sender)
@@ -415,31 +353,23 @@ impl Component for ChangesView {
             }
             GitViewCommand::Landed(out) => {
                 self.busy = false;
-                // review fix-1: the eager CommitClicked busy(true) MUST be
-                // cleared here too — the panel (ChildBusy) can't read this
-                // flag, and a latched true gates its 2s probe forever after
-                // the first commit
-                let _ = sender.output(GitViewOutput::Busy(false));
+                                                                                let _ = sender.output(GitViewOutput::Busy(false));
                 self.flight = false;
                 self.buttons();
                 if out.cok {
-                    self.msg.set_text(""); // user ruling: the message dies with the commit
-                    self.refresh(true, &sender); // keep_selection=True: committed paths vanish, rest kept
+                    self.msg.set_text(""); 
+                    self.refresh(true, &sender); 
                 }
                 if !out.cok {
                     let _ = sender.output(GitViewOutput::Status(GitStatusKind::Err, out.ctext));
                 } else if !out.pok {
-                    // commit landed; rows refreshed — the red line explains the
-                    // ahead count on the next natural refresh
-                    let _ = sender.output(GitViewOutput::Status(GitStatusKind::Err, out.ptext));
+                                                            let _ = sender.output(GitViewOutput::Status(GitStatusKind::Err, out.ptext));
                 } else {
-                    // row pulse; filetree re-syncs itself after 2s
-                    let _ = sender.output(GitViewOutput::Status(GitStatusKind::Ok, "Pushed ✓".into()));
+                                        let _ = sender.output(GitViewOutput::Status(GitStatusKind::Ok, "Pushed ✓".into()));
                 }
             }
             GitViewCommand::Refreshed { root, seq, raw, ahead, keep } => {
-                // stale flight: workspace switched or a newer refresh fired — drop
-                if self.root.as_ref() != Some(&root) || seq != self.refresh_seq {
+                                if self.root.as_ref() != Some(&root) || seq != self.refresh_seq {
                     return;
                 }
                 self.apply(raw, ahead, keep);
@@ -448,20 +378,14 @@ impl Component for ChangesView {
     }
 }
 
-// ---- data ----------------------------------------------------------------------
 impl ChangesView {
-    /// The `closed` set as save-time data (user-collapsed dir REL paths) —
-    /// the workbench save reads this through gitpanel.
-    pub fn closed_dirs(&self) -> Vec<String> {
+            pub fn closed_dirs(&self) -> Vec<String> {
         self.closed.iter().cloned().collect()
     }
 
-    /// The refresh as a command flight — the git calls leave the UI
-    /// thread, the landing is apply() via Refreshed (landing
-    /// order is the flight completion order; the seq token discards leftovers).
-    fn refresh(&mut self, keep: bool, sender: &ComponentSender<Self>) {
+                fn refresh(&mut self, keep: bool, sender: &ComponentSender<Self>) {
         let Some(root) = self.root.clone() else {
-            self.apply(None, 0, keep); // no git results → clean no-op
+            self.apply(None, 0, keep); 
             return;
         };
         self.refresh_seq += 1;
@@ -474,10 +398,7 @@ impl ChangesView {
         });
     }
 
-    /// one merged row append; the 12 (col, value) pairs are the row
-    /// list spelled by index. (16 args on purpose: the row tuple spread
-    /// across the store's 14 columns — a params struct would just re-widen it.)
-    #[allow(clippy::too_many_arguments)]
+                #[allow(clippy::too_many_arguments)]
     fn insert_row(
         &self,
         parent: Option<&gtk::TreeIter>,
@@ -515,27 +436,16 @@ impl ChangesView {
         self.store.insert_with_values(parent, None, &vals)
     }
 
-    /// Landing pad for fresh git data — the sync refresh, or the live probe's
-    /// worker via Apply. Rebuilds rows, intersects the selection with the
-    /// surviving file set, re-applies any active filter. None (no repo /
-    /// timeout) is a clean no-op.
-    fn apply(&mut self, raw: Option<Rows>, ahead: usize, keep: bool) {
+                    fn apply(&mut self, raw: Option<Rows>, ahead: usize, keep: bool) {
         let Some(raw) = raw else {
-            return; // no repo / timeout
+            return; 
         };
-        self.ahead = ahead; // cached: no git per toggle
-        // identical-porcelain guard: in CHANGES mode the 2s probe re-lands the
-        // SAME rows forever (its flight is ~43ms, the fill of a 31k-row repo
-        // ~2s — misiuscode's unignored target/ measured it) and the mainloop
-        // saturates into a hard hang. Rebuild only when the data moved;
-        // keep=false (SetRoot fresh view) still fills so the select-all reset
-        // keeps running.
-        if keep && raw == self.rows {
+        self.ahead = ahead; 
+                                                        if keep && raw == self.rows {
             return;
         }
         self.rows = raw;
-        // every file row's rel — computed BEFORE fill (sync_row lenses need it)
-        let fset: BTreeSet<String> = gitstatus::group_tree(&self.rows)
+                let fset: BTreeSet<String> = gitstatus::group_tree(&self.rows)
             .iter()
             .filter(|t| t.kind == "f")
             .map(|t| t.rel.clone())
@@ -543,7 +453,7 @@ impl ChangesView {
         self.checked = if keep {
             self.checked.intersection(&fset).cloned().collect()
         } else {
-            fset // fresh view selects all
+            fset 
         };
         let shown = filtered(&self.rows, &self.needle);
         self.fill(&shown);
@@ -562,18 +472,15 @@ impl ChangesView {
             self.insert_row(
                 None, "No changes", "", "e", "", &blank, &blank, &blank, false, false, false,
                 false, false, "", false,
-            ); // cols 7-11,13 ALL false
+            ); 
             self.sync();
             return;
         }
         self.insert_row(
             None, "Select all", "", "s", "", &blank, &blank, &blank, false, false, false, false,
             true, "", false,
-        ); // only toggle-vis col11 true
-        // BTreeMap: parents sort before any descendant (prefix < child), so the
-        // append-parent lookups and the expand pass below see ancestors before
-        // children — the same order an insertion-ordered dict yields.
-        let mut iters: BTreeMap<String, gtk::TreeIter> = BTreeMap::new();
+        ); 
+                                let mut iters: BTreeMap<String, gtk::TreeIter> = BTreeMap::new();
         for t in gitstatus::group_tree(shown) {
             let is_dir = t.kind == "d";
             let (art, fallback) = strip_icons(&t.name, is_dir);
@@ -593,8 +500,8 @@ impl ChangesView {
                 .rel
                 .rsplit_once('/')
                 .and_then(|(dir, _)| iters.get(dir).cloned());
-            let badge_vis = art.is_some(); // badge-vis; artless rows show the fallback instead
-            let chip_vis = !is_dir; // chip-vis (file rows: a letterless file keeps its slot)
+            let badge_vis = art.is_some(); 
+            let chip_vis = !is_dir; 
             let tog_vis = true;
             let it = self.insert_row(
                 parent.as_ref(),
@@ -618,21 +525,15 @@ impl ChangesView {
             }
         }
         self.sync();
-        // dirs render open unless the user closed them — expand state lives in
-        // `closed`, never read back from the view (filetree lesson)
-        for (rel, it) in &iters {
+                        for (rel, it) in &iters {
             if !self.closed.contains(rel) {
                 self.view.expand_row(&self.store.path(it), false);
             }
         }
     }
 
-    // ---- checked-state sync (value-only writes: safe under expanded rows) ----
-
-    /// dir/masthead state is computed over what the USER SEES (shown ×
-    /// visible) with the lensed selection — invisible files never drive a
-    /// rendered checkbox (Filter renders a subset; toggles stay visible-only).
-    fn sync(&mut self) {
+    
+                fn sync(&mut self) {
         let st = if self.shown.is_empty() {
             BTreeMap::new()
         } else {
@@ -646,8 +547,7 @@ impl ChangesView {
         let mut cur = self.store.iter_first();
         while let Some(i) = cur.take() {
             self.sync_row(&i, &st);
-            // capture next BEFORE recursion (mutation guard)
-            let mut t = i;
+                        let mut t = i;
             cur = if self.store.iter_next(&mut t) { Some(t) } else { None };
             self.walk_children(&i, &st);
         }
@@ -682,19 +582,15 @@ impl ChangesView {
             self.store.set_value(it, COL_CHECKED as u32, &allc.to_value());
             self.store.set_value(it, COL_INCONSIST as u32, &(!allc && somec).to_value());
         }
-        // "e" (No changes) rows get nothing
-    }
+            }
 
-    /// one button: commit-with-push when files are checked, push-only when the
-    /// branch is ahead (nothing checked); ahead from the refresh cache.
-    fn buttons(&self) {
+            fn buttons(&self) {
         self.btn
             .set_sensitive(!self.busy && (!self.checked.is_empty() || self.ahead > 0));
         self.msg.set_sensitive(!self.busy);
     }
 
-    // ---- toggles ------------------------------------------------------------
-
+    
     fn row_toggled(&mut self, tpath: &gtk::TreePath) {
         let Some(it) = self.store.iter(tpath) else {
             return;
@@ -703,12 +599,11 @@ impl ChangesView {
         let rel = self.store.get_value(&it, COL_REL).get::<String>().unwrap_or_default();
         if let Some(next) = toggled_checked(&kind, &rel, &self.checked, &self.visible) {
             self.checked = next;
-            self.sync(); // masthead/dir/file all through the one law
+            self.sync(); 
         }
     }
 
-    /// expand-toggle walker — wired to RowExpanded/RowCollapsed inputs.
-    fn expand_toggle(&mut self, tpath: &gtk::TreePath, expanded: bool) {
+        fn expand_toggle(&mut self, tpath: &gtk::TreePath, expanded: bool) {
         let Some(it) = self.store.iter(tpath) else {
             return;
         };
@@ -717,16 +612,14 @@ impl ChangesView {
             return;
         }
         if expanded {
-            self.closed.remove(&rel); // discard-on-expand
+            self.closed.remove(&rel); 
         } else {
             self.closed.insert(rel.clone());
         }
         let chev = badges::chevron_pixbuf(expanded).unwrap_or_else(badges::blank_pixbuf);
         self.store.set_value(&it, COL_CHEV as u32, &chev.to_value());
         if expanded {
-            // hidden dirs don't expand (expand_row is a no-op under a collapsed
-            // ancestor) — walk one level and catch them up
-            let mut cur = self.store.iter_children(Some(&it));
+                                    let mut cur = self.store.iter_children(Some(&it));
             while let Some(i) = cur.take() {
                 let kind = self.store.get_value(&i, COL_KIND).get::<String>().unwrap_or_default();
                 let child_rel = self.store.get_value(&i, COL_REL).get::<String>().unwrap_or_default();
@@ -739,17 +632,11 @@ impl ChangesView {
         }
     }
 
-    // ---- activation (spec §2: file click opens the diff) ----------------------
-
+    
     fn activated(&mut self, tpath: &gtk::TreePath, sender: &ComponentSender<Self>) {
-        // 1. toggle-hit: press_x inside the toggle's own slot? With one merged
-        //    column the checkbox is found by press geometry: [chevron slot end,
-        //    + toggle nat) (Review Focus #1)
-        let (px, _py) = self.view.press_xy();
+                                let (px, _py) = self.view.press_xy();
         if px >= 0.0 {
-            // `ca is None` gating becomes a width check: this binding always
-            // fills a rect — an unallocated cell comes back width 0 → same reject
-            let ca = self.view.cell_area(Some(tpath), Some(&self.col));
+                                    let ca = self.view.cell_area(Some(tpath), Some(&self.col));
             if ca.width() > 0 && toggle_hit(px, ca.x(), self.tog_w()) {
                 sender.input(GitViewMsg::RowToggled(tpath.clone()));
                 return;
@@ -762,13 +649,13 @@ impl ChangesView {
         let rel = self.store.get_value(&it, COL_REL).get::<String>().unwrap_or_default();
         if kind == "d" && !rel.is_empty() {
             if self.closed.contains(&rel) {
-                self.view.expand_row(tpath, false); // children are pre-loaded (non-lazy store)
+                self.view.expand_row(tpath, false); 
             } else {
                 self.view.collapse_row(tpath);
             }
         } else if kind == "f" {
             let letter = self.store.get_value(&it, COL_LETTER).get::<String>().unwrap_or_default();
-            let _ = sender.output(GitViewOutput::Open { rel, letter }); // (rel, letter) — chip needs the letter
+            let _ = sender.output(GitViewOutput::Open { rel, letter }); 
         }
     }
 
@@ -776,22 +663,18 @@ impl ChangesView {
         if let Some(w) = self.tog_w.get() {
             return w;
         }
-        // preferred_width read; a natural/min of 0 (unrealized view) is the
-        // 24-fallback case
-        let (min, natural) = self.tog.preferred_width(&self.view);
+                        let (min, natural) = self.tog.preferred_width(&self.view);
         let w = if natural > 0 { natural } else if min > 0 { min } else { 24 };
         self.tog_w.set(Some(w));
         w
     }
 
-    // ---- commit+push (spec §4: the worker is a spawned thread; GTK via the
-    //      command channel's receiver — relm4's idle marshalling) ---------------
-
+        
     fn commit_clicked(&mut self, sender: &ComponentSender<Self>) {
         if self.busy || self.root.is_none() {
-            return; // guard
+            return; 
         }
-        let paths: Vec<String> = self.checked.iter().cloned().collect(); // BTreeSet = sorted
+        let paths: Vec<String> = self.checked.iter().cloned().collect(); 
         if paths.is_empty() && self.ahead == 0 {
             let _ = sender.output(GitViewOutput::Status(
                 GitStatusKind::Err,
@@ -799,7 +682,7 @@ impl ChangesView {
             ));
             return;
         }
-        let msg = self.msg.text().trim().to_string(); // GString borrow ends here
+        let msg = self.msg.text().trim().to_string(); 
         if !paths.is_empty() && msg.is_empty() {
             let _ = sender.output(GitViewOutput::Status(
                 GitStatusKind::Err,
@@ -807,9 +690,8 @@ impl ChangesView {
             ));
             return;
         }
-        // root SNAPSHOT now (review I4): a SetRoot mid-flight must not reroute it
-        let root = self.root.clone().unwrap();
-        self.busy = true; // EAGER — buttons dead before the editor flush loop returns
+                let root = self.root.clone().unwrap();
+        self.busy = true; 
         self.buttons();
         let _ = sender.output(GitViewOutput::Status(
             GitStatusKind::Busy,
@@ -817,8 +699,7 @@ impl ChangesView {
         ));
         let _ = sender.output(GitViewOutput::Busy(true));
         let _ = sender.output(GitViewOutput::Commit { root, paths, msg });
-        // → editor SaveOpen → Flushed → StartCommit (app-side chain, T7)
-    }
+            }
 
     fn start_commit(
         &mut self,
@@ -828,13 +709,12 @@ impl ChangesView {
         sender: &ComponentSender<Self>,
     ) {
         if self.flight {
-            return; // one flight at a time
+            return; 
         }
         self.flight = true;
         sender.spawn_command(move |out| {
             let out_f = if paths.is_empty() {
-                // push-only: no phase callback (Some only when files are checked)
-                gitstatus::commit_then_push(&root.to_string_lossy(), &paths, &msg, None)
+                                gitstatus::commit_then_push(&root.to_string_lossy(), &paths, &msg, None)
             } else {
                 let outp = out.clone();
                 let phase_fn = move |_k: &str| outp.emit(GitViewCommand::Phase);
@@ -865,7 +745,7 @@ mod tests {
 
     #[test]
     fn filtered_matches_basename_or_rel() {
-        let rows = rows_of(&[("z.md", "M"), ("a/b/c.md", "A")]); // unsorted on purpose
+        let rows = rows_of(&[("z.md", "M"), ("a/b/c.md", "A")]); 
         assert_eq!(filtered(&rows, ""), rows, "empty needle → identity");
         assert_eq!(filtered(&rows, "c.md")[0].0, "a/b/c.md", "basename match");
         assert_eq!(filtered(&rows, "A/b")[0].0, "a/b/c.md", "rel match, case-insensitive");
@@ -880,45 +760,30 @@ mod tests {
             "a/c.txt".to_string(), "a/d/m.md".to_string(), "e.md".to_string(),
         ]);
         let ck = BTreeSet::from(["a/c.txt".to_string(), "a/d/m.md".to_string()]);
-        // file: flip
-        let c = toggled_checked("f", "a/d/m.md", &ck, &vis).unwrap();
+                let c = toggled_checked("f", "a/d/m.md", &ck, &vis).unwrap();
         assert!(!c.contains("a/d/m.md") && c.contains("a/c.txt"));
-        // dir, none of its (visible) descendants selected → select all under it
-        // (prefix = rel + "/")
-        let ck2 = BTreeSet::from(["a/c.txt".to_string()]);
+                        let ck2 = BTreeSet::from(["a/c.txt".to_string()]);
         let c = toggled_checked("d", "a/d", &ck2, &vis).unwrap();
         assert!(c.contains("a/d/m.md"), "none selected → add all under dir");
-        // dir all selected → clear under it
-        let full = BTreeSet::from(["a/c.txt".to_string(), "a/d/m.md".to_string(),
+                let full = BTreeSet::from(["a/c.txt".to_string(), "a/d/m.md".to_string(),
                                    "e.md".to_string()]);
         let c = toggled_checked("d", "a", &full, &vis).unwrap();
-        // law is `checked -= files` (files = visible descendants of the
-        // dir) — non-descendants SURVIVE: a/ clears a/c.txt + a/d/m.md, e.md stays
-        assert_eq!(c, BTreeSet::from(["e.md".to_string()]), "descendants cleared, rest kept");
-        // masthead (visible-only law, I2)
-        let c = toggled_checked("s", "", &full, &vis).unwrap();
+                        assert_eq!(c, BTreeSet::from(["e.md".to_string()]), "descendants cleared, rest kept");
+                let c = toggled_checked("s", "", &full, &vis).unwrap();
         assert!(c.is_empty());
         let c = toggled_checked("s", "", &BTreeSet::new(), &vis).unwrap();
         assert_eq!(c, vis);
-        // dir with no visible descendants → |= ∅ no-op (Some, unchanged —
-        // the else-branch `checked |= set()`)
-        let c = toggled_checked("d", "zzz", &ck, &vis).unwrap();
+                        let c = toggled_checked("d", "zzz", &ck, &vis).unwrap();
         assert_eq!(c, ck);
-        // unknown kind → None (never flips a "No changes" row)
-        assert!(toggled_checked("e", "x", &ck, &vis).is_none());
+                assert!(toggled_checked("e", "x", &ck, &vis).is_none());
     }
 
     #[test]
     fn strip_icons_law() {
-        // seti swap (2026-10-09): every file maps to a baked glyph (seti.rs cascade,
-        // default = seti-default-white.svg) — "no-icon" only happens when the
-        // svg rasterize FAILS, which is what the symbolic fallback guards.
-        // This is the old no-icon bug's inverse: .rs rows now badge themselves.
-        assert_eq!(strip_icons("editor.rs", false).1, None);
+                                        assert_eq!(strip_icons("editor.rs", false).1, None);
         assert!(strip_icons("editor.rs", false).0.is_some());
-        assert_eq!(strip_icons("LICENSE", false).1, None); // seti license glyph, not fallback
-        assert!(strip_icons("whatever.zzz", false).0.is_some()); // default-white
-        // dirs: folder art → no fallback
-        assert_eq!(strip_icons("src", true).1, None);
+        assert_eq!(strip_icons("LICENSE", false).1, None); 
+        assert!(strip_icons("whatever.zzz", false).0.is_some()); 
+                assert_eq!(strip_icons("src", true).1, None);
     }
 }

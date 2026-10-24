@@ -1,210 +1,7 @@
-//! seti.rs — file-type icons, from jesseweed/seti-ui (MIT). Assets are BAKED
-//! one-shot (converter over seti-ui mapping.less + ui-variables + icons/*.svg):
-//! each seti glyph is flattened to the single color its rule paints — seti-ui
-//! renders these as font glyphs, one theme color per rule, so the svgs' own
-//! fills/classes (sketch export) are overridden, `<style>` blocks are stripped
-//! (CSS fill would beat the baked `fill` attr) and gradients flatten to the
-//! rule color. Rasterized for pixbuf cells by badges.rs (librsvg); never
-//! parsed by vector.rs's art-walker.// seti-default-white = #d4d7d6
-// seti-bsl-red = #cc3e44
-// seti-mdo-red = #cc3e44
-// seti-salesforce-blue = #519aba
-// seti-asm-red = #cc3e44
-// seti-bicep-blue = #519aba
-// seti-bazel-green = #8dc149
-// seti-c-blue = #519aba
-// seti-c-purple = #a074c4
-// seti-c-yellow = #cbcb41
-// seti-c-sharp-blue = #519aba
-// seti-html-blue = #519aba
-// seti-html-green = #8dc149
-// seti-html-yellow = #cbcb41
-// seti-cpp-blue = #519aba
-// seti-cpp-purple = #a074c4
-// seti-cpp-yellow = #cbcb41
-// seti-clojure-green = #8dc149
-// seti-clojure-blue = #519aba
-// seti-coldfusion-blue = #519aba
-// seti-coffee-yellow = #cbcb41
-// seti-config-grey-light = #6d8086
-// seti-crystal-white = #d4d7d6
-// seti-crystal_embedded-white = #d4d7d6
-// seti-json-yellow = #cbcb41
-// seti-css-blue = #519aba
-// seti-csv-green = #8dc149
-// seti-xls-green = #8dc149
-// seti-cu-green = #8dc149
-// seti-cu-purple = #a074c4
-// seti-cake-red = #cc3e44
-// seti-cake_php-red = #cc3e44
-// seti-d-red = #cc3e44
-// seti-word-blue = #519aba
-// seti-ejs-yellow = #cbcb41
-// seti-elixir-purple = #a074c4
-// seti-elixir_script-purple = #a074c4
-// seti-hex-red = #cc3e44
-// seti-elm-blue = #519aba
-// seti-favicon-yellow = #cbcb41
-// seti-f-sharp-blue = #519aba
-// seti-git-ignore = #41535b
-// seti-go2-blue = #519aba
-// seti-go-blue = #519aba
-// seti-godot-blue = #519aba
-// seti-godot-red = #cc3e44
-// seti-godot-yellow = #cbcb41
-// seti-godot-purple = #a074c4
-// seti-gradle-blue = #519aba
-// seti-grails-green = #8dc149
-// seti-graphql-pink = #f55385
-// seti-hacklang-orange = #e37933
-// seti-haml-red = #cc3e44
-// seti-mustache-orange = #e37933
-// seti-haskell-purple = #a074c4
-// seti-haxe-orange = #e37933
-// seti-haxe-yellow = #cbcb41
-// seti-haxe-blue = #519aba
-// seti-haxe-purple = #a074c4
-// seti-html-orange = #e37933
-// seti-jade-red = #cc3e44
-// seti-java-red = #cc3e44
-// seti-java-blue = #519aba
-// seti-javascript-yellow = #cbcb41
-// seti-javascript-orange = #e37933
-// seti-jinja-red = #cc3e44
-// seti-julia-purple = #a074c4
-// seti-karma-green = #8dc149
-// seti-kotlin-orange = #e37933
-// seti-dart-blue = #519aba
-// seti-less-blue = #519aba
-// seti-liquid-green = #8dc149
-// seti-livescript-blue = #519aba
-// seti-lua-blue = #519aba
-// seti-markdown-blue = #519aba
-// seti-argdown-blue = #519aba
-// seti-info-blue = #519aba
-// seti-clock-blue = #519aba
-// seti-maven-red = #cc3e44
-// seti-nim-yellow = #cbcb41
-// seti-github-white = #d4d7d6
-// seti-notebook-blue = #519aba
-// seti-nunjucks-green = #8dc149
-// seti-npm-ignore = #41535b
-// seti-npm-red = #cc3e44
-// seti-ocaml-orange = #e37933
-// seti-odata-orange = #e37933
-// seti-perl-blue = #519aba
-// seti-php-purple = #a074c4
-// seti-pipeline-orange = #e37933
-// seti-pddl-purple = #a074c4
-// seti-plan-green = #8dc149
-// seti-happenings-blue = #519aba
-// seti-powershell-blue = #519aba
-// seti-prisma-blue = #519aba
-// seti-pug-red = #cc3e44
-// seti-puppet-yellow = #cbcb41
-// seti-purescript-white = #d4d7d6
-// seti-python-blue = #519aba
-// seti-react-blue = #519aba
-// seti-react-orange = #e37933
-// seti-reasonml-red = #cc3e44
-// seti-rescript-red = #cc3e44
-// seti-rescript-pink = #f55385
-// seti-R-blue = #519aba
-// seti-ruby-red = #cc3e44
-// seti-html_erb-red = #cc3e44
-// seti-rust-grey-light = #6d8086
-// seti-sass-pink = #f55385
-// seti-spring-green = #8dc149
-// seti-slim-orange = #e37933
-// seti-smarty-yellow = #cbcb41
-// seti-sbt-blue = #519aba
-// seti-scala-red = #cc3e44
-// seti-ethereum-blue = #519aba
-// seti-stylus-green = #8dc149
-// seti-svelte-red = #cc3e44
-// seti-swift-orange = #e37933
-// seti-db-pink = #f55385
-// seti-db-blue = #519aba
-// seti-terraform-purple = #a074c4
-// seti-tex-blue = #519aba
-// seti-tex-yellow = #cbcb41
-// seti-tex-orange = #e37933
-// seti-tex-white = #d4d7d6
-// seti-twig-green = #8dc149
-// seti-typescript-blue = #519aba
-// seti-typescript-orange = #e37933
-// seti-tsconfig-blue = #519aba
-// seti-vala-grey-light = #6d8086
-// seti-vite-yellow = #cbcb41
-// seti-vue-green = #8dc149
-// seti-wasm-purple = #a074c4
-// seti-wat-purple = #a074c4
-// seti-xml-orange = #e37933
-// seti-yml-purple = #a074c4
-// seti-json-green = #8dc149
-// seti-prolog-orange = #e37933
-// seti-zig-orange = #e37933
-// seti-zip-red = #cc3e44
-// seti-zip-grey-light = #6d8086
-// seti-wgt-blue = #519aba
-// seti-illustrator-yellow = #cbcb41
-// seti-photoshop-blue = #519aba
-// seti-pdf-red = #cc3e44
-// seti-font-red = #cc3e44
-// seti-image-purple = #a074c4
-// seti-svg-purple = #a074c4
-// seti-sublime-orange = #e37933
-// seti-code-search-purple = #a074c4
-// seti-shell-green = #8dc149
-// seti-video-pink = #f55385
-// seti-audio-purple = #a074c4
-// seti-svg-blue = #519aba
-// seti-windows-blue = #519aba
-// seti-jenkins-red = #cc3e44
-// seti-babel-yellow = #cbcb41
-// seti-bazel-grey = #4d5a5e
-// seti-bower-orange = #e37933
-// seti-docker-blue = #519aba
-// seti-docker-grey = #4d5a5e
-// seti-docker-green = #8dc149
-// seti-docker-pink = #f55385
-// seti-code-climate-green = #8dc149
-// seti-eslint-purple = #a074c4
-// seti-eslint-grey = #4d5a5e
-// seti-firebase-orange = #e37933
-// seti-firefox-orange = #e37933
-// seti-gitlab-orange = #e37933
-// seti-grunt-orange = #e37933
-// seti-gulp-red = #cc3e44
-// seti-ionic-blue = #519aba
-// seti-javascript-blue = #519aba
-// seti-platformio-orange = #e37933
-// seti-rollup-red = #cc3e44
-// seti-stylelint-white = #d4d7d6
-// seti-stylelint-grey = #4d5a5e
-// seti-yarn-blue = #519aba
-// seti-webpack-blue = #519aba
-// seti-clock-grey-light = #6d8086
-// seti-lock-green = #8dc149
-// seti-license-yellow = #cbcb41
-// seti-license-orange = #e37933
-// seti-license-red = #cc3e44
-// seti-makefile-orange = #e37933
-// seti-makefile-purple = #a074c4
-// seti-makefile-grey-light = #6d8086
-// seti-makefile-blue = #519aba
-// seti-heroku-purple = #a074c4
-// seti-todo-seti-primary = #519aba
-// seti-npm_ignored-ignore = #41535b
-// seti-ignored-ignore = #41535b
 
-// ---- rust ----
 #[rustfmt::skip]
 pub(crate) const RULES: &[(&str, &str, bool)] = &[
-    // (suffix-or-substring pattern, seti asset stem, is_partial) —
-    // seti-ui styles/components/icons/mapping.less cascade order: LAST
-    // match wins (defaults first, specifics later), partial = substring.
-    ("", "seti-default-white.svg", false),
+                ("", "seti-default-white.svg", false),
     (".bsl", "seti-bsl-red.svg", false),
     (".mdo", "seti-mdo-red.svg", false),
     (".cls", "seti-salesforce-blue.svg", false),
@@ -645,7 +442,6 @@ pub(crate) const RULES: &[(&str, &str, bool)] = &[
     (".DS_Store", "seti-ignored-ignore.svg", false),
 ];
 
-// embedded payloads: macro invocation (stems literal => include! paths)
 macro_rules! seti_switch {
     [$($stem:literal),* $(,)?] => {
         pub(crate) fn svg_data(name: &str) -> Option<&'static [u8]> {
@@ -857,12 +653,6 @@ seti_switch![
     "zip-grey-light",
     "zip-red",
 ];
-/// seti mapping.less render law: every rule shares one specificity, so the
-/// LAST match wins (defaults sit first, specifics later — that layering is
-/// what gives "spec.js" its orange variant and "tsconfig.json" its own glyph).
-/// Ext patterns (leading `.`) compare case-insensitively (dev trees: MAIN.PY
-/// gets the .py glyph); other patterns match as authored (BUILD ≠ build);
-/// `partial` = substring (Makefile inside a suffixed name).
 pub(crate) fn icon_for(name: &str) -> &'static str {
     let mut hit = "";
     for (pat, file, partial) in RULES {
@@ -880,8 +670,6 @@ pub(crate) fn icon_for(name: &str) -> &'static str {
     hit
 }
 
-/// Case-insensitive ends_with; needles are ASCII (generated art names), so the
-/// only boundary risk is splitting a multi-byte char in the haystack tail.
 fn ends_with_ci(hay: &str, needle: &str) -> bool {
     let n = needle.len();
     hay.len() >= n
@@ -896,24 +684,22 @@ mod tests {
     #[test]
     fn mapping_resolves_per_seti_cascade() {
         assert_eq!(icon_for("app.py"), "seti-python-blue.svg");
-        assert_eq!(icon_for("MAIN.PY"), "seti-python-blue.svg"); // ext rules are ci
-        assert_eq!(icon_for("a.spec.js"), "seti-javascript-orange.svg"); // later rule beats .js
-        assert_eq!(icon_for("tsconfig.json"), "seti-tsconfig-blue.svg"); // name rule beats .json
-        assert_eq!(icon_for("Makefile"), "seti-makefile-orange.svg"); // partial, authored case
-        assert_eq!(icon_for("docker-compose.yml"), "seti-docker-pink.svg"); // partial beats .yml
+        assert_eq!(icon_for("MAIN.PY"), "seti-python-blue.svg"); 
+        assert_eq!(icon_for("a.spec.js"), "seti-javascript-orange.svg"); 
+        assert_eq!(icon_for("tsconfig.json"), "seti-tsconfig-blue.svg"); 
+        assert_eq!(icon_for("Makefile"), "seti-makefile-orange.svg"); 
+        assert_eq!(icon_for("docker-compose.yml"), "seti-docker-pink.svg"); 
         assert_eq!(icon_for(".gitignore"), "seti-git-ignore.svg");
         assert_eq!(icon_for("LICENSE.md"), "seti-license-yellow.svg");
         assert_eq!(icon_for("main.rs"), "seti-rust-grey-light.svg");
-        assert_eq!(icon_for(".DS_Store"), "seti-ignored-ignore.svg"); // junk renders dimmed
+        assert_eq!(icon_for(".DS_Store"), "seti-ignored-ignore.svg"); 
         assert_eq!(icon_for("a.R"), "seti-R-blue.svg");
-        assert_eq!(icon_for("build"), "seti-default-white.svg"); // BUILD is authored-case
+        assert_eq!(icon_for("build"), "seti-default-white.svg"); 
     }
 
     #[test]
     fn every_seti_asset_rasterizes_16() {
-        // the bake (color/class/style strips + monochrome law) must leave each
-        // file rasterizable by the system svg loader into a full 16px cell
-        for stem in STEMS {
+                        for stem in STEMS {
             let name = format!("seti-{stem}.svg");
             let pix = crate::render::badges::svg_pixbuf(&name, 16)
                 .unwrap_or_else(|| panic!("{name}: rasterize failed"));

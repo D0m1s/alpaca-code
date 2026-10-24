@@ -1,18 +1,4 @@
-//! Status-bar branch pill + Switch/New popover.
-//!
-//! Pill is a flat button (branch icon + name) whose popover holds Switch
-//! Branch, Pull, and New Branch; git flights copy the commit-bar pattern (command
-//! thread, land via update_cmd, the status row owns busy/err/ok). The pill
-//! hides outside a repo (the branch_of rule).
-//!
-//! Hover timers are GENERATION COUNTERS: the old cancel path was a silent
-//! no-op on an already-fired GLib source while rust `SourceId::remove`
-//! PANICS on one — handlers instead bump the generation a timer closure
-//! captured; a stale timer fires and its input is discarded by the gen check.
 
-// The module's whole API surface is consumed by GitPanel and app wiring
-// (proven by the landed callers — the T4 sweep's build gate holds the line:
-// no module allow survives, warnings resurface loudly).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -27,17 +13,13 @@ use crate::git::gitstatus::{self, GitStatusKind};
 pub enum BranchMenuMsg {
     SetRoot(Option<PathBuf>),
     Update(Option<String>),
-    /// wiring: gate flights while no commit/push flight owns the status row
-    Gate(bool),
+        Gate(bool),
     Pick(String),
     Create(String),
     Pull,
     SubOpen(u64),
     SubClose(u64),
-    // relm4 routing additions: these were plain method calls straight from
-    // closures; a relm4 closure can't reach the component model, so each one
-    // became an input (additive — T6 consumes only SetRoot/Update/Gate).
-    OpenMenu,
+                OpenMenu,
     Closed,
     SubEnterRow,
     SubLeaveRow,
@@ -57,13 +39,7 @@ pub enum BranchCommand {
         text: String,
         okmsg: String,
     },
-    /// branch-list flight (hover submenu + open menu): branch_of + branches
-    /// off the UI thread — the popup handler no longer blocks on both. The
-    /// widget rebuild lands in update_cmd; `popup_sub` + the open_gen token
-    /// decide the submenu pop (the sync handler popped inline inside SubOpen
-    /// AFTER the gen check — an async landing must re-validate that the hover
-    /// is still alive, or it re-pops a submenu the user already left).
-    Branches {
+                            Branches {
         root: PathBuf,
         cur: Option<String>,
         names: Vec<String>,
@@ -76,8 +52,7 @@ pub struct BranchMenu {
     root: Option<PathBuf>,
     gate: bool,
     flight: bool,
-    /// Pick armed this: when the switch lands OK, chain a pull flight
-    chain_pull: bool,
+        chain_pull: bool,
     open_gen: u64,
     close_gen: u64,
     open_armed: bool,
@@ -107,8 +82,7 @@ impl Component for BranchMenu {
     fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         root.set_visible(false);
 
-        // pill strip: git logo ↔ branch name ride tight (old pair)
-        let strip = gtk::Box::builder().spacing(3).build();
+                let strip = gtk::Box::builder().spacing(3).build();
         if let Some(ic) = vector::icon("branch.svg").map(|vec| gtk::Image::from_paintable(Some(&vec))) {
             strip.append(&ic);
         }
@@ -118,9 +92,7 @@ impl Component for BranchMenu {
         strip.append(&label);
         root.set_child(Some(&strip));
 
-        // main popover: page "menu" (the two rows) / page "new" (entry).
-        // TOP: it must open above the bar; GTK flips if there is no room.
-        let menupage = gtk::Box::builder()
+                        let menupage = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
         let newpage = gtk::Box::builder()
@@ -145,9 +117,7 @@ impl Component for BranchMenu {
         if let Some(ic) = vector::icon("branch.svg").map(|vec| gtk::Image::from_paintable(Some(&vec))) {
             strip2.append(&ic);
         }
-        // xalign 0: GTK4 labels center by default — inside the hexpanded row
-        // boxes that floated the text right (measured gap 30px vs the row's 14)
-        let lbl = gtk::Label::builder()
+                        let lbl = gtk::Label::builder()
             .label("Switch Branch")
             .xalign(0.0)
             .hexpand(true)
@@ -176,8 +146,7 @@ impl Component for BranchMenu {
         new_row.set_child(Some(&strip3));
         menupage.append(&switch_row);
 
-        // Pull row: chevron-down reads as "pull down"; rides the shared flight
-        let pull_row = gtk::Button::builder()
+                let pull_row = gtk::Button::builder()
             .has_frame(false)
             .css_classes(["alpaca-branchitem"])
             .build();
@@ -204,12 +173,7 @@ impl Component for BranchMenu {
         stack.add_named(&newpage, Some("new"));
         stack.set_visible_child(&menupage);
 
-        // branch submenu: own popover anchored to the switch row, opening from
-        // its right edge (flips left at the window edge). List rebuilt fresh on
-        // every open. autohide OFF — the popup grab fires a synthetic leave on
-        // the row while the pointer still sits on it (hover-open ping-pong
-        // flicker, reported live); a non-grabbed popup keeps every event real.
-        let branch_box = gtk::Box::builder()
+                                                let branch_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
         let scroll = gtk::ScrolledWindow::builder()
@@ -231,10 +195,7 @@ impl Component for BranchMenu {
             .build();
         pop.set_parent(&root);
 
-        // hover controllers — closures can't reach the model, so the
-        // enter/leave bookkeeping routes through inputs (gen counter lives in
-        // the update arms)
-        let ctrl = gtk::EventControllerMotion::new();
+                                let ctrl = gtk::EventControllerMotion::new();
         let snd = sender.clone();
         ctrl.connect_enter(move |_, _, _| snd.input(BranchMenuMsg::SubEnterRow));
         let snd = sender.clone();
@@ -247,14 +208,11 @@ impl Component for BranchMenu {
         ctrl2.connect_leave(move |_| snd.input(BranchMenuMsg::SubLeaveList));
         scroll.add_controller(ctrl2);
 
-        // signals
-        let snd = sender.clone();
+                let snd = sender.clone();
         root.connect_clicked(move |_| snd.input(BranchMenuMsg::OpenMenu));
         let snd = sender.clone();
         pop.connect_closed(move |_| {
-            // close law: a tear-down popover can emit closed into a dead
-            // runtime — input() panics, send() reports
-            let _ = snd.input_sender().send(BranchMenuMsg::Closed);
+                                    let _ = snd.input_sender().send(BranchMenuMsg::Closed);
         });
         let snd = sender.clone();
         let e2 = entry.clone();
@@ -262,8 +220,7 @@ impl Component for BranchMenu {
             let text = e2.text().to_string();
             snd.input(BranchMenuMsg::Create(text));
         });
-        // new-entry page flip is pure widget ops — no model reads, direct
-        let nst = stack.clone();
+                let nst = stack.clone();
         let nent = entry.clone();
         let npage = newpage.clone();
         new_row.connect_clicked(move |_| {
@@ -296,13 +253,10 @@ impl Component for BranchMenu {
     fn update(&mut self, msg: BranchMenuMsg, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
             BranchMenuMsg::SetRoot(r) => {
-                // fixed latent bug: the pill wired set_root nowhere, so
-                // flights would run on root=None — here it's a real input
-                self.root = r;
+                                                self.root = r;
             }
             BranchMenuMsg::Update(b) => {
-                // row repaint: branch name or None (outside a repo → hide)
-                root.set_visible(b.is_some());
+                                root.set_visible(b.is_some());
                 if let Some(n) = b.as_deref()
                     && !n.is_empty() {
                         self.label.set_text(n);
@@ -310,13 +264,11 @@ impl Component for BranchMenu {
             }
             BranchMenuMsg::Gate(g) => self.gate = g,
             BranchMenuMsg::Pick(name) => {
-                // switch, then pull the branch we landed on
-                self.chain_pull = true;
+                                self.chain_pull = true;
                 self.start(gitstatus::switch, name, "Switching…", "Switched ✓", &sender)
             }
             BranchMenuMsg::Create(name) => {
-                // text UNTRIMMED — create_switch trims internally
-                self.start(
+                                self.start(
                     gitstatus::create_switch,
                     name,
                     "Creating…",
@@ -325,12 +277,11 @@ impl Component for BranchMenu {
                 )
             }
             BranchMenuMsg::Pull => {
-                // name ignored by pull — the arg shape is the shared op signature
-                self.start(gitstatus::pull, String::new(), "Pulling…", "Pulled ✓", &sender)
+                                self.start(gitstatus::pull, String::new(), "Pulling…", "Pulled ✓", &sender)
             }
             BranchMenuMsg::SubOpen(g) => {
                 if g != self.open_gen {
-                    return; // stale timer, canceled by a gen bump
+                    return; 
                 }
                 self.open_armed = false;
                 self.list_branches(&sender, true);
@@ -344,19 +295,18 @@ impl Component for BranchMenu {
             BranchMenuMsg::OpenMenu => {
                 self.list_branches(&sender, false);
                 self.stack.set_visible_child(&self.menupage);
-                root.add_css_class("alpaca-open"); // clicked-pill state (user mockup)
+                root.add_css_class("alpaca-open"); 
                 self.pop.popup();
             }
             BranchMenuMsg::Closed => {
                 root.remove_css_class("alpaca-open");
-                // the double cancel: kill both armed timers at once
-                self.open_gen += 1;
+                                self.open_gen += 1;
                 self.close_gen += 1;
                 self.open_armed = false;
                 self.sub.popdown();
             }
             BranchMenuMsg::SubEnterRow => {
-                self.close_gen += 1; // pointer came BACK: cancel a pending close
+                self.close_gen += 1; 
                 if self.open_armed || self.sub.is_visible() {
                     return;
                 }
@@ -365,9 +315,7 @@ impl Component for BranchMenu {
                 let g = self.open_gen;
                 let snd = sender.clone();
                 glib::timeout_add(Duration::from_millis(80), move || {
-                    // close law: input() panics on a dropped runtime — send()
-                    // reports; a dead send retires the timer
-                    if snd.input_sender().send(BranchMenuMsg::SubOpen(g)).is_err() {
+                                                            if snd.input_sender().send(BranchMenuMsg::SubOpen(g)).is_err() {
                         return glib::ControlFlow::Break;
                     }
                     glib::ControlFlow::Break
@@ -379,7 +327,7 @@ impl Component for BranchMenu {
                 self.sched_close(&sender);
             }
             BranchMenuMsg::SubEnterList => {
-                self.close_gen += 1; // pointer made it into the list
+                self.close_gen += 1; 
             }
             BranchMenuMsg::SubLeaveList => self.sched_close(&sender),
         }
@@ -394,10 +342,7 @@ impl Component for BranchMenu {
         match message {
             BranchCommand::Landed { ok, text, okmsg } => {
                 self.flight = false;
-                // armed Pick: switch succeeded → immediately pull the new HEAD.
-                // (Create doesn't arm — a fresh `-b` branch has no upstream;
-                // git's own no-tracking error would only be noise.)
-                if self.chain_pull {
+                                                                if self.chain_pull {
                     self.chain_pull = false;
                     if ok {
                         self.start(
@@ -417,11 +362,9 @@ impl Component for BranchMenu {
             }
             BranchCommand::Branches { root, cur, names, popup_sub, open_gen } => {
                 if self.root.as_ref() != Some(&root) {
-                    return; // root switched mid-flight: this list is not ours
+                    return; 
                 }
-                // popup only if the hover that spawned us is still alive AND
-                // nothing already popped the submenu (double-sub.open guard)
-                let do_pop = popup_sub
+                                                let do_pop = popup_sub
                     && self.open_gen == open_gen
                     && !self.sub.is_visible();
                 self.paint_branches(&sender, cur.as_deref(), &names, do_pop);
@@ -436,9 +379,7 @@ impl BranchMenu {
         let g = self.close_gen;
         let snd = sender.clone();
         glib::timeout_add(Duration::from_millis(250), move || {
-            // close law: input() panics on a dropped runtime — send()
-            // reports; a dead send retires the timer
-            if snd.input_sender().send(BranchMenuMsg::SubClose(g)).is_err() {
+                                    if snd.input_sender().send(BranchMenuMsg::SubClose(g)).is_err() {
                 return glib::ControlFlow::Break;
             }
             glib::ControlFlow::Break
@@ -457,12 +398,10 @@ impl BranchMenu {
             return;
         }
         let Some(root) = self.root.clone() else {
-            // not a repo — the pill hides anyway
-            return;
+                        return;
         };
-        // snapshot: set_root mid-flight must not reroute it
-        self.flight = true;
-        self.pop.popdown(); // closed signal tidies the submenu too
+                self.flight = true;
+        self.pop.popdown(); 
         let _ = sender.output(BranchMenuOutput::Status(
             GitStatusKind::Busy,
             phase.to_string(),
@@ -477,17 +416,12 @@ impl BranchMenu {
         });
     }
 
-    /// Branch list as a command flight — the popup handler used to block on
-    /// two git subprocess calls (branch_of + branches, 5s walls); hovering the
-    /// pill no longer freezes the mainloop on a stalled git. Widgets build in
-    /// Branches's landing (the root guard drops a switched workspace).
-    fn list_branches(&self, sender: &ComponentSender<Self>, popup_sub: bool) {
+                    fn list_branches(&self, sender: &ComponentSender<Self>, popup_sub: bool) {
         let Some(root) = self.root.clone() else {
-            // not a repo: no git calls — the "No branches yet" state lands now
-            self.paint_branches(sender, None, &[], popup_sub);
+                        self.paint_branches(sender, None, &[], popup_sub);
             return;
         };
-        let open_gen = self.open_gen; // stamped for the landing's pop validation
+        let open_gen = self.open_gen; 
         sender.spawn_command(move |out| {
             let cur = gitstatus::branch_of(&root.to_string_lossy());
             let names = gitstatus::branches(&root.to_string_lossy()).unwrap_or_default();
@@ -495,10 +429,7 @@ impl BranchMenu {
         });
     }
 
-    /// The widget half of the branch fill: clear + rebuild the submenu
-    /// rows from landed git data, pop the submenu when the request was a hover
-    /// (✓ tick marks the current branch; unborn HEAD → "No branches yet").
-    fn paint_branches(
+                fn paint_branches(
         &self,
         sender: &ComponentSender<Self>,
         cur: Option<&str>,
@@ -512,14 +443,13 @@ impl BranchMenu {
             child = nxt;
         }
         if names.is_empty() {
-            // unborn HEAD: nothing to switch to
-            let lbl = gtk::Label::builder()
+                        let lbl = gtk::Label::builder()
                 .label("No branches yet")
                 .xalign(0.5)
                 .margin_top(4)
                 .margin_bottom(4)
                 .margin_start(10)
-                .margin_end(10) // rows' 10px inset, centered
+                .margin_end(10) 
                 .css_classes(["alpaca-hint"])
                 .build();
             self.branch_box.append(&lbl);
@@ -529,7 +459,7 @@ impl BranchMenu {
             return;
         }
         for n in names {
-            let n = n.clone(); // rows are few: an owned copy for the Pick closure
+            let n = n.clone(); 
             let mut classes = Vec::with_capacity(2);
             classes.push("alpaca-branchitem");
             if cur == Some(n.as_str()) {
@@ -539,8 +469,7 @@ impl BranchMenu {
                 .has_frame(false)
                 .css_classes(classes)
                 .build();
-            // current branch row ticks (✓); plain label otherwise
-            let lbl = gtk::Label::builder()
+                        let lbl = gtk::Label::builder()
                 .label(if cur == Some(n.as_str()) {
                     format!("✓ {n}")
                 } else {
@@ -560,5 +489,3 @@ impl BranchMenu {
     }
 }
 
-// widget-layer behaviors (hover ping-pong, popover grab, real Pick → branch
-// flip on a scratch repo) are the T8 probe's — nothing here is pure.

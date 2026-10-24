@@ -1,11 +1,3 @@
-//! Icon pipeline: pixbuf surface for tree cells + cairo text chips.
-//! WIDGET icons live in vector.rs (VecIcon paintables, S3); TREE-CELL /
-//! tab-badge pixbufs are still rasterized here — CellRendererPixbuf has no
-//! paintable property (CLAUDE.md).
-//!
-//! FILE-TYPE badges come from seti.rs (baked seti-ui glyphs, one per ext rule)
-//! since the 2026-10-09 seti swap; the old cairo text-chip pipeline stays only for the
-//! gitview status letter tiles.
 
 use crate::render::seti;
 use gdk_pixbuf::prelude::*;
@@ -16,8 +8,6 @@ use std::sync::Mutex;
 
 pub const SIZE: i32 = 16;
 
-/// One rasterization per (name, size). Caches the
-/// straight-alpha RGBA bytes (Pixbuf itself is !Send).
 #[derive(Clone)]
 struct PixbufBytes {
     rgba: Vec<u8>,
@@ -25,7 +15,6 @@ struct PixbufBytes {
     h: i32,
 }
 
-/// (icon name, px size) → rasterized RGBA bytes (None = rasterize failed)
 type BadgeCache = HashMap<(String, i32), Option<PixbufBytes>>;
 
 static SVG_CACHE: std::sync::LazyLock<Mutex<BadgeCache>> =
@@ -91,7 +80,6 @@ pub(crate) fn svg_data(name: &str) -> Option<&'static [u8]> {
     }
 }
 
-/// Rasterize an embedded SVG at `size` through the system pixbuf loader.
 fn rasterize(name: &str, size: i32) -> Option<PixbufBytes> {
     let loader = PixbufLoader::with_mime_type("image/svg+xml").ok()?;
     loader.set_size(size, size);
@@ -105,7 +93,6 @@ fn rasterize(name: &str, size: i32) -> Option<PixbufBytes> {
     })
 }
 
-/// Straight-alpha RGBA copy of a pixbuf's pixel buffer (read-only FFI slice).
 fn pix_bytes(pix: &Pixbuf) -> Vec<u8> {
     use gtk4::glib::translate::*;
     unsafe {
@@ -127,8 +114,6 @@ fn to_pixbuf(b: &PixbufBytes) -> Pixbuf {
     )
 }
 
-/// Design SVG from the embedded assets rasterized at `size`; None when missing.
-/// Fill colors are baked into the files — do not tint these.
 pub fn svg_pixbuf(name: &str, size: i32) -> Option<Pixbuf> {
     let cached = SVG_CACHE
         .lock()
@@ -139,9 +124,6 @@ pub fn svg_pixbuf(name: &str, size: i32) -> Option<Pixbuf> {
     cached.as_ref().map(to_pixbuf)
 }
 
-/// File-row badge: the seti glyph for this filename (seti.rs cascade, fallback
-/// = the seti default file icon); dirs keep the chrome folder.svg. Fill colors
-/// are baked into the files — do not tint these.
 pub fn pixbuf_for(name: &str, is_dir: bool) -> Option<Pixbuf> {
     if is_dir {
         return folder_pixbuf();
@@ -157,20 +139,17 @@ pub fn chevron_pixbuf(down: bool) -> Option<Pixbuf> {
     svg_pixbuf(if down { "chevron-down.svg" } else { "chevron.svg" }, 12)
 }
 
-/// 12×12 fully transparent file-row chevron slot (keeps tree text aligned with dirs).
 pub fn blank_pixbuf() -> Pixbuf {
     let pix = Pixbuf::new(Colorspace::Rgb, true, 8, 12, 12).unwrap();
-    pix.fill(0); // new() doesn't promise zeroed memory
+    pix.fill(0); 
     pix
 }
 
-/// gitview status-letter tile — S2 consumer;
-/// exercised by the test below until S2 lands.
 pub fn letter_pixbuf(letter: &str, hexcol: &str) -> Option<Pixbuf> {
     render(letter, hexcol, Some(&tile_bg(hexcol)))
 }
 
-const CARD_BG: &str = "#0d1017"; // .alpaca-card fill — tiles must read ON it
+const CARD_BG: &str = "#0d1017"; 
 
 fn rgb(hexstr: &str) -> [f64; 3] {
     let h = hexstr.trim_start_matches('#');
@@ -185,8 +164,6 @@ fn tile_bg(hexcol: &str) -> String {
     format!("#{:02x}{:02x}{:02x}", mix(0), mix(1), mix(2))
 }
 
-/// Rect with corner arcs. Four 90° sweeps — the old per-corner tuple list used
-/// wrong angle pairs (one spanned 270°) and carved a notch out of filled shapes.
 fn rounded(c: &Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     use std::f64::consts::{FRAC_PI_2, PI};
     c.move_to(x + r, y);
@@ -197,7 +174,7 @@ fn rounded(c: &Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     c.line_to(x + r, y + h);
     c.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
     c.line_to(x, y + r);
-    c.arc(x + r, y + r, r, PI, PI + FRAC_PI_2); // 3π/2 — same sweep as the literal
+    c.arc(x + r, y + r, r, PI, PI + FRAC_PI_2); 
     c.close_path();
 }
 
@@ -205,10 +182,6 @@ fn is_lower(label: &str) -> bool {
     label.chars().any(char::is_lowercase) && !label.chars().any(char::is_uppercase)
 }
 
-/// Chip/glyph render at the exact display size.
-/// NO supersampling — a 4× supersample crushed back to 16px merged bold
-/// strokes into unreadable mush ("TS" read as "15", probe-measured); Cairo's
-/// own antialiasing at 1:1 keeps the glyphs legible.
 fn render(label: &str, fg: &str, chip: Option<&str>) -> Option<Pixbuf> {
     let key = format!("{label}|{fg}|{chip:?}");
     let cached = CHIP_CACHE
@@ -231,8 +204,7 @@ fn render_bytes(label: &str, fg: &str, chip: Option<&str>) -> Option<PixbufBytes
             rounded(&c, 0.0, 0.0, s, s, (s * 0.27).floor());
             c.fill().ok()?;
         }
-        // fallback when folder.svg is missing: two rounded tabs
-        None if label == "folder" => {
+                None if label == "folder" => {
             let rgb = rgb(fg);
             c.set_source_rgb(rgb[0], rgb[1], rgb[2]);
             rounded(&c, s / 3.0, s / 8.0, 2.0 * s / 3.0, s / 4.0, 1.5);
@@ -256,26 +228,21 @@ fn render_bytes(label: &str, fg: &str, chip: Option<&str>) -> Option<PixbufBytes
         }
         let tw = ex.width();
         if is_lower(label) {
-            // lowercase labels: center the BOWL BAND (x-height) at S/2 and let
-            // tails hang below — ink-box centering pulls bowls ~1.5px high
-            // (descender-tipped box), measured on py chips vs filenames.
-            let xh = c.text_extents("x").ok()?.height();
-            let base_y = (s / 2.0 + xh / 2.0).round(); // 11 at SIZE 16 — the row's text baseline
+                                                let xh = c.text_extents("x").ok()?.height();
+            let base_y = (s / 2.0 + xh / 2.0).round(); 
             c.move_to((s - tw) / 2.0 - ex.x_bearing(), base_y);
         } else {
-            // ink-box centering (caps letters = the band exactly)
-            c.move_to(
+                        c.move_to(
                 (s - tw) / 2.0 - ex.x_bearing(),
                 (s - ex.height()) / 2.0 - ex.y_bearing(),
             );
         }
         c.show_text(label).ok()?;
     }
-    drop(c); // ImageSurface::data() needs the exclusive refcount the Context holds
+    drop(c); 
     Some(unpremultiply(surf))
 }
 
-/// Unpremultiply cairo ARGB32 (BGRA bytes, little-endian) → straight RGBA bytes.
 fn unpremultiply(mut surf: ImageSurface) -> PixbufBytes {
     let (w, h) = (surf.width() as usize, surf.height() as usize);
     let stride = surf.stride() as usize;
@@ -286,8 +253,7 @@ fn unpremultiply(mut surf: ImageSurface) -> PixbufBytes {
         let dst = row * w * 4;
         for i in 0..w {
             let (b, g, r, a) = (src[4 * i], src[4 * i + 1], src[4 * i + 2], src[4 * i + 3]);
-            // premultiplied → straight, clamped
-            let scale = |v: u8| ((v as u32 * 255) / a as u32) as u8;
+                        let scale = |v: u8| ((v as u32 * 255) / a as u32) as u8;
             let (r, g, b) = match a {
                 0 => (0, 0, 0),
                 255 => (r, g, b),
@@ -312,9 +278,7 @@ mod tests {
 
     #[test]
     fn pixbufs_render_if_art_present() {
-        // These render only if the embedded SVG assets exist; they must not panic
-        // either way. Assert the sizes when they do load.
-        if let Some(p) = folder_pixbuf() {
+                        if let Some(p) = folder_pixbuf() {
             assert_eq!(p.width(), 16);
         }
         if let Some(c) = chevron_pixbuf(true) {
@@ -322,12 +286,10 @@ mod tests {
         }
         let blank = blank_pixbuf();
         assert_eq!((blank.width(), blank.height()), (12, 12));
-        // letter tile: 16×16
-        if let Some(t) = letter_pixbuf("M", "#f2c94c") {
+                if let Some(t) = letter_pixbuf("M", "#f2c94c") {
             assert_eq!(t.width(), 16);
         }
-        // the chip path actually paints (blue rounded tile under the glyph)
-        let chip = render_bytes("TS", "#ffffff", Some("#2f80ed")).unwrap();
+                let chip = render_bytes("TS", "#ffffff", Some("#2f80ed")).unwrap();
         assert!(
             chip.rgba.as_chunks::<4>().0.iter().any(|px| px[3] > 0),
             "chip render painted nothing"
