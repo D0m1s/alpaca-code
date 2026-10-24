@@ -502,7 +502,6 @@ pub(crate) mod tests {
         }
     }
 
-    // Driven by render::tests::gtk_layer_tests (single shared gtk4::init).
     #[cfg(test)]
     pub(crate) fn vecicon_snapshot_records_nodes() {
         for (name, _, _) in GOLDEN {

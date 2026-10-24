@@ -32,6 +32,7 @@ CI: GitHub Actions (`.github/workflows/ci.yml`) runs three hard gates — `test`
 
 ## Rules of engagement
 
+- **No comments in code.** Whole-codebase policy: no `//`, `/* */`, `#`, or XML comment annotations in any source, build, workflow, or script file (shebangs excepted) — invariants and reasoning live in `docs/invariants.md` and commit messages, never inline.
 - `cargo test` stays green — no behavior change lands otherwise (restructure/move tasks included).
 - Probes are env-gated and never run with env unset (single-instance forward loses them); headless runs always use the broadway rig + isolated `XDG_CONFIG_HOME`.
 - `state.json` load never raises — corrupt files coerce to defaults, never brick startup.

@@ -26,9 +26,6 @@ fn scheme_dir() -> PathBuf {
     dir
 }
 
-/// Registers the bundled app icon so `set_icon_name("io.alpaca.rs")` resolves on
-/// every platform without any theme installation (the bundle is a hicolor-style
-/// theme embedded as a GResource).
 pub fn init_icons() {
     let bundle = gtk4::gio::Resource::from_data(&gtk4::glib::Bytes::from_static(ICON_THEME_BUNDLE))
         .expect("app-icons.gresource is a valid bundle");
@@ -54,15 +51,12 @@ pub fn init() {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::*;
-
-    // Driven by render::tests::gtk_layer_tests (single shared gtk4::init).
     #[cfg(test)]
     pub(crate) fn bundled_app_icon_resolves_by_name() {
-        init_icons();
+        let theme = gtk4::IconTheme::new();
+        theme.add_resource_path("/io/alpaca/theme");
         assert!(
-            gtk4::IconTheme::for_display(&gtk4::gdk::Display::default().unwrap())
-                .has_icon("io.alpaca.rs"),
+            theme.has_icon("io.alpaca.rs"),
             "bundled hicolor theme must make io.alpaca.rs resolvable"
         );
     }

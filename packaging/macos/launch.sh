@@ -1,8 +1,5 @@
 #!/bin/sh
-# CFBundleExecutable: sets up runtime caches (writable dirs) from the read-only
-# bundle, then execs the real binary. @@ROOT@@/@@CACHEDIR@@ placeholders from
-# bundle-app.sh resolve here.
-HERE="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"   # .../Contents
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 WORK="${TMPDIR:-/tmp}/alpaca-code-rs"
 mkdir -p "$WORK"
 

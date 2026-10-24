@@ -1,6 +1,4 @@
 #!/bin/sh
-# alpaca-code — install the launcher entry + app icon into ~/.local
-# (binary into PATH). Uninstall: reverse every cp below.
 set -e
 cd "$(dirname "$0")"
 

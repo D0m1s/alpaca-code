@@ -48,7 +48,7 @@ jobs:
           Xvfb :99 -screen 0 1600x900x24 -nolisten tcp &
           sleep 2
 
-          boot_shot() { # $1 shot name, $2.. app args
+          boot_shot() {
               local shot="$1"; shift
               dbus-run-session -- env XDG_CONFIG_HOME="$PWD/boot-state" \
                   ./target/release/alpaca-code-rs "$@" >/dev/null 2>&1 &
@@ -140,7 +140,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - run: brew install --quiet vte3 gtksourceview5   # vte3 = the formula with vte-2.91-gtk4
+      - run: brew install --quiet vte3 gtksourceview5
         timeout-minutes: 60
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
