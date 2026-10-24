@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Frozen bundle: app-icons.gresource is compiled from this + the sized PNGs.
+     Regenerate: glib-compile-resources --sourcedir=assets/icons \
+       assets/icons/io.alpaca.gresource.xml --target=assets/app-icons.gresource -->
+<gresources>
+  <gresource prefix="/io/alpaca/theme/hicolor">
+    <file alias="index.theme">hicolor-index.theme</file>
+    <file alias="16x16/apps/io.alpaca.rs.png">io.alpaca.rs-16.png</file>
+    <file alias="32x32/apps/io.alpaca.rs.png">io.alpaca.rs-32.png</file>
+    <file alias="48x48/apps/io.alpaca.rs.png">io.alpaca.rs-48.png</file>
+    <file alias="64x64/apps/io.alpaca.rs.png">io.alpaca.rs-64.png</file>
+    <file alias="128x128/apps/io.alpaca.rs.png">io.alpaca.rs-128.png</file>
+    <file alias="256x256/apps/io.alpaca.rs.png">io.alpaca.rs-256.png</file>
+  </gresource>
+</gresources>

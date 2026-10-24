@@ -1,0 +1,223 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  ALPACA_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.1.0' }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: linux x86_64 — appimage + tarball, boot-verified
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    env:
+      XDG_CONFIG_HOME: ${{ github.workspace }}/boot-state
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: system deps (26.04 = GTK 4.22, the crate floor)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          libgtk-4-dev libgtksourceview-5-dev libvte-2.91-gtk4-dev xvfb imagemagick
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2.9.3
+
+      - name: build
+        run: cargo build --release --locked
+
+      - name: boot smoke — launcher + editor, screenshotted
+        run: |
+          set -euo pipefail
+          export DISPLAY=:99
+          mkdir -p boots boot-state
+          chmod 700 boot-state
+          Xvfb :99 -screen 0 1600x900x24 -nolisten tcp &
+          sleep 2
+
+          boot_shot() { # $1 shot name, $2.. app args
+              local shot="$1"; shift
+              dbus-run-session -- env XDG_CONFIG_HOME="$PWD/boot-state" \
+                  ./target/release/alpaca-code-rs "$@" >/dev/null 2>&1 &
+              sleep 6
+              pgrep -x alpaca-code-rs >/dev/null \
+                  || { echo "app died before shot: $shot"; exit 1; }
+              import -display :99 -window root "boots/$shot.png"
+              killall alpaca-code-rs 2>/dev/null || true
+              sleep 2
+          }
+
+          boot_shot linux-launcher
+          mkdir -p /tmp/wsA
+          ( cd /tmp/wsA && git init -q && git config user.email c@c && git config user.name c \
+            && echo hello > a.txt && git add a.txt && git commit -qm w )
+          boot_shot linux-editor /tmp/wsA
+
+      - name: assemble AppDir + AppImage (GTK 4.22 stack bundled)
+        run: |
+          set -euo pipefail
+          VER="$ALPACA_VERSION"
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor
+          cp target/release/alpaca-code-rs AppDir/usr/bin/
+          cp packaging/io.alpaca.rs.desktop AppDir/io.alpaca.rs.desktop
+          cp packaging/io.alpaca.rs.desktop AppDir/usr/share/applications/
+          cp assets/icons/io.alpaca.rs-256.png AppDir/io.alpaca.rs.png
+          cp AppDir/io.alpaca.rs.png AppDir/.DirIcon
+          for s in 16 32 48 64 128 256; do
+              mkdir -p "AppDir/usr/share/icons/hicolor/${s}x${s}/apps"
+              cp "assets/icons/io.alpaca.rs-$s.png" \
+                 "AppDir/usr/share/icons/hicolor/${s}x${s}/apps/io.alpaca.rs.png"
+          done
+
+          curl -sL -o linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -sL -o linuxdeploy-plugin-gtk \
+            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk
+
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export VERSION="$VER"
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            -d AppDir/io.alpaca.rs.desktop -i AppDir/io.alpaca.rs.png \
+            --plugin gtk --output appimage
+          mkdir -p dist
+          mv alpaca-code*.AppImage "dist/alpaca-code-$VER-linux-x86_64.AppImage"
+
+      - name: AppImage boots on its own bundled stack
+        run: |
+          set -euo pipefail
+          appimg=$(ls dist/alpaca-code-*-linux-x86_64.AppImage)
+          chmod +x "$appimg"
+          dbus-run-session -- env XDG_CONFIG_HOME="$PWD/boot-state" \
+            APPIMAGE_EXTRACT_AND_RUN=1 "$appimg" >/dev/null 2>&1 &
+          sleep 12
+          pgrep -x alpaca-code-rs >/dev/null || { echo "appimage boot died"; exit 1; }
+          import -display :99 -window root boots/linux-appimage.png
+          killall alpaca-code-rs 2>/dev/null || true
+
+      - name: tarball (bare binary + launcher wiring for GTK ≥ 4.22 distros)
+        run: |
+          set -euo pipefail
+          VER="$ALPACA_VERSION"
+          d="alpaca-code-$VER-linux-x86_64"
+          mkdir -p "$d"
+          cp target/release/alpaca-code-rs packaging/install-linux.sh \
+             packaging/io.alpaca.rs.desktop LICENSE README.md "$d/"
+          for s in 16 32 48 64 128 256; do
+              cp "assets/icons/io.alpaca.rs-$s.png" "$d/"
+          done
+          tar -czf "dist/$d.tar.gz" "$d"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux
+          path: dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boots-linux
+          path: boots/*
+
+  macos:
+    name: macos arm64 — .app bundle, boot-verified
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      XDG_CONFIG_HOME: ${{ github.workspace }}/boot-state
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - run: brew install --quiet vte3 gtksourceview5   # vte3 = the formula with vte-2.91-gtk4
+        timeout-minutes: 60
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2.9.3
+
+      - name: build
+        run: cargo build --release --locked
+
+      - name: bundle .app (dylib closure + fonts + loaders, boot-verified)
+        run: packaging/macos/bundle-app.sh
+
+      - name: boot smoke — launcher + editor, screenshotted
+        run: |
+          set -euo pipefail
+          mkdir -p boots boot-state
+          open "alpaca-code.app"
+          sleep 8
+          pgrep -x alpaca-code-rs >/dev/null || { echo "app boot died"; exit 1; }
+          screencapture -x boots/macos-launcher.png
+          killall alpaca-code-rs 2>/dev/null || true
+          sleep 2
+
+          mkdir -p /tmp/wsA
+          ( cd /tmp/wsA && git init -q && git config user.email c@c && git config user.name c \
+            && echo hello > a.txt && git add a.txt && git commit -qm w )
+          open "alpaca-code.app" --args /tmp/wsA
+          sleep 12
+          pgrep -x alpaca-code-rs >/dev/null || { echo "editor boot died"; exit 1; }
+          screencapture -x boots/macos-editor.png
+          killall alpaca-code-rs 2>/dev/null || true
+
+      - name: zip
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            alpaca-code.app "alpaca-code-$ALPACA_VERSION-macos-arm64.zip"
+          mkdir -p dist
+          mv "alpaca-code-$ALPACA_VERSION-macos-arm64.zip" dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boots-macos
+          path: boots/*
+
+  release:
+    name: publish release (tag runs only)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: 'dist-*'
+          merge-multiple: true
+          path: dist
+
+      - name: checksums
+        run: (cd dist && sha256sum alpaca-code-* > sha256sums.txt)
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "alpaca-code ${GITHUB_REF_NAME#v}" \
+            --notes-file packaging/release-notes-0.1.0.md \
+            dist/*

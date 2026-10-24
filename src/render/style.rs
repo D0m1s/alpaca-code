@@ -5,6 +5,7 @@ use gtk4::prelude::*;
 
 const CSS: &str = include_str!("../../assets/app.css");
 const SCHEME: &str = include_str!("../../assets/style-schemes/alpaca-dark.xml");
+const ICON_THEME_BUNDLE: &[u8] = include_bytes!("../../assets/app-icons.gresource");
 
 fn dirs_xdg() -> PathBuf {
     let base = std::env::var("XDG_DATA_HOME")
@@ -25,11 +26,23 @@ fn scheme_dir() -> PathBuf {
     dir
 }
 
+/// Registers the bundled app icon so `set_icon_name("io.alpaca.rs")` resolves on
+/// every platform without any theme installation (the bundle is a hicolor-style
+/// theme embedded as a GResource).
+pub fn init_icons() {
+    let bundle = gtk4::gio::Resource::from_data(&gtk4::glib::Bytes::from_static(ICON_THEME_BUNDLE))
+        .expect("app-icons.gresource is a valid bundle");
+    gtk4::gio::resources_register(&bundle);
+    gtk4::IconTheme::for_display(&gtk4::gdk::Display::default().unwrap())
+        .add_resource_path("/io/alpaca/theme");
+}
+
 pub fn init() {
     let settings = gtk4::Settings::default().unwrap();
     settings.set_property("gtk-application-prefer-dark-theme", true);
     settings.set_property("gtk-decoration-layout", ":minimize,maximize,close");
     sourceview5::StyleSchemeManager::default().append_search_path(scheme_dir().to_str().unwrap());
+    init_icons();
     let provider = gtk4::CssProvider::new();
     provider.load_from_string(CSS);
     gtk4::style_context_add_provider_for_display(
@@ -37,4 +50,20 @@ pub fn init() {
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_USER,
     );
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    // Driven by render::tests::gtk_layer_tests (single shared gtk4::init).
+    #[cfg(test)]
+    pub(crate) fn bundled_app_icon_resolves_by_name() {
+        init_icons();
+        assert!(
+            gtk4::IconTheme::for_display(&gtk4::gdk::Display::default().unwrap())
+                .has_icon("io.alpaca.rs"),
+            "bundled hicolor theme must make io.alpaca.rs resolvable"
+        );
+    }
 }
