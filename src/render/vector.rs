@@ -471,7 +471,7 @@ pub(crate) fn icon(name: &str) -> Option<VecIcon> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::render::badges::svg_data;
 

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=alpaca-code
+Comment=A GTK4 desktop editor that puts the claude agent where your code lives
+Exec=alpaca-code-rs %f
+Icon=io.alpaca.rs
+Terminal=false
+Categories=Development;IDE;
+Keywords=editor;ide;claude;agent;code;
+StartupWMClass=io.alpaca.rs
