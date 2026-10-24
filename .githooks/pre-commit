@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked --quiet -- -D warnings
+cargo test --locked --quiet 2>/dev/null

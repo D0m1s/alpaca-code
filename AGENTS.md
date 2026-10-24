@@ -12,7 +12,7 @@ cargo build         # cargo test does NOT refresh the runnable bin
 
 System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`. Release install: `cargo build --release`, then copy `target/release/alpaca-code-rs` to `~/.local/bin/` yourself.
 
-CI: GitHub Actions (`.github/workflows/ci.yml`) runs three hard gates — `test` (`cargo test --locked`, under `xvfb-run`: the VecIcon golden test calls `gtk4::init`, which needs a display and only passes locally via the session's display env), `clippy` (`--all-targets -- -D warnings`), `fmt` — on `runs-on: ubuntu-26.04`, because that runner is the first Ubuntu with GTK 4.22 (the crate's `v4_22` feature floor; the 24.04 image stops at 4.14).
+CI: GitHub Actions (`.github/workflows/ci.yml`) runs three hard gates — `test` (`cargo test --locked`, under `xvfb-run`: the VecIcon golden test calls `gtk4::init`, which needs a display and only passes locally via the session's display env), `clippy` (`--all-targets -- -D warnings`), `fmt` — on `runs-on: ubuntu-26.04`, because that runner is the first Ubuntu with GTK 4.22 (the crate's `v4_22` feature floor; the 24.04 image stops at 4.14). Commit hook: `git config core.hooksPath .githooks` once per clone runs the same triple pre-commit (`--no-verify` overrides). Two more workflows: `audit.yml` (RustSec vs Cargo.lock, weekly) and `claude.yml` (interactive `@claude` fixes + code-review plugin job, advisory until the repo holds `ANTHROPIC_API_KEY` and the Claude GitHub App); dependabot bumps `cargo` + `github-actions` weekly.
 
 ## Repo map
 
