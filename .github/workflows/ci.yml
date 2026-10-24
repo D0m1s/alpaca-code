@@ -13,12 +13,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  ci:
+  test:
+    name: cargo test (the gate)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
-    env:
-      CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -31,13 +33,41 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2.9.3
 
-      - name: rustfmt (advisory — repo has fmt drift, promote to gate after a fmt pass)
-        continue-on-error: true
-        run: cargo fmt --all -- --check
+      - run: cargo test --locked
 
-      - name: clippy (advisory — 20 lints open, promote to gate after a lint pass)
-        continue-on-error: true
-        run: cargo clippy --all-targets --locked -- -D warnings
+  clippy:
+    name: cargo clippy (advisory — 20 lints open, promote to gate after a lint pass)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7.0.1
 
-      - name: test (the gate — displayless, 70 units)
-        run: cargo test --locked
+      - name: system deps (26.04 ships GTK 4.22, the crate's v4_22 floor; 24.04's 4.14 is short)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-dev libgtksourceview-5-dev libvte-2.91-gtk4-dev
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2.9.3
+
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  fmt:
+    name: rustfmt (advisory — repo has fmt drift, promote to gate after a fmt pass)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2.9.3
+
+      - run: cargo fmt --all -- --check
