@@ -1,8 +1,7 @@
-
 use crate::render::seti;
 use gdk_pixbuf::prelude::*;
 use gdk_pixbuf::{Colorspace, Pixbuf, PixbufLoader};
-use gtk4::cairo::{Context, FontSlant, Format, FontWeight, ImageSurface};
+use gtk4::cairo::{Context, FontSlant, FontWeight, Format, ImageSurface};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -136,12 +135,19 @@ pub fn folder_pixbuf() -> Option<Pixbuf> {
 }
 
 pub fn chevron_pixbuf(down: bool) -> Option<Pixbuf> {
-    svg_pixbuf(if down { "chevron-down.svg" } else { "chevron.svg" }, 12)
+    svg_pixbuf(
+        if down {
+            "chevron-down.svg"
+        } else {
+            "chevron.svg"
+        },
+        12,
+    )
 }
 
 pub fn blank_pixbuf() -> Pixbuf {
     let pix = Pixbuf::new(Colorspace::Rgb, true, 8, 12, 12).unwrap();
-    pix.fill(0); 
+    pix.fill(0);
     pix
 }
 
@@ -149,7 +155,7 @@ pub fn letter_pixbuf(letter: &str, hexcol: &str) -> Option<Pixbuf> {
     render(letter, hexcol, Some(&tile_bg(hexcol)))
 }
 
-const CARD_BG: &str = "#0d1017"; 
+const CARD_BG: &str = "#0d1017";
 
 fn rgb(hexstr: &str) -> [f64; 3] {
     let h = hexstr.trim_start_matches('#');
@@ -174,7 +180,7 @@ fn rounded(c: &Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     c.line_to(x + r, y + h);
     c.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
     c.line_to(x, y + r);
-    c.arc(x + r, y + r, r, PI, PI + FRAC_PI_2); 
+    c.arc(x + r, y + r, r, PI, PI + FRAC_PI_2);
     c.close_path();
 }
 
@@ -204,7 +210,7 @@ fn render_bytes(label: &str, fg: &str, chip: Option<&str>) -> Option<PixbufBytes
             rounded(&c, 0.0, 0.0, s, s, (s * 0.27).floor());
             c.fill().ok()?;
         }
-                None if label == "folder" => {
+        None if label == "folder" => {
             let rgb = rgb(fg);
             c.set_source_rgb(rgb[0], rgb[1], rgb[2]);
             rounded(&c, s / 3.0, s / 8.0, 2.0 * s / 3.0, s / 4.0, 1.5);
@@ -228,18 +234,18 @@ fn render_bytes(label: &str, fg: &str, chip: Option<&str>) -> Option<PixbufBytes
         }
         let tw = ex.width();
         if is_lower(label) {
-                                                let xh = c.text_extents("x").ok()?.height();
-            let base_y = (s / 2.0 + xh / 2.0).round(); 
+            let xh = c.text_extents("x").ok()?.height();
+            let base_y = (s / 2.0 + xh / 2.0).round();
             c.move_to((s - tw) / 2.0 - ex.x_bearing(), base_y);
         } else {
-                        c.move_to(
+            c.move_to(
                 (s - tw) / 2.0 - ex.x_bearing(),
                 (s - ex.height()) / 2.0 - ex.y_bearing(),
             );
         }
         c.show_text(label).ok()?;
     }
-    drop(c); 
+    drop(c);
     Some(unpremultiply(surf))
 }
 
@@ -253,7 +259,7 @@ fn unpremultiply(mut surf: ImageSurface) -> PixbufBytes {
         let dst = row * w * 4;
         for i in 0..w {
             let (b, g, r, a) = (src[4 * i], src[4 * i + 1], src[4 * i + 2], src[4 * i + 3]);
-                        let scale = |v: u8| ((v as u32 * 255) / a as u32) as u8;
+            let scale = |v: u8| ((v as u32 * 255) / a as u32) as u8;
             let (r, g, b) = match a {
                 0 => (0, 0, 0),
                 255 => (r, g, b),
@@ -278,7 +284,7 @@ mod tests {
 
     #[test]
     fn pixbufs_render_if_art_present() {
-                        if let Some(p) = folder_pixbuf() {
+        if let Some(p) = folder_pixbuf() {
             assert_eq!(p.width(), 16);
         }
         if let Some(c) = chevron_pixbuf(true) {
@@ -286,10 +292,10 @@ mod tests {
         }
         let blank = blank_pixbuf();
         assert_eq!((blank.width(), blank.height()), (12, 12));
-                if let Some(t) = letter_pixbuf("M", "#f2c94c") {
+        if let Some(t) = letter_pixbuf("M", "#f2c94c") {
             assert_eq!(t.width(), 16);
         }
-                let chip = render_bytes("TS", "#ffffff", Some("#2f80ed")).unwrap();
+        let chip = render_bytes("TS", "#ffffff", Some("#2f80ed")).unwrap();
         assert!(
             chip.rgba.as_chunks::<4>().0.iter().any(|px| px[3] > 0),
             "chip render painted nothing"

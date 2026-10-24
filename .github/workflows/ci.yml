@@ -37,10 +37,9 @@ jobs:
         run: xvfb-run --auto-servernum cargo test --locked
 
   clippy:
-    name: cargo clippy (advisory — 20 lints open, promote to gate after a lint pass)
+    name: cargo clippy
     runs-on: ubuntu-26.04
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -57,10 +56,9 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
 
   fmt:
-    name: rustfmt (advisory — repo has fmt drift, promote to gate after a fmt pass)
+    name: cargo fmt
     runs-on: ubuntu-26.04
     timeout-minutes: 10
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7.0.1
 

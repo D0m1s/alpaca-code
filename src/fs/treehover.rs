@@ -1,4 +1,3 @@
-
 #![allow(deprecated)]
 
 use std::cell::{Cell, RefCell};
@@ -9,10 +8,10 @@ use relm4::gtk::subclass::prelude::*;
 use relm4::gtk::{glib, graphene};
 
 pub struct Imp {
-    hover_xy: Cell<(f64, f64)>, 
+    hover_xy: Cell<(f64, f64)>,
     hover_row: RefCell<Option<gtk::TreeRowReference>>,
     last_adj: RefCell<Option<gtk::Adjustment>>,
-    press_xy: Cell<(f64, f64)>, 
+    press_xy: Cell<(f64, f64)>,
 }
 
 impl Default for Imp {
@@ -29,7 +28,7 @@ impl Default for Imp {
 #[glib::object_subclass]
 impl ObjectSubclass for Imp {
     const NAME: &'static str = "AlpacaHoverTree";
-    type Type = HoverTree; 
+    type Type = HoverTree;
     type ParentType = gtk::TreeView;
 }
 
@@ -44,14 +43,14 @@ impl ObjectImpl for Imp {
         let this = obj.clone();
         motion.connect_leave(move |_| this.imp().on_leave());
         obj.add_controller(motion);
-                        let press = gtk::GestureClick::new();
+        let press = gtk::GestureClick::new();
         press.set_propagation_phase(gtk::PropagationPhase::Capture);
         let press2 = obj.clone();
         press.connect_pressed(move |_g, _n, x, y| {
             press2.imp().press_xy.set((x, y));
         });
         obj.add_controller(press);
-                                obj.connect_notify_local(Some("vadjustment"), |o, _| o.imp().hook_scroll_adj());
+        obj.connect_notify_local(Some("vadjustment"), |o, _| o.imp().hook_scroll_adj());
         obj.imp().hook_scroll_adj();
     }
 }
@@ -61,7 +60,7 @@ impl TreeViewImpl for Imp {}
 impl WidgetImpl for Imp {
     fn snapshot(&self, snapshot: &gtk::Snapshot) {
         if let Some((x, y, w, h)) = self.hover_band() {
-                        let rgba = self
+            let rgba = self
                 .obj()
                 .style_context()
                 .lookup_color("alpaca-hover")
@@ -87,7 +86,7 @@ impl Imp {
         *self.last_adj.borrow_mut() = Some(adj.clone());
         let weak = obj.downgrade();
         adj.connect_value_changed(move |_| {
-                                    let Some(o) = weak.upgrade() else { return };
+            let Some(o) = weak.upgrade() else { return };
             gtk::glib::idle_add_local_once(move || o.refresh_hover());
         });
     }
@@ -109,7 +108,9 @@ impl Imp {
         if y < 0.0 {
             return;
         }
-                                let new = obj.path_at_pos(x as i32, y as i32).and_then(|(p, _, _, _)| p);
+        let new = obj
+            .path_at_pos(x as i32, y as i32)
+            .and_then(|(p, _, _, _)| p);
         let old = self
             .hover_row
             .borrow()
@@ -117,9 +118,10 @@ impl Imp {
             .filter(|r| r.valid())
             .and_then(|r| r.path());
         if let (Some(a), Some(b)) = (old.as_ref(), new.as_ref())
-            && a == b {
-                return;
-            }
+            && a == b
+        {
+            return;
+        }
         let model = obj.model();
         let row = new.as_ref().and_then(|p| {
             model
@@ -130,7 +132,7 @@ impl Imp {
         obj.queue_draw();
     }
 
-        fn hover_band(&self) -> Option<(f32, f32, f32, f32)> {
+    fn hover_band(&self) -> Option<(f32, f32, f32, f32)> {
         let obj = self.obj();
         let r = self.hover_row.borrow().clone()?;
         if !r.valid() {
@@ -138,11 +140,11 @@ impl Imp {
         }
         let path = r.path()?;
         let col = obj.columns().first()?.clone();
-                        let area = obj.background_area(Some(&path), Some(&col));
+        let area = obj.background_area(Some(&path), Some(&col));
         if area.height() <= 0 {
             return None;
         }
-                let alloc = obj.allocation();
+        let alloc = obj.allocation();
         Some((
             area.x() as f32,
             area.y() as f32,
@@ -169,7 +171,7 @@ impl HoverTree {
         self.imp().refresh_hover();
     }
 
-            pub fn press_xy(&self) -> (f64, f64) {
+    pub fn press_xy(&self) -> (f64, f64) {
         self.imp().press_xy.get()
     }
 }
@@ -185,23 +187,32 @@ pub fn toggle_hit(px: f64, ca_x: i32, tog_w: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::toggle_hit;
     use super::Imp;
+    use super::toggle_hit;
 
     #[test]
     fn default_sentinels() {
-                                let imp = Imp::default();
+        let imp = Imp::default();
         assert_eq!(imp.hover_xy.get(), (-1.0, -1.0));
         assert_eq!(imp.press_xy.get(), (-1.0, -1.0));
     }
 
     #[test]
     fn toggle_hit_geometry() {
-                                assert!(!toggle_hit(-5.0, 0, 24), "sentinel press: not a toggle hit");
-        assert!(toggle_hit(20.0, 4, 24), "x0 = 20: lower bound inclusive (20..44)");
-        assert!(!toggle_hit(19.0, 4, 24), "below x0: still the chevron slot, not the toggle");
+        assert!(!toggle_hit(-5.0, 0, 24), "sentinel press: not a toggle hit");
+        assert!(
+            toggle_hit(20.0, 4, 24),
+            "x0 = 20: lower bound inclusive (20..44)"
+        );
+        assert!(
+            !toggle_hit(19.0, 4, 24),
+            "below x0: still the chevron slot, not the toggle"
+        );
         assert!(!toggle_hit(44.0, 4, 24), "upper bound exclusive");
         assert!(toggle_hit(43.9, 4, 24), "just inside is a hit");
-        assert!(!toggle_hit(10.0, 4, 24), "chevron-side click is the row, not the toggle");
+        assert!(
+            !toggle_hit(10.0, 4, 24),
+            "chevron-side click is the row, not the toggle"
+        );
     }
 }

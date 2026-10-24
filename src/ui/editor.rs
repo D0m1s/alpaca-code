@@ -1,4 +1,3 @@
-
 #![allow(deprecated)]
 
 use std::cell::{Cell, RefCell};
@@ -6,14 +5,14 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use relm4::gtk::{self, gio, glib, pango, prelude::*};
 use relm4::gtk::subclass::prelude::*;
+use relm4::gtk::{self, gio, glib, pango, prelude::*};
 use relm4::{Component, ComponentParts, ComponentSender};
-use sourceview5::prelude::*; 
+use sourceview5::prelude::*;
 
-use crate::render::vector;
-use crate::render::badges;
 use crate::git::gitstatus::{self, Sides};
+use crate::render::badges;
+use crate::render::vector;
 
 pub const GONE_NOTE: &str = "‹file has been deleted›";
 pub const BINARY_NOTE: &str = "‹file changed on disk — not UTF-8 text›";
@@ -40,7 +39,7 @@ fn find_tabname(w: &gtk4::Widget) -> Option<gtk4::Widget> {
 
 #[derive(Default)]
 pub struct TabDistributorImp {
-    last: Cell<Option<(i32, i32)>>, 
+    last: Cell<Option<(i32, i32)>>,
 }
 
 glib::wrapper! {
@@ -72,19 +71,27 @@ impl ObjectImpl for TabDistributorImp {}
 impl LayoutManagerImpl for TabDistributorImp {
     fn allocate(&self, widget: &gtk::Widget, width: i32, height: i32, baseline: i32) {
         self.parent_allocate(widget, width, height, baseline);
-        let Some(nb) = widget.first_child().and_downcast::<gtk::Notebook>() else { return };
+        let Some(nb) = widget.first_child().and_downcast::<gtk::Notebook>() else {
+            return;
+        };
         let n = nb.n_pages();
         if n == 0 || self.last.get() == Some((width, n as i32)) {
             return;
         }
-                        let act = nb
+        let act = nb
             .action_widget(gtk::PackType::End)
             .map_or(0, |w| w.allocated_width());
         let req = i32::max((width.saturating_sub(act)) / n as i32 - TAB_CHROME, 0);
         for i in 0..n {
-            let Some(pg) = nb.nth_page(Some(i)) else { continue };
-            let Some(label) = nb.tab_label(&pg) else { continue };
-            let Some(name) = find_tabname(&label) else { continue };
+            let Some(pg) = nb.nth_page(Some(i)) else {
+                continue;
+            };
+            let Some(label) = nb.tab_label(&pg) else {
+                continue;
+            };
+            let Some(name) = find_tabname(&label) else {
+                continue;
+            };
             let nat = name.measure(gtk::Orientation::Horizontal, -1).1;
             name.set_size_request(i32::min(req, nat), -1);
         }
@@ -131,8 +138,8 @@ fn relpath(path: &Path, root: &Path) -> String {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FileState {
     Live,
-        Deleted,
-        Binary,
+    Deleted,
+    Binary,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -143,40 +150,40 @@ pub struct EditorSnapshot {
 
 #[derive(Debug)]
 pub enum EditorMsg {
-            Restore(PathBuf, Vec<String>, i64, Option<(String, f64)>),
+    Restore(PathBuf, Vec<String>, i64, Option<(String, f64)>),
     OpenFile(PathBuf),
     SaveActive,
-            ProbeTrace(String),
-                ProbeScroll(f64),
-        SaveOpen(Vec<PathBuf>),
-        OpenDiff {
+    ProbeTrace(String),
+    ProbeScroll(f64),
+    SaveOpen(Vec<PathBuf>),
+    OpenDiff {
         root: PathBuf,
         rel: String,
         letter: String,
     },
-            RefreshDiffs {
+    RefreshDiffs {
         root: PathBuf,
         letters: Vec<(String, String)>,
     },
-        StateTick,
+    StateTick,
     Undo,
     Redo,
     Cut,
     Copy,
     Paste,
     SelectAll,
-                ProbeClip,
-            ProbeDiffScroll,
-                Switched,
-        FsEvent(PathBuf),
-        FsSettled(PathBuf),
+    ProbeClip,
+    ProbeDiffScroll,
+    Switched,
+    FsEvent(PathBuf),
+    FsSettled(PathBuf),
     ClosePage(usize, bool),
 }
 
 #[derive(Debug)]
 pub enum EditorOutput {
     StateChanged(EditorSnapshot),
-                Flushed,
+    Flushed,
 }
 
 #[derive(Debug)]
@@ -207,11 +214,11 @@ struct DiffWidgets {
     diff_text: Option<String>,
     linked_l: Rc<RefCell<LinkedAxes>>,
     linked_r: Rc<RefCell<LinkedAxes>>,
-            paned: gtk::Paned,
-        bar: gtk::Scrollbar,
-                num_l: sourceview5::View,
+    paned: gtk::Paned,
+    bar: gtk::Scrollbar,
+    num_l: sourceview5::View,
     num_r: sourceview5::View,
-            sw_num_l: gtk::ScrolledWindow,
+    sw_num_l: gtk::ScrolledWindow,
     sw_num_r: gtk::ScrolledWindow,
 }
 
@@ -226,8 +233,8 @@ struct PageState {
     badge_slot: gtk::Box,
     fs: FileState,
     conflict: bool,
-    load_mtime: Option<i64>, 
-        diff_of: Option<String>,   
+    load_mtime: Option<i64>,
+    diff_of: Option<String>,
     diff_letter: String,
     diff: Option<DiffWidgets>,
 }
@@ -235,7 +242,7 @@ struct PageState {
 pub struct Editor {
     nb: gtk::Notebook,
     pages: Vec<PageState>,
-        root: Option<PathBuf>,
+    root: Option<PathBuf>,
     lm: sourceview5::LanguageManager,
     scheme: Option<sourceview5::StyleScheme>,
     watchers: HashMap<PathBuf, gio::FileMonitor>,
@@ -274,28 +281,33 @@ impl Component for Editor {
 
         let snd = sender.clone();
         nb.connect_switch_page(move |_, _, _| {
-                                                let _ = snd.input_sender().send(EditorMsg::Switched);
+            let _ = snd.input_sender().send(EditorMsg::Switched);
         });
 
-                let svc = gtk::ShortcutController::new();
+        let svc = gtk::ShortcutController::new();
         let snd = sender.clone();
         let trig = gtk::ShortcutTrigger::parse_string("<Control>s");
         let act = gtk::CallbackAction::new(move |_w, _a| {
             snd.input(EditorMsg::SaveActive);
-            glib::Propagation::Proceed 
+            glib::Propagation::Proceed
         });
         let sc = gtk::Shortcut::new(trig, Some(act));
         svc.add_shortcut(sc);
         root.add_controller(svc);
 
         let dist: TabDistributor = glib::Object::builder::<TabDistributor>().build();
-        let tabs_wrap = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
-                                tabs_wrap.set_layout_manager(Some(dist)); 
+        let tabs_wrap = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+        tabs_wrap.set_layout_manager(Some(dist));
         tabs_wrap.append(&nb);
         root.append(&tabs_wrap);
 
         let widgets = view_output!();
-        ComponentParts { model: this, widgets }
+        ComponentParts {
+            model: this,
+            widgets,
+        }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
@@ -313,32 +325,42 @@ impl Component for Editor {
             EditorMsg::ProbeTrace(tag) => {
                 let (mut ws, mut ms) = (Vec::new(), Vec::new());
                 let strip = self.nb.allocated_width();
-                let act = self.nb.action_widget(gtk::PackType::End).map_or(0, |w| w.allocated_width());
+                let act = self
+                    .nb
+                    .action_widget(gtk::PackType::End)
+                    .map_or(0, |w| w.allocated_width());
                 let n = self.nb.n_pages().max(1) as i32;
                 let share = i32::max((strip.saturating_sub(act)) / n - TAB_CHROME, 0);
                 for i in 0..self.nb.n_pages() {
-                    let Some(pg) = self.nb.nth_page(Some(i)) else { continue };
-                    let Some(label) = self.nb.tab_label(&pg) else { continue };
-                    let Some(name) = find_tabname(&label) else { continue };
+                    let Some(pg) = self.nb.nth_page(Some(i)) else {
+                        continue;
+                    };
+                    let Some(label) = self.nb.tab_label(&pg) else {
+                        continue;
+                    };
+                    let Some(name) = find_tabname(&label) else {
+                        continue;
+                    };
                     let (min, _nat, _mb, _nb) = name.measure(gtk::Orientation::Horizontal, -1);
                     ws.push(format!("{}", name.allocated_width()));
                     ms.push(format!("{min}"));
                 }
-                println!("PROBE taballoc {tag}: strip={strip} act={act} share={share} \
+                println!(
+                    "PROBE taballoc {tag}: strip={strip} act={act} share={share} \
                           wrap={} widths=[{}] mins=[{}]",
                     self.nb.parent().map(|p| p.allocated_width()).unwrap_or(-1),
-                    ws.join(","), ms.join(","));
+                    ws.join(","),
+                    ms.join(",")
+                );
             }
             EditorMsg::SaveOpen(paths) => {
-                                                                                                for idx in 0..self.pages.len() {
+                for idx in 0..self.pages.len() {
                     let flush = self.pages[idx]
                         .path
                         .as_ref()
                         .is_some_and(|p| paths.contains(p))
                         && self.pages[idx].buf.is_modified();
-                    if flush
-                        && let Err(e) = self.write_page(idx)
-                    {
+                    if flush && let Err(e) = self.write_page(idx) {
                         let name = self.pages[idx]
                             .path
                             .as_ref()
@@ -350,25 +372,34 @@ impl Component for Editor {
                 let _ = sender.output(EditorOutput::Flushed);
             }
             EditorMsg::OpenDiff { root, rel, letter } => {
-                                                sender.spawn_command(move |out| {
-                    let (text, binary) = gitstatus::diff_for(
-                        &root.to_string_lossy(),
-                        &rel,
-                        letter == "U",
-                    )
-                                        .unwrap_or_default();
-                    out.emit(EditorCommand::DiffData { rel, letter, text, binary });
+                sender.spawn_command(move |out| {
+                    let (text, binary) =
+                        gitstatus::diff_for(&root.to_string_lossy(), &rel, letter == "U")
+                            .unwrap_or_default();
+                    out.emit(EditorCommand::DiffData {
+                        rel,
+                        letter,
+                        text,
+                        binary,
+                    });
                 });
             }
             EditorMsg::RefreshDiffs { root, letters } => {
-                                                                                                                                                                                                                                let map: HashMap<String, String> = letters.into_iter().collect();
+                let map: HashMap<String, String> = letters.into_iter().collect();
                 let mut pairs: Vec<(String, String, String, String)> = Vec::new();
                 for pg in &self.pages {
-                    let Some(key) = pg.diff_of.as_deref() else { continue };
-                    let Some(rel) = key.strip_prefix("diff:") else { continue };
+                    let Some(key) = pg.diff_of.as_deref() else {
+                        continue;
+                    };
+                    let Some(rel) = key.strip_prefix("diff:") else {
+                        continue;
+                    };
                     if let Some(fresh) = map.get(rel) {
                         let (old_text, old_letter) = match pg.diff.as_ref() {
-                            Some(d) => (d.diff_text.clone().unwrap_or_default(), pg.diff_letter.clone()),
+                            Some(d) => (
+                                d.diff_text.clone().unwrap_or_default(),
+                                pg.diff_letter.clone(),
+                            ),
                             None => (String::new(), String::new()),
                         };
                         pairs.push((rel.to_string(), fresh.clone(), old_text, old_letter));
@@ -377,17 +408,14 @@ impl Component for Editor {
                 sender.spawn_command(move |out| {
                     let mut fresh: Vec<(String, String, Sides, String)> = Vec::new();
                     for (rel, fresh_letter, old_text, old_letter) in pairs {
-                        let (text, binary) = gitstatus::diff_for(
-                            &root.to_string_lossy(),
-                            &rel,
-                            fresh_letter == "U",
-                        )
-                        .unwrap_or_default();
+                        let (text, binary) =
+                            gitstatus::diff_for(&root.to_string_lossy(), &rel, fresh_letter == "U")
+                                .unwrap_or_default();
                         if binary {
-                            continue; 
+                            continue;
                         }
                         if text == old_text && fresh_letter == old_letter {
-                            continue; 
+                            continue;
                         }
                         let parsed = gitstatus::build_sides(&gitstatus::parse_unified(&text));
                         fresh.push((rel, text, parsed, fresh_letter));
@@ -415,20 +443,21 @@ impl Component for Editor {
                     }
                 }
             }
-                        EditorMsg::Cut => self.clip_op("cut-clipboard"),
+            EditorMsg::Cut => self.clip_op("cut-clipboard"),
             EditorMsg::Copy => self.clip_op("copy-clipboard"),
             EditorMsg::Paste => self.clip_op("paste-clipboard"),
             EditorMsg::SelectAll => {
                 if let Some(idx) = self.active()
-                    && let Some(w) = self.op_target(idx) {
-                        let _ = w.activate_action("select-all", Some(&true.to_variant()));
-                    }
+                    && let Some(w) = self.op_target(idx)
+                {
+                    let _ = w.activate_action("select-all", Some(&true.to_variant()));
+                }
             }
             EditorMsg::Switched => {
                 self.refresh_restamps(&sender);
                 let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
             }
-                                                EditorMsg::ProbeClip => {
+            EditorMsg::ProbeClip => {
                 let Some(idx) = self.active() else {
                     println!("PROBE clip-target: none");
                     return;
@@ -439,14 +468,15 @@ impl Component for Editor {
                     .and_then(|d| d.sw_r.child())
                     .and_then(|w| w.downcast_ref::<sourceview5::View>().cloned());
                 if let Some(ref rv) = right {
-                    rv.grab_focus(); 
+                    rv.grab_focus();
                 }
-                                                let hit = match &right {
-                    Some(rv) => self
-                        .op_target(idx)
-                        .and_then(|w| w.downcast_ref::<sourceview5::View>().cloned())
-                        .as_ref()
-                        == Some(rv),
+                let hit = match &right {
+                    Some(rv) => {
+                        self.op_target(idx)
+                            .and_then(|w| w.downcast_ref::<sourceview5::View>().cloned())
+                            .as_ref()
+                            == Some(rv)
+                    }
                     None => false,
                 };
                 println!(
@@ -454,7 +484,7 @@ impl Component for Editor {
                     if hit { "right-view" } else { "left-or-wrong" }
                 );
             }
-                                                                                                            EditorMsg::ProbeDiffScroll => {
+            EditorMsg::ProbeDiffScroll => {
                 let Some(idx) = self.active() else {
                     println!("PROBE assert: diff-presence: FAIL (no active page)");
                     return;
@@ -463,15 +493,15 @@ impl Component for Editor {
                     let swept = PROBE_DIFF_SWEEP.with(|c| c.get());
                     probe_diff_scroll_asserts(dw, &self.pages[idx].view.clone());
                     if swept {
-                                                                                                                                                println!("PROBE renewal-assert: PASS");
+                        println!("PROBE renewal-assert: PASS");
                     }
                 } else {
                     println!("PROBE assert: diff-presence: FAIL (not a diff page)");
                 }
-                                                if !PROBE_DIFF_SWEEP.with(|c| c.get()) {
+                if !PROBE_DIFF_SWEEP.with(|c| c.get()) {
                     PROBE_DIFF_SWEEP.with(|c| c.set(true));
                     let mut mutated = false;
-                                                                                if let Some(root) = &self.root
+                    if let Some(root) = &self.root
                         && root.file_name() == Some(std::ffi::OsStr::new("wsA"))
                     {
                         let f = root.join("a.txt");
@@ -481,23 +511,18 @@ impl Component for Editor {
                             mutated = true;
                         }
                     }
-                    if mutated
-                        && let Some(root) = self.root.clone()
-                    {
-                                                                                                sender.input(EditorMsg::RefreshDiffs {
+                    if mutated && let Some(root) = self.root.clone() {
+                        sender.input(EditorMsg::RefreshDiffs {
                             root,
                             letters: vec![("a.txt".into(), "M".into())],
                         });
                         let snd = sender.clone();
-                        glib::timeout_add_local(
-                            std::time::Duration::from_millis(500),
-                            move || {
-                                                                if snd.input_sender().send(EditorMsg::ProbeDiffScroll).is_err() {
-                                    return glib::ControlFlow::Break;
-                                }
-                                glib::ControlFlow::Break
-                            },
-                        );
+                        glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+                            if snd.input_sender().send(EditorMsg::ProbeDiffScroll).is_err() {
+                                return glib::ControlFlow::Break;
+                            }
+                            glib::ControlFlow::Break
+                        });
                     }
                 }
             }
@@ -520,7 +545,12 @@ impl Component for Editor {
         _root: &Self::Root,
     ) {
         match message {
-            EditorCommand::DiffData { rel, letter, text, binary } => {
+            EditorCommand::DiffData {
+                rel,
+                letter,
+                text,
+                binary,
+            } => {
                 if binary {
                     self.error(
                         &format!("Binary file: {rel}"),
@@ -529,7 +559,7 @@ impl Component for Editor {
                     return;
                 }
                 let sides = gitstatus::build_sides(&gitstatus::parse_unified(&text));
-                                if sides.old.is_empty() {
+                if sides.old.is_empty() {
                     self.error(
                         &format!("No diff: {rel}"),
                         "git produced no diff hunks for this path.",
@@ -552,7 +582,7 @@ impl Editor {
         self.nb.current_page().map(|c| c as usize)
     }
 
-                pub fn scroll_state(&self) -> Option<(String, f64)> {
+    pub fn scroll_state(&self) -> Option<(String, f64)> {
         let idx = self.active()?;
         let pg = self.pages.get(idx)?;
         let p = pg.path.as_ref()?;
@@ -561,13 +591,15 @@ impl Editor {
         Some((rel, frac_of(&pg.sw)))
     }
 
-        fn window_widget(&self) -> Option<gtk::Window> {
+    fn window_widget(&self) -> Option<gtk::Window> {
         self.nb.root().and_downcast::<gtk::Window>()
     }
 
-        fn error(&self, primary: &str, secondary: &str) {
-        let Some(win) = self.window_widget() else { return };
-        #[allow(deprecated)] 
+    fn error(&self, primary: &str, secondary: &str) {
+        let Some(win) = self.window_widget() else {
+            return;
+        };
+        #[allow(deprecated)]
         let d = gtk::MessageDialog::builder()
             .transient_for(&win)
             .modal(true)
@@ -580,24 +612,27 @@ impl Editor {
     }
 
     fn page_of(&self, path: &Path) -> Option<usize> {
-        self.pages.iter().position(|pg| pg.path.as_deref() == Some(path))
+        self.pages
+            .iter()
+            .position(|pg| pg.path.as_deref() == Some(path))
     }
 
-            fn page_of_key(&self, key: &str) -> Option<usize> {
-        self.pages.iter().position(|pg| pg.diff_of.as_deref() == Some(key))
+    fn page_of_key(&self, key: &str) -> Option<usize> {
+        self.pages
+            .iter()
+            .position(|pg| pg.diff_of.as_deref() == Some(key))
     }
 
-        fn rel_base(rel: &str) -> &str {
+    fn rel_base(rel: &str) -> &str {
         rel.rsplit_once('/').map(|(_, b)| b).unwrap_or(rel)
     }
 
-    
-        fn set_root(&mut self, root: PathBuf) {
+    fn set_root(&mut self, root: PathBuf) {
         self.root = Some(root);
         self.close_all();
     }
 
-            fn restore(
+    fn restore(
         &mut self,
         root: &Path,
         tabs: Vec<String>,
@@ -609,25 +644,25 @@ impl Editor {
         for rel in tabs {
             let p = root.join(rel);
             if p.is_file() {
-                                self.open_file(&p, sender);
+                self.open_file(&p, sender);
             }
         }
         let n = self.nb.n_pages() as i64;
-                self.nb
+        self.nb
             .set_current_page(u32::try_from(active.min((n - 1).max(0))).ok());
-                                if let Some((rel, frac)) = scroll
+        if let Some((rel, frac)) = scroll
             && let Some(idx) = self.nb.current_page().map(|c| c as usize)
             && let Some(pg) = self.pages.get(idx)
             && let Some(p) = pg.path.as_ref()
             && relpath(p, root) == rel
         {
-            restore_frac(&pg.sw, frac); 
+            restore_frac(&pg.sw, frac);
         }
         self.refresh_restamps(sender);
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-            fn probe_scroll(&mut self, frac: f64) {
+    fn probe_scroll(&mut self, frac: f64) {
         if let Some(idx) = self.active()
             && let Some(pg) = self.pages.get(idx)
         {
@@ -647,7 +682,6 @@ impl Editor {
         }
     }
 
-    
     fn open_file(&mut self, path: &Path, sender: &ComponentSender<Self>) {
         if let Some(k) = self.page_of(path) {
             self.nb.set_current_page(Some(k as u32));
@@ -656,16 +690,13 @@ impl Editor {
         }
         let raw = match std::fs::read(path) {
             Ok(bytes) => Some(bytes),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
-                self.error(
-                    "Couldn't open file",
-                    &format!("{}: {e}", basename(path)),
-                );
+                self.error("Couldn't open file", &format!("{}: {e}", basename(path)));
                 return;
             }
         };
-                        let text = match &raw {
+        let text = match &raw {
             Some(bytes) => match readable_text(bytes) {
                 Some(t) => t,
                 None => {
@@ -687,7 +718,7 @@ impl Editor {
         if let Some(lang) = self.lm.guess_language(Some(base.as_str()), None) {
             buf.set_language(Some(&lang));
         }
-                        buf.set_modified(false);
+        buf.set_modified(false);
         if raw.is_none() {
             Self::tag_muted(&buf);
         }
@@ -697,8 +728,8 @@ impl Editor {
             .buffer(&buf)
             .show_line_numbers(true)
             .wrap_mode(gtk::WrapMode::None)
-            .pixels_above_lines(2) 
-            .left_margin(12)       
+            .pixels_above_lines(2)
+            .left_margin(12)
             .css_classes(["alpaca-mono"])
             .build();
         let page_box = gtk::Box::builder()
@@ -712,20 +743,24 @@ impl Editor {
         let crumb = gtk::Label::builder()
             .label(crumbs)
             .xalign(0.0)
-            .ellipsize(pango::EllipsizeMode::Middle) 
+            .ellipsize(pango::EllipsizeMode::Middle)
             .css_classes(["alpaca-breadcrumb"])
             .build();
         page_box.append(&crumb);
-                let sw = gtk::ScrolledWindow::builder()
+        let sw = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .child(&view)
             .build();
         page_box.append(&sw);
 
-        let fs = if raw.is_some() { FileState::Live } else { FileState::Deleted };
+        let fs = if raw.is_some() {
+            FileState::Live
+        } else {
+            FileState::Deleted
+        };
         let load_mtime = if raw.is_some() { mtime_ns(path) } else { None };
 
-                let dot = gtk::Label::builder()
+        let dot = gtk::Label::builder()
             .label("●")
             .css_classes(["alpaca-dirty"])
             .visible(false)
@@ -735,13 +770,15 @@ impl Editor {
             .css_classes(["alpaca-tabname"])
             .ellipsize(pango::EllipsizeMode::Middle)
             .build();
-                                name.set_size_request(72, -1);
+        name.set_size_request(72, -1);
         let close = gtk::Button::new();
         if let Some(vec) = vector::icon("x-dim.svg") {
             close.set_child(Some(&gtk::Image::from_paintable(Some(&vec))));
         } else {
             close.set_child(Some(
-                &gtk::Image::builder().icon_name("window-close-symbolic").build(),
+                &gtk::Image::builder()
+                    .icon_name("window-close-symbolic")
+                    .build(),
             ));
         }
         close.set_css_classes(&["alpaca-close"]);
@@ -750,8 +787,11 @@ impl Editor {
             .css_classes(["alpaca-tab"])
             .valign(gtk::Align::Center)
             .build();
-        head.append(&dot); 
-                let slot = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
+        head.append(&dot);
+        let slot = gtk::Box::builder()
+            .spacing(4)
+            .valign(gtk::Align::Center)
+            .build();
         head.append(&slot);
         head.append(&name);
         head.append(&close);
@@ -759,12 +799,12 @@ impl Editor {
             slot.append(&gtk::Image::from_pixbuf(Some(&want)));
         }
         let index = self.nb.append_page(&page_box, Some(&head));
-        self.nb.set_current_page(Some(index)); 
-                let nb2 = self.nb.clone();
+        self.nb.set_current_page(Some(index));
+        let nb2 = self.nb.clone();
         let pg_widget = page_box.clone();
         let snd = sender.clone();
         close.connect_clicked(move |_| {
-                        let idx = nb2.page_num(&pg_widget).map(|i| i as usize);
+            let idx = nb2.page_num(&pg_widget).map(|i| i as usize);
             if let Some(idx) = idx {
                 snd.input(EditorMsg::ClosePage(idx, false));
             }
@@ -789,17 +829,16 @@ impl Editor {
         if fs != FileState::Live {
             self.paint_tab_deleted(self.pages.len() - 1, true);
         }
-        self.refresh_restamps(sender); 
+        self.refresh_restamps(sender);
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    
     fn paint_dot(&self, idx: usize) {
         let pg = &self.pages[idx];
-                pg.dot.set_visible(pg.buf.is_modified() || pg.conflict);
+        pg.dot.set_visible(pg.buf.is_modified() || pg.conflict);
         let mut classes = vec!["alpaca-dirty".to_owned()];
         if pg.conflict {
-            classes.push("conflict".to_owned()); 
+            classes.push("conflict".to_owned());
         }
         let classes: Vec<&str> = classes.iter().map(|s| s.as_str()).collect();
         pg.dot.set_css_classes(&classes);
@@ -821,28 +860,30 @@ impl Editor {
     }
 
     fn refresh_restamps(&self, sender: &ComponentSender<Self>) {
-                        for pg in &self.pages {
+        for pg in &self.pages {
             if pg.diff_of.is_some() {
-                continue; 
+                continue;
             }
             while let Some(c) = pg.badge_slot.first_child() {
                 pg.badge_slot.remove(&c);
             }
             if let Some(path) = &pg.path
-                && let Some(want) = badges::pixbuf_for(&basename(path), false) {
-                    pg.badge_slot.append(&gtk::Image::from_pixbuf(Some(&want)));
-                }
+                && let Some(want) = badges::pixbuf_for(&basename(path), false)
+            {
+                pg.badge_slot.append(&gtk::Image::from_pixbuf(Some(&want)));
+            }
         }
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    
     fn close_index(&mut self, index: usize, force: bool, sender: &ComponentSender<Self>) {
         if index >= self.pages.len() {
             return;
         }
         if self.pages[index].buf.is_modified() && !force {
-                                                let Some(win) = self.window_widget() else { return };
+            let Some(win) = self.window_widget() else {
+                return;
+            };
             let name = self.pages[index]
                 .path
                 .as_ref()
@@ -853,7 +894,7 @@ impl Editor {
             let pg_widget = self.pages[index].page.clone();
             let snd = sender.clone();
             d.connect_response(move |dd, r| {
-                dd.destroy(); 
+                dd.destroy();
                 if r == gtk::ResponseType::Accept {
                     let idx = nb2.page_num(&pg_widget).map(|i| i as usize);
                     if let Some(idx) = idx {
@@ -869,20 +910,21 @@ impl Editor {
         if let Some(path) = p.path {
             self.cancel_watch(&path);
         }
-        self.refresh_restamps(sender); 
+        self.refresh_restamps(sender);
     }
 
-    
     fn write_page(&mut self, idx: usize) -> Result<(), std::io::Error> {
         let path = self.pages[idx].path.clone().expect("write_page: file page");
-        let text = self.pages[idx]
-            .buf
-            .text(&self.pages[idx].buf.start_iter(), &self.pages[idx].buf.end_iter(), false);
+        let text = self.pages[idx].buf.text(
+            &self.pages[idx].buf.start_iter(),
+            &self.pages[idx].buf.end_iter(),
+            false,
+        );
         std::fs::write(&path, text.as_str())?;
-                        self.pages[idx].conflict = false;
+        self.pages[idx].conflict = false;
         self.pages[idx].buf.set_modified(false);
         if let Some(m) = mtime_ns(&path) {
-            self.pages[idx].load_mtime = Some(m); 
+            self.pages[idx].load_mtime = Some(m);
         }
         Ok(())
     }
@@ -890,10 +932,10 @@ impl Editor {
     fn save_active(&mut self, _sender: &ComponentSender<Self>) {
         let Some(idx) = self.active() else { return };
         if self.pages[idx].path.is_none() {
-            return; 
+            return;
         }
         if !self.pages[idx].buf.is_modified() {
-            return; 
+            return;
         }
         if let Err(e) = self.write_page(idx) {
             let name = self.pages[idx]
@@ -905,8 +947,7 @@ impl Editor {
         }
     }
 
-    
-                            fn diff_buf(
+    fn diff_buf(
         &self,
         lines: &[String],
         idxs: &BTreeSet<usize>,
@@ -914,21 +955,23 @@ impl Editor {
         hexcol: &str,
         lang: Option<&sourceview5::Language>,
     ) -> sourceview5::Buffer {
-        let buf = sourceview5::Buffer::builder().text(lines.join("\n")).build();
+        let buf = sourceview5::Buffer::builder()
+            .text(lines.join("\n"))
+            .build();
         if let Some(scheme) = &self.scheme {
             buf.set_style_scheme(Some(scheme));
         }
         if let Some(lang) = lang {
             buf.set_language(Some(lang));
         }
-                let tint = rgba(hexcol);
+        let tint = rgba(hexcol);
         let tag = gtk::TextTag::builder().background_rgba(&tint).build();
         let fg = gtk::TextTag::builder()
             .foreground_rgba(&rgba(DIFF_HDR_FG))
             .build();
         buf.tag_table().add(&tag);
         buf.tag_table().add(&fg);
-                        for &i in idxs.iter() {
+        for &i in idxs.iter() {
             if i >= buf.line_count() as usize || i == usize::MAX {
                 continue;
             }
@@ -948,11 +991,11 @@ impl Editor {
                 buf.apply_tag(&fg, &a, &b);
             }
         }
-                buf.set_modified(false);
+        buf.set_modified(false);
         buf
     }
 
-        fn diff_side(
+    fn diff_side(
         &self,
         lines: &[String],
         idxs: &BTreeSet<usize>,
@@ -963,7 +1006,7 @@ impl Editor {
         let buf = self.diff_buf(lines, idxs, hdr, hexcol, lang);
         let view = sourceview5::View::builder()
             .buffer(&buf)
-            .show_line_numbers(false) 
+            .show_line_numbers(false)
             .editable(false)
             .wrap_mode(gtk::WrapMode::None)
             .pixels_above_lines(2)
@@ -973,7 +1016,7 @@ impl Editor {
         (view, buf)
     }
 
-                    fn open_diff(
+    fn open_diff(
         &mut self,
         rel: &str,
         sides: &Sides,
@@ -988,23 +1031,38 @@ impl Editor {
         }
         let base = Self::rel_base(rel);
         let lang = self.lm.guess_language(Some(base), None);
-        let (v_l, b_l) = self.diff_side(&sides.old, &sides.del, &sides.hdr, DIFF_DEL_BG, lang.as_ref());
-        let (v_r, _b_r) = self.diff_side(&sides.new, &sides.add, &sides.hdr, DIFF_ADD_BG, lang.as_ref());
+        let (v_l, b_l) = self.diff_side(
+            &sides.old,
+            &sides.del,
+            &sides.hdr,
+            DIFF_DEL_BG,
+            lang.as_ref(),
+        );
+        let (v_r, _b_r) = self.diff_side(
+            &sides.new,
+            &sides.add,
+            &sides.hdr,
+            DIFF_ADD_BG,
+            lang.as_ref(),
+        );
 
-                                                                                let sw_l = gtk::ScrolledWindow::builder()
+        let sw_l = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .hexpand(true)
             .child(&v_l)
             .build();
-        hide_scrollbars(&sw_l, &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical]);
+        hide_scrollbars(
+            &sw_l,
+            &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical],
+        );
         let sw_r = gtk::ScrolledWindow::builder()
             .vexpand(true)
             .hexpand(true)
             .child(&v_r)
             .build();
-                                                hide_scrollbars(&sw_r, &[gtk::Orientation::Horizontal]);
+        hide_scrollbars(&sw_r, &[gtk::Orientation::Horizontal]);
         let hbar = gtk::Scrollbar::new(gtk::Orientation::Horizontal, Some(&sw_r.hadjustment()));
-                                                        let ref_cls: Vec<glib::GString> = {
+        let ref_cls: Vec<glib::GString> = {
             let mut c = sw_r.first_child();
             loop {
                 match c {
@@ -1020,41 +1078,49 @@ impl Editor {
                 }
             }
         };
-        let mut cls: Vec<String> = ref_cls.iter().map(|s| s.to_string())
+        let mut cls: Vec<String> = ref_cls
+            .iter()
+            .map(|s| s.to_string())
             .filter(|c| c != "vertical")
             .collect();
         cls.push("horizontal".into());
         if !cls.iter().any(|c| c == "alpaca-diffhbar") {
-            cls.push("alpaca-diffhbar".into()); 
+            cls.push("alpaca-diffhbar".into());
         }
         hbar.set_css_classes(&cls.iter().map(String::as_str).collect::<Vec<_>>());
-                                                                        let num_l = diff_num_view(&sides.old_no);
+        let num_l = diff_num_view(&sides.old_no);
         let num_r = diff_num_view(&sides.new_no);
         let sw_num_l = gtk::ScrolledWindow::builder().child(&num_l).build();
-        hide_scrollbars(&sw_num_l, &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical]);
+        hide_scrollbars(
+            &sw_num_l,
+            &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical],
+        );
         let sw_num_r = gtk::ScrolledWindow::builder().child(&num_r).build();
-        hide_scrollbars(&sw_num_r, &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical]);
-                                                                let numw = diff_num_pane_width(&sides.old_no, &num_l)
+        hide_scrollbars(
+            &sw_num_r,
+            &[gtk::Orientation::Horizontal, gtk::Orientation::Vertical],
+        );
+        let numw = diff_num_pane_width(&sides.old_no, &num_l)
             .max(diff_num_pane_width(&sides.new_no, &num_r));
         sw_num_l.set_size_request(numw, -1);
         sw_num_r.set_size_request(numw, -1);
-                                                                                                        if let Some(va) = v_l.vadjustment() {
+        if let Some(va) = v_l.vadjustment() {
             num_l.set_vadjustment(Some(&va));
         }
         if let Some(va) = v_r.vadjustment() {
             num_r.set_vadjustment(Some(&va));
         }
-                                                                                let sw_l_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        sw_l_wrap.append(&sw_num_l); 
+        let sw_l_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        sw_l_wrap.append(&sw_num_l);
         sw_l_wrap.append(&sw_l);
         let sw_r_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        sw_r_wrap.append(&sw_num_r); 
+        sw_r_wrap.append(&sw_num_r);
         sw_r_wrap.append(&sw_r);
         let paned = gtk::Paned::builder()
             .orientation(gtk::Orientation::Horizontal)
             .vexpand(true)
             .hexpand(true)
-            .css_classes(["alpaca-diffpaned"]) 
+            .css_classes(["alpaca-diffpaned"])
             .start_child(&sw_l_wrap)
             .end_child(&sw_r_wrap)
             .build();
@@ -1069,7 +1135,7 @@ impl Editor {
                 let w = p2.allocated_width();
                 if w > 0 {
                     pos_flag.set(true);
-                                                                                                                        let pw = w / 2;
+                    let pw = w / 2;
                     let p3 = p2.clone();
                     glib::idle_add_local_once(move || p3.set_position(pw));
                 }
@@ -1082,14 +1148,17 @@ impl Editor {
         let crumb = gtk::Label::builder()
             .label(rel.split('/').collect::<Vec<_>>().join("  ›  "))
             .xalign(0.0)
-            .ellipsize(pango::EllipsizeMode::Middle) 
+            .ellipsize(pango::EllipsizeMode::Middle)
             .css_classes(["alpaca-breadcrumb"])
             .build();
         page.append(&crumb);
         page.append(&paned);
         page.append(&hbar);
 
-                        let slot = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
+        let slot = gtk::Box::builder()
+            .spacing(4)
+            .valign(gtk::Align::Center)
+            .build();
         if !letter.is_empty() {
             let chip = gtk::Label::builder()
                 .label(letter)
@@ -1108,7 +1177,9 @@ impl Editor {
             close.set_child(Some(&gtk::Image::from_paintable(Some(&vec))));
         } else {
             close.set_child(Some(
-                &gtk::Image::builder().icon_name("window-close-symbolic").build(),
+                &gtk::Image::builder()
+                    .icon_name("window-close-symbolic")
+                    .build(),
             ));
         }
         close.set_css_classes(&["alpaca-close"]);
@@ -1127,8 +1198,8 @@ impl Editor {
             .build();
 
         let index = self.nb.append_page(&page, Some(&head));
-        self.nb.set_current_page(Some(index)); 
-                let nb2 = self.nb.clone();
+        self.nb.set_current_page(Some(index));
+        let nb2 = self.nb.clone();
         let pg_widget = page.clone();
         let snd = sender.clone();
         close.connect_clicked(move |_| {
@@ -1152,7 +1223,7 @@ impl Editor {
             sw_num_l: sw_num_l.clone(),
             sw_num_r: sw_num_r.clone(),
         };
-                                diff_link(&v_l, &v_r, &diff.linked_l);
+        diff_link(&v_l, &v_r, &diff.linked_l);
         diff_link(&v_r, &v_l, &diff.linked_r);
 
         self.pages.push(PageState {
@@ -1175,7 +1246,7 @@ impl Editor {
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-            fn refresh_diff(
+    fn refresh_diff(
         &mut self,
         rel: &str,
         sides: &Sides,
@@ -1184,30 +1255,56 @@ impl Editor {
         sender: &ComponentSender<Self>,
     ) {
         let key = format!("diff:{rel}");
-        let Some(idx) = self.page_of_key(&key) else { return };
+        let Some(idx) = self.page_of_key(&key) else {
+            return;
+        };
         let (frac_l, frac_r) = {
-            let dw = self.pages[idx].diff.as_ref().unwrap(); 
+            let dw = self.pages[idx].diff.as_ref().unwrap();
             (frac_of(&dw.sw_l), frac_of(&dw.sw_r))
         };
-                                                                                let lang = self.lm.guess_language(Some(Self::rel_base(rel)), None);
+        let lang = self.lm.guess_language(Some(Self::rel_base(rel)), None);
         let (b_l, b_r) = (
-            self.diff_buf(&sides.old, &sides.del, &sides.hdr, DIFF_DEL_BG, lang.as_ref()),
-            self.diff_buf(&sides.new, &sides.add, &sides.hdr, DIFF_ADD_BG, lang.as_ref()),
+            self.diff_buf(
+                &sides.old,
+                &sides.del,
+                &sides.hdr,
+                DIFF_DEL_BG,
+                lang.as_ref(),
+            ),
+            self.diff_buf(
+                &sides.new,
+                &sides.add,
+                &sides.hdr,
+                DIFF_ADD_BG,
+                lang.as_ref(),
+            ),
         );
         {
             let (sw_l, sw_r, sw_num_l, sw_num_r, v_r, num_l, num_r) = {
                 let dw = self.pages[idx].diff.as_ref().unwrap();
-                (dw.sw_l.clone(), dw.sw_r.clone(), dw.sw_num_l.clone(), dw.sw_num_r.clone(), dw.v_r.clone(), dw.num_l.clone(), dw.num_r.clone())
+                (
+                    dw.sw_l.clone(),
+                    dw.sw_r.clone(),
+                    dw.sw_num_l.clone(),
+                    dw.sw_num_r.clone(),
+                    dw.v_r.clone(),
+                    dw.num_l.clone(),
+                    dw.num_r.clone(),
+                )
             };
-            self.pages[idx].view.set_buffer(Some(&b_l)); 
-            v_r.set_buffer(Some(&b_r)); 
-                                                num_l.set_buffer(Some(&sourceview5::Buffer::builder()
-                .text(gitstatus::diff_num_text(&sides.old_no))
-                .build()));
-            num_r.set_buffer(Some(&sourceview5::Buffer::builder()
-                .text(gitstatus::diff_num_text(&sides.new_no))
-                .build()));
-                                                            let numw = diff_num_pane_width(&sides.old_no, &num_l)
+            self.pages[idx].view.set_buffer(Some(&b_l));
+            v_r.set_buffer(Some(&b_r));
+            num_l.set_buffer(Some(
+                &sourceview5::Buffer::builder()
+                    .text(gitstatus::diff_num_text(&sides.old_no))
+                    .build(),
+            ));
+            num_r.set_buffer(Some(
+                &sourceview5::Buffer::builder()
+                    .text(gitstatus::diff_num_text(&sides.new_no))
+                    .build(),
+            ));
+            let numw = diff_num_pane_width(&sides.old_no, &num_l)
                 .max(diff_num_pane_width(&sides.new_no, &num_r));
             sw_num_l.set_size_request(numw, -1);
             sw_num_r.set_size_request(numw, -1);
@@ -1236,8 +1333,7 @@ impl Editor {
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-    
-                            fn op_target(&self, idx: usize) -> Option<gtk4::Widget> {
+    fn op_target(&self, idx: usize) -> Option<gtk4::Widget> {
         if self.pages[idx].diff.is_some() {
             self.nb
                 .root()
@@ -1250,37 +1346,41 @@ impl Editor {
 
     fn clip_op(&self, op: &str) {
         if let Some(idx) = self.active()
-            && let Some(w) = self.op_target(idx) {
-                let _ = w.activate_action(op, None);
-            }
+            && let Some(w) = self.op_target(idx)
+        {
+            let _ = w.activate_action(op, None);
+        }
     }
 
-    
     fn cancel_watch(&mut self, path: &Path) {
         if let Some(mon) = self.watchers.remove(path) {
             mon.cancel();
         }
     }
 
-        fn arm_watch(&mut self, path: &Path, sender: &ComponentSender<Self>) {
+    fn arm_watch(&mut self, path: &Path, sender: &ComponentSender<Self>) {
         self.cancel_watch(path);
         let file = gio::File::for_path(path);
-                let mon = match file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
+        let mon = match file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
             Ok(m) => m,
             Err(_) => return,
         };
         let snd = sender.clone();
         let p = path.to_path_buf();
         mon.connect_changed(move |_, _, _, _| {
-                                                snd.input(EditorMsg::FsEvent(p.clone()));
+            snd.input(EditorMsg::FsEvent(p.clone()));
         });
         self.watchers.insert(path.to_path_buf(), mon);
     }
 
     fn arm_settle(&self, path: PathBuf, sender: &ComponentSender<Self>) {
-                                        let snd = sender.clone();
+        let snd = sender.clone();
         glib::timeout_add(std::time::Duration::from_millis(120), move || {
-                                    if snd.input_sender().send(EditorMsg::FsSettled(path.clone())).is_err() {
+            if snd
+                .input_sender()
+                .send(EditorMsg::FsSettled(path.clone()))
+                .is_err()
+            {
                 return glib::ControlFlow::Break;
             }
             glib::ControlFlow::Break
@@ -1294,22 +1394,24 @@ impl Editor {
             return;
         };
         if self.pages[k].fs == FileState::Live && Some(mtime) == self.pages[k].load_mtime {
-            return; 
+            return;
         }
         if self.pages[k].buf.is_modified() {
             if self.pages[k].fs != FileState::Live {
-                                self.pages[k].fs = FileState::Live;
+                self.pages[k].fs = FileState::Live;
                 self.paint_tab_deleted(k, false);
             }
             self.pages[k].conflict = true;
             self.paint_dot(k);
             return;
         }
-        self.reload(k, mtime, sender); 
+        self.reload(k, mtime, sender);
     }
 
     fn reload(&mut self, idx: usize, mtime: i64, sender: &ComponentSender<Self>) {
-        let Some(path) = self.pages[idx].path.clone() else { return };
+        let Some(path) = self.pages[idx].path.clone() else {
+            return;
+        };
         let Ok(raw) = std::fs::read(&path) else {
             self.fs_tombstone(idx, sender);
             return;
@@ -1318,14 +1420,14 @@ impl Editor {
             self.fs_binary(idx, sender);
             return;
         };
-                let (line, col, scroll) = {
+        let (line, col, scroll) = {
             let pg = &self.pages[idx];
             let ins = pg.buf.get_insert();
             let it = pg.buf.iter_at_mark(&ins);
             (it.line(), it.line_offset(), pg.sw.vadjustment().value())
         };
         self.swap_text(idx, &text, sender);
-                let pg = &mut self.pages[idx];
+        let pg = &mut self.pages[idx];
         let n = pg.buf.line_count();
         if let Some(mut it) = pg.buf.iter_at_line(line.min(n - 1)) {
             it.forward_chars(col.min((it.chars_in_line() - 1).max(0)));
@@ -1345,7 +1447,7 @@ impl Editor {
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
     }
 
-        fn swap_text(&mut self, idx: usize, text: &str, sender: &ComponentSender<Self>) {
+    fn swap_text(&mut self, idx: usize, text: &str, sender: &ComponentSender<Self>) {
         let (sch, lang) = {
             let pg = &self.pages[idx];
             (pg.buf.style_scheme(), pg.buf.language())
@@ -1357,7 +1459,7 @@ impl Editor {
         if let Some(l) = lang {
             nb.set_language(Some(&l));
         }
-        nb.set_modified(false); 
+        nb.set_modified(false);
         let snd = sender.clone();
         nb.connect_modified_changed(move |_| snd.input(EditorMsg::StateTick));
         let pg = &mut self.pages[idx];
@@ -1366,7 +1468,7 @@ impl Editor {
     }
 
     fn fs_tombstone(&mut self, idx: usize, sender: &ComponentSender<Self>) {
-                                if self.pages[idx].fs == FileState::Deleted {
+        if self.pages[idx].fs == FileState::Deleted {
             return;
         }
         {
@@ -1384,7 +1486,7 @@ impl Editor {
     }
 
     fn fs_binary(&mut self, idx: usize, sender: &ComponentSender<Self>) {
-                                        if self.pages[idx].fs == FileState::Binary {
+        if self.pages[idx].fs == FileState::Binary {
             return;
         }
         {
@@ -1405,7 +1507,7 @@ impl Editor {
         self.pages[idx].buf.set_modified(false);
     }
 
-        fn tag_muted(buf: &sourceview5::Buffer) {
+    fn tag_muted(buf: &sourceview5::Buffer) {
         let tag = gtk::TextTag::builder()
             .foreground_rgba(&gtk::gdk::RGBA::parse("#5a6375").unwrap())
             .style(gtk::pango::Style::Italic)
@@ -1424,13 +1526,15 @@ impl Editor {
                 None => p.to_string_lossy().into_owned(),
             })
             .collect();
-                let active_tab = self.nb.current_page().map(i64::from).unwrap_or(0);
-        EditorSnapshot { open_tabs, active_tab }
+        let active_tab = self.nb.current_page().map(i64::from).unwrap_or(0);
+        EditorSnapshot {
+            open_tabs,
+            active_tab,
+        }
     }
-
 }
 
-#[allow(deprecated)] 
+#[allow(deprecated)]
 fn discard_dialog(win: &gtk::Window, text: &str) -> gtk::MessageDialog {
     let d = gtk::MessageDialog::builder()
         .transient_for(win)
@@ -1442,7 +1546,6 @@ fn discard_dialog(win: &gtk::Window, text: &str) -> gtk::MessageDialog {
     d
 }
 
-
 fn rgba(hexcol: &str) -> gtk::gdk::RGBA {
     let mut c = gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0);
     if let Ok(p) = gtk::gdk::RGBA::parse(hexcol) {
@@ -1452,7 +1555,7 @@ fn rgba(hexcol: &str) -> gtk::gdk::RGBA {
 }
 
 fn frac_of(sw: &gtk::ScrolledWindow) -> f64 {
-    let adj = sw.vadjustment(); 
+    let adj = sw.vadjustment();
     let span = (adj.upper() - adj.page_size()).max(0.0);
     if span > 0.0 {
         (adj.value() / span).min(1.0)
@@ -1462,7 +1565,7 @@ fn frac_of(sw: &gtk::ScrolledWindow) -> f64 {
 }
 
 fn restore_frac(sw: &gtk::ScrolledWindow, frac: f64) {
-    let adj = sw.vadjustment(); 
+    let adj = sw.vadjustment();
     let id = adj.connect_changed(move |a| {
         let span = (a.upper() - a.page_size()).max(0.0);
         if span > 0.0 {
@@ -1471,7 +1574,7 @@ fn restore_frac(sw: &gtk::ScrolledWindow, frac: f64) {
     });
     let adj2 = adj.clone();
     glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
-        adj2.disconnect(id); 
+        adj2.disconnect(id);
     });
 }
 
@@ -1490,7 +1593,10 @@ fn hide_scrollbars(sw: &gtk::ScrolledWindow, axes: &[gtk::Orientation]) {
 
 fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
     let ok = |name: String, got: bool| {
-        println!("PROBE assert: diff-{name}: {}", if got { "PASS" } else { "FAIL" });
+        println!(
+            "PROBE assert: diff-{name}: {}",
+            if got { "PASS" } else { "FAIL" }
+        );
     };
     let bars = |sw: &gtk::ScrolledWindow| -> Vec<gtk::Scrollbar> {
         let mut out = Vec::new();
@@ -1503,7 +1609,7 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
         }
         out
     };
-                        for (axis, src, dst) in [
+    for (axis, src, dst) in [
         ("v", dw.sw_r.vadjustment(), dw.sw_l.vadjustment()),
         ("h", dw.sw_r.hadjustment(), dw.sw_l.hadjustment()),
     ] {
@@ -1514,21 +1620,33 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
             continue;
         }
         src.set_value(span.min(60.0));
-        ok(format!("sync-{axis}-rl"), (src.value() - dst.value()).abs() < 0.5);
+        ok(
+            format!("sync-{axis}-rl"),
+            (src.value() - dst.value()).abs() < 0.5,
+        );
         dst.set_value(dspan.min(60.0));
-        ok(format!("sync-{axis}-lr"), (src.value() - dst.value()).abs() < 0.5);
+        ok(
+            format!("sync-{axis}-lr"),
+            (src.value() - dst.value()).abs() < 0.5,
+        );
     }
-                let bars_l = bars(&dw.sw_l);
+    let bars_l = bars(&dw.sw_l);
     ok(
         "bars-l".into(),
         bars_l.len() >= 2 && bars_l.iter().all(|b| !b.is_visible()),
     );
-    ok("policy-v".into(), dw.sw_l.vscrollbar_policy() == gtk::PolicyType::Automatic);
-    ok("policy-h".into(), dw.sw_l.hscrollbar_policy() == gtk::PolicyType::Automatic);
-                        let badj = dw.bar.adjustment();
+    ok(
+        "policy-v".into(),
+        dw.sw_l.vscrollbar_policy() == gtk::PolicyType::Automatic,
+    );
+    ok(
+        "policy-h".into(),
+        dw.sw_l.hscrollbar_policy() == gtk::PolicyType::Automatic,
+    );
+    let badj = dw.bar.adjustment();
     let dr = dw.sw_r.hadjustment();
     ok("bar-adj".into(), format!("{badj:?}") == format!("{dr:?}"));
-        let bars_r = bars(&dw.sw_r);
+    let bars_r = bars(&dw.sw_r);
     let r_h = bars_r
         .iter()
         .find(|b| b.orientation() == gtk::Orientation::Horizontal);
@@ -1540,12 +1658,12 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
         r_h.map(|b| !b.is_visible()).unwrap_or(false)
             && r_v.map(|b| b.is_visible()).unwrap_or(false),
     );
-            println!(
+    println!(
         "PROBE classes: ref-v={:?} bar={:?}",
         r_v.map(|b| b.css_classes()),
         dw.bar.css_classes()
     );
-        let span = (badj.upper() - badj.page_size()).max(0.0);
+    let span = (badj.upper() - badj.page_size()).max(0.0);
     if span > 0.0 {
         badj.set_value(span.min(60.0));
         ok(
@@ -1555,23 +1673,23 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
     } else {
         println!("PROBE assert: diff-bar-drive: SKIPPED (no span/unbound)");
     }
-                let pw = dw.paned.allocated_width() as f64;
+    let pw = dw.paned.allocated_width() as f64;
     ok(
         "paned-50".into(),
         pw > 0.0 && (dw.paned.position() as f64 - pw / 2.0).abs() <= 4.0,
     );
-                            ok(
+    ok(
         "num-rows".into(),
         dw.num_l.buffer().line_count() == view_l.buffer().line_count()
             && dw.num_r.buffer().line_count() == dw.v_r.buffer().line_count(),
     );
-                let buf_l = dw.num_l.buffer();
+    let buf_l = dw.num_l.buffer();
     let t = buf_l.text(&buf_l.start_iter(), &buf_l.end_iter(), true);
     ok(
         "num-filestart".into(),
         t.split('\n').nth(1).map(str::trim) == Some("1"),
     );
-                                    let field_w = |v: &sourceview5::View| -> i32 {
+    let field_w = |v: &sourceview5::View| -> i32 {
         let buf = v.buffer();
         let n = buf
             .text(&buf.start_iter(), &buf.end_iter(), true)
@@ -1581,17 +1699,25 @@ fn probe_diff_scroll_asserts(dw: &DiffWidgets, view_l: &sourceview5::View) {
             .unwrap_or(2)
             .max(2);
         let (px, _) = v.create_pango_layout(Some(&"0".repeat(n))).pixel_size();
-        px + 4 
+        px + 4
     };
     ok(
         "num-width".into(),
         dw.num_l.allocated_width() >= field_w(&dw.num_l)
             && dw.num_r.allocated_width() >= field_w(&dw.num_r),
     );
-    let (nat_l, nat_r) = (view_l.measure(gtk::Orientation::Vertical, -1).1, dw.v_r.measure(gtk::Orientation::Vertical, -1).1);
-    let (nnum_l, nnum_r) = (dw.num_l.measure(gtk::Orientation::Vertical, -1).1, dw.num_r.measure(gtk::Orientation::Vertical, -1).1);
-    ok("num-height".into(), nat_l > 0 && (nat_l - nnum_l).abs() <= 2
-        && nat_r > 0 && (nat_r - nnum_r).abs() <= 2);
+    let (nat_l, nat_r) = (
+        view_l.measure(gtk::Orientation::Vertical, -1).1,
+        dw.v_r.measure(gtk::Orientation::Vertical, -1).1,
+    );
+    let (nnum_l, nnum_r) = (
+        dw.num_l.measure(gtk::Orientation::Vertical, -1).1,
+        dw.num_r.measure(gtk::Orientation::Vertical, -1).1,
+    );
+    ok(
+        "num-height".into(),
+        nat_l > 0 && (nat_l - nnum_l).abs() <= 2 && nat_r > 0 && (nat_r - nnum_r).abs() <= 2,
+    );
     match (dw.num_l.vadjustment(), view_l.vadjustment()) {
         (Some(na), Some(ma)) => ok("num-adj-l".into(), format!("{na:?}") == format!("{ma:?}")),
         _ => println!("PROBE assert: diff-num-adj-l: FAIL (adj None)"),
@@ -1622,38 +1748,34 @@ fn diff_num_view(no: &[u32]) -> sourceview5::View {
 }
 
 fn diff_num_pane_width(no: &[u32], view: &sourceview5::View) -> i32 {
-    let probe = "0".repeat(gitstatus::diff_num_field_width(no)); 
+    let probe = "0".repeat(gitstatus::diff_num_field_width(no));
     let (px, _) = view.create_pango_layout(Some(&probe)).pixel_size();
-    (px + 4 + 4).max(24) 
+    (px + 4 + 4).max(24)
 }
 
-fn diff_link(
-    v: &sourceview5::View,
-    dst: &sourceview5::View,
-    linked: &Rc<RefCell<LinkedAxes>>,
-) {
+fn diff_link(v: &sourceview5::View, dst: &sourceview5::View, linked: &Rc<RefCell<LinkedAxes>>) {
     let mut l = linked.borrow_mut();
-    if let Some(va) = v.vadjustment() {
-        if l.v.as_ref() != Some(&va) {
-            l.v = Some(va.clone());
-            let dst2 = dst.clone();
-            va.connect_value_changed(move |a| {
-                                                                if let Some(dadj) = dst2.vadjustment() {
-                    dadj.set_value(a.value());
-                }
-            });
-        }
+    if let Some(va) = v.vadjustment()
+        && l.v.as_ref() != Some(&va)
+    {
+        l.v = Some(va.clone());
+        let dst2 = dst.clone();
+        va.connect_value_changed(move |a| {
+            if let Some(dadj) = dst2.vadjustment() {
+                dadj.set_value(a.value());
+            }
+        });
     }
-    if let Some(ha) = v.hadjustment() {
-        if l.h.as_ref() != Some(&ha) {
-            l.h = Some(ha.clone());
-            let dst2 = dst.clone();
-            ha.connect_value_changed(move |a| {
-                if let Some(dadj) = dst2.hadjustment() {
-                    dadj.set_value(a.value());
-                }
-            });
-        }
+    if let Some(ha) = v.hadjustment()
+        && l.h.as_ref() != Some(&ha)
+    {
+        l.h = Some(ha.clone());
+        let dst2 = dst.clone();
+        ha.connect_value_changed(move |a| {
+            if let Some(dadj) = dst2.hadjustment() {
+                dadj.set_value(a.value());
+            }
+        });
     }
 }
 
@@ -1667,10 +1789,13 @@ mod tests {
 
     #[test]
     fn readable_text_rules() {
-        assert_eq!(readable_text(b"hello\nworld").as_deref(), Some("hello\nworld"));
-        assert!(readable_text(b"caf\xc3\xa9").is_some()); 
-        assert_eq!(readable_text(b"caf\xe9"), None); 
-        assert_eq!(readable_text(b"a\0b"), None); 
-        assert_eq!(readable_text(b""), Some(String::new())); 
+        assert_eq!(
+            readable_text(b"hello\nworld").as_deref(),
+            Some("hello\nworld")
+        );
+        assert!(readable_text(b"caf\xc3\xa9").is_some());
+        assert_eq!(readable_text(b"caf\xe9"), None);
+        assert_eq!(readable_text(b"a\0b"), None);
+        assert_eq!(readable_text(b""), Some(String::new()));
     }
 }

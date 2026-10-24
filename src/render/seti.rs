@@ -1,4 +1,3 @@
-
 #[rustfmt::skip]
 pub(crate) const RULES: &[(&str, &str, bool)] = &[
                 ("", "seti-default-white.svg", false),
@@ -684,22 +683,22 @@ mod tests {
     #[test]
     fn mapping_resolves_per_seti_cascade() {
         assert_eq!(icon_for("app.py"), "seti-python-blue.svg");
-        assert_eq!(icon_for("MAIN.PY"), "seti-python-blue.svg"); 
-        assert_eq!(icon_for("a.spec.js"), "seti-javascript-orange.svg"); 
-        assert_eq!(icon_for("tsconfig.json"), "seti-tsconfig-blue.svg"); 
-        assert_eq!(icon_for("Makefile"), "seti-makefile-orange.svg"); 
-        assert_eq!(icon_for("docker-compose.yml"), "seti-docker-pink.svg"); 
+        assert_eq!(icon_for("MAIN.PY"), "seti-python-blue.svg");
+        assert_eq!(icon_for("a.spec.js"), "seti-javascript-orange.svg");
+        assert_eq!(icon_for("tsconfig.json"), "seti-tsconfig-blue.svg");
+        assert_eq!(icon_for("Makefile"), "seti-makefile-orange.svg");
+        assert_eq!(icon_for("docker-compose.yml"), "seti-docker-pink.svg");
         assert_eq!(icon_for(".gitignore"), "seti-git-ignore.svg");
         assert_eq!(icon_for("LICENSE.md"), "seti-license-yellow.svg");
         assert_eq!(icon_for("main.rs"), "seti-rust-grey-light.svg");
-        assert_eq!(icon_for(".DS_Store"), "seti-ignored-ignore.svg"); 
+        assert_eq!(icon_for(".DS_Store"), "seti-ignored-ignore.svg");
         assert_eq!(icon_for("a.R"), "seti-R-blue.svg");
-        assert_eq!(icon_for("build"), "seti-default-white.svg"); 
+        assert_eq!(icon_for("build"), "seti-default-white.svg");
     }
 
     #[test]
     fn every_seti_asset_rasterizes_16() {
-                        for stem in STEMS {
+        for stem in STEMS {
             let name = format!("seti-{stem}.svg");
             let pix = crate::render::badges::svg_pixbuf(&name, 16)
                 .unwrap_or_else(|| panic!("{name}: rasterize failed"));

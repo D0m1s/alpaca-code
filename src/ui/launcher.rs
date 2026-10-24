@@ -1,5 +1,6 @@
-
 #![allow(deprecated)]
+
+use std::cmp::Reverse;
 
 use std::path::{Path, PathBuf};
 
@@ -8,45 +9,48 @@ use relm4::gtk::{self, gdk, gio, prelude::*};
 use relm4::prelude::*;
 
 use crate::git::gitstatus;
-use crate::support::state;
 use crate::render::vector;
+use crate::support::state;
 
 const LLAMA: &[u8] = include_bytes!("../../assets/alpaca-80.png");
 const BY_URI: &str = "https://github.com/D0m1s";
 
+type PendingFn = Box<dyn FnOnce()>;
+type CardTexts = Vec<(String, Vec<(String, String, String)>)>;
+
 #[derive(Debug)]
 pub enum LauncherMsg {
-        Build,
-            PlusClick,
+    Build,
+    PlusClick,
 }
 
 #[derive(Debug)]
 pub enum LauncherOutput {
-        Open(String),
-                    New(String),
-            Rename { stem: String, display: String },
-        Delete(String),
+    Open(String),
+    New(String),
+    Rename { stem: String, display: String },
+    Delete(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Proj {
     pub name: String,
-        pub lang: Option<String>,
-        pub branch: Option<String>,
+    pub lang: Option<String>,
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WbEntry {
-            pub name: String,
-            pub display: Option<String>,
-        pub mtime: Option<std::time::SystemTime>,
+    pub name: String,
+    pub display: Option<String>,
+    pub mtime: Option<std::time::SystemTime>,
     pub projs: Vec<Proj>,
 }
 
 pub fn scan_workbenches(dir: &Path) -> Vec<WbEntry> {
     let mut out: Vec<WbEntry> = Vec::new();
     let Ok(rd) = std::fs::read_dir(dir) else {
-        return out; 
+        return out;
     };
     for e in rd.flatten() {
         let path = e.path();
@@ -55,7 +59,7 @@ pub fn scan_workbenches(dir: &Path) -> Vec<WbEntry> {
         }
         let mtime = e.metadata().and_then(|m| m.modified()).ok();
         let Some(wb) = state::load_workbench_from(&path) else {
-            continue; 
+            continue;
         };
         let mut projs: Vec<Proj> = wb
             .projects
@@ -73,9 +77,14 @@ pub fn scan_workbenches(dir: &Path) -> Vec<WbEntry> {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        out.push(WbEntry { name, display: wb.display, mtime, projs });
+        out.push(WbEntry {
+            name,
+            display: wb.display,
+            mtime,
+            projs,
+        });
     }
-    out.sort_by(|a, b| b.mtime.cmp(&a.mtime)); 
+    out.sort_by_key(|a| Reverse(a.mtime));
     out
 }
 
@@ -89,9 +98,11 @@ pub fn open_roots(wb: &state::WorkbenchFile, last: Option<&Path>) -> Vec<PathBuf
     if roots.is_empty() {
         return roots;
     }
-    let last = last.map(|l| l.to_string_lossy().into_owned()).unwrap_or_default();
+    let last = last
+        .map(|l| l.to_string_lossy().into_owned())
+        .unwrap_or_default();
     roots.sort();
-    roots.sort_by_key(|r| r.to_string_lossy() == last); 
+    roots.sort_by_key(|r| r.to_string_lossy() == last);
     roots
 }
 
@@ -102,9 +113,9 @@ fn lang_label(id: &str) -> String {
         ("cpp", "C++"),
         ("c-sharp", "C#"),
         ("typescript", "TS"),
-        ("typescript-jsx", "TS"), 
+        ("typescript-jsx", "TS"),
         ("javascript", "JS"),
-        ("js", "JS"),             
+        ("js", "JS"),
         ("python", "Python"),
         ("python3", "Python"),
         ("go", "Go"),
@@ -127,7 +138,12 @@ fn lang_label(id: &str) -> String {
         }
     }
     let s = id.replace('-', " ");
-    let head = s.chars().map(|c| c.len_utf8()).next().unwrap_or(0).min(s.len());
+    let head = s
+        .chars()
+        .map(|c| c.len_utf8())
+        .next()
+        .unwrap_or(0)
+        .min(s.len());
     if head > 0 {
         s[..head].to_uppercase() + &s[head..]
     } else {
@@ -179,7 +195,6 @@ fn llama_texture() -> Option<gdk::Texture> {
     llama_pixbuf().map(|pix| gdk::Texture::for_pixbuf(&pix))
 }
 
-
 type DoOk = std::rc::Rc<std::cell::RefCell<Option<Box<dyn FnOnce(String)>>>>;
 
 const P_TITLE: &str = "Rename workbench";
@@ -216,7 +231,7 @@ fn entry_pop(
         .activates_default(true)
         .css_classes(["alpaca-msg"])
         .build();
-    entry.set_size_request(220, 30); 
+    entry.set_size_request(220, 30);
     bx.append(&entry);
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -244,7 +259,7 @@ fn entry_pop(
     entry.connect_activate(move |_| commit_pop(&cpop, &cent, &snd));
     pop.set_parent(anchor);
     pop.popup();
-    entry.grab_focus(); 
+    entry.grab_focus();
     pop
 }
 
@@ -278,7 +293,7 @@ fn confirm_pop(anchor: &impl IsA<gtk::Widget>, on_ok: impl FnOnce() + 'static) -
     row.append(&ok);
     bx.append(&row);
     pop.set_child(Some(&bx));
-    let fire: std::rc::Rc<std::cell::RefCell<Option<Box<dyn FnOnce()>>>> =
+    let fire: std::rc::Rc<std::cell::RefCell<Option<PendingFn>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Some(Box::new(on_ok))));
     let cpx = pop.clone();
     let fire2 = fire;
@@ -306,14 +321,16 @@ fn pop_cancel_btn(pop: &gtk::Popover) -> gtk::Button {
 fn commit_pop(pop: &gtk::Popover, entry: &gtk::Entry, cell: &DoOk) {
     pop.popdown();
     let text = entry.text().trim().to_string();
-            if let Some(f) = cell.borrow_mut().take() {
+    if let Some(f) = cell.borrow_mut().take() {
         f(text);
     }
 }
 
 fn pop_entry(pop: &gtk::Popover) -> Option<gtk::Entry> {
     let bx = pop.child()?.downcast::<gtk::Box>().ok()?;
-    child_widgets(&bx).into_iter().find_map(|w| w.downcast::<gtk::Entry>().ok())
+    child_widgets(&bx)
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::Entry>().ok())
 }
 
 fn pop_ok_btn(pop: &gtk::Popover) -> Option<gtk::Button> {
@@ -325,7 +342,7 @@ fn pop_ok_btn(pop: &gtk::Popover) -> Option<gtk::Button> {
             child_widgets(&row)
                 .into_iter()
                 .filter_map(|w| w.downcast::<gtk::Button>().ok())
-                .next_back() 
+                .next_back()
         })
 }
 
@@ -342,11 +359,11 @@ fn icon_box(name: &str, tooltip: &str) -> gtk::Box {
         .build();
     if let Some(vec) = vector::icon(name) {
         let img = gtk::Image::from_paintable(Some(&vec));
-        img.set_pixel_size(14); 
+        img.set_pixel_size(14);
         img.set_valign(gtk::Align::Center);
         bx.append(&img);
     } else {
-        bx.append(&gtk::Label::builder().label("?").build()); 
+        bx.append(&gtk::Label::builder().label("?").build());
     }
     bx
 }
@@ -355,7 +372,7 @@ fn wire_click(bx: &gtk::Box, on_click: impl Fn() + 'static) {
     let click = gtk::GestureClick::new();
     click.connect_pressed(move |g, _n, _x, _y| {
         if let Some(seq) = g.current_sequence() {
-                        gtk::prelude::GestureExt::set_sequence_state(g, &seq, gtk::EventSequenceState::Claimed);
+            gtk::prelude::GestureExt::set_sequence_state(g, &seq, gtk::EventSequenceState::Claimed);
         }
         on_click();
     });
@@ -363,12 +380,12 @@ fn wire_click(bx: &gtk::Box, on_click: impl Fn() + 'static) {
 }
 
 pub struct Launcher {
-        pub entries: Vec<WbEntry>,
+    pub entries: Vec<WbEntry>,
     cards: gtk::Box,
     hint: gtk::Label,
-        add: gtk::Button,
-        plus_pop: Option<gtk::Popover>,
-            sender: ComponentSender<Self>,
+    add: gtk::Button,
+    plus_pop: Option<gtk::Popover>,
+    sender: ComponentSender<Self>,
 }
 
 #[relm4::component(pub)]
@@ -389,7 +406,7 @@ impl Component for Launcher {
     }
 
     fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-                let inner = gtk::Box::builder()
+        let inner = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(14)
             .hexpand(true)
@@ -402,7 +419,7 @@ impl Component for Launcher {
             .build();
         if let Some(tex) = llama_texture() {
             let img = gtk::Image::from_paintable(Some(&tex));
-                                                img.set_pixel_size(80);
+            img.set_pixel_size(80);
             img.set_valign(gtk::Align::Center);
             mast.append(&img);
         }
@@ -417,7 +434,7 @@ impl Component for Launcher {
         let section = gtk::Label::builder()
             .label("Workbenches")
             .css_classes(["alpaca-launchsection"])
-            .hexpand(true) 
+            .hexpand(true)
             .xalign(0.0)
             .build();
         inner.append(&section);
@@ -428,7 +445,7 @@ impl Component for Launcher {
             .build();
         inner.append(&cards);
 
-                let hint = gtk::Label::builder()
+        let hint = gtk::Label::builder()
             .label("No workbenches saved — Ctrl+Shift+S saves the current session as one")
             .css_classes(["alpaca-hint"])
             .build();
@@ -439,21 +456,21 @@ impl Component for Launcher {
             .has_frame(false)
             .css_classes(["alpaca-launchadd"])
             .build();
-                                                if let Some(vec) = vector::icon("plus.svg") {
+        if let Some(vec) = vector::icon("plus.svg") {
             let img = gtk::Image::from_paintable(Some(&vec));
             img.set_pixel_size(24);
             img.set_valign(gtk::Align::Center);
             img.set_halign(gtk::Align::Center);
             add.set_child(Some(&img));
         } else {
-                        let l = gtk::Label::builder().label("+").build();
+            let l = gtk::Label::builder().label("+").build();
             l.set_halign(gtk::Align::Center);
             add.set_child(Some(&l));
         }
         add.set_tooltip_text(Some("Open a folder as a new workbench"));
-                                        let snd = sender.clone();
+        let snd = sender.clone();
         add.connect_clicked(move |_b| {
-            let _ = snd.input(LauncherMsg::PlusClick);
+            snd.input(LauncherMsg::PlusClick);
         });
         inner.append(&add);
 
@@ -464,7 +481,7 @@ impl Component for Launcher {
             .build();
         scroller.set_child(Some(&inner));
 
-                let footer = gtk::Box::builder()
+        let footer = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .build();
         let air = gtk::Box::builder().hexpand(true).build();
@@ -505,7 +522,7 @@ impl Component for Launcher {
 }
 
 impl Launcher {
-            fn open_plus(&mut self, sender: &ComponentSender<Self>) {
+    fn open_plus(&mut self, sender: &ComponentSender<Self>) {
         if let Some(old) = self.plus_pop.take() {
             old.unparent();
         }
@@ -515,7 +532,7 @@ impl Launcher {
         });
         self.plus_pop = Some(pop);
     }
-            fn build(&mut self, sender: ComponentSender<Self>) {
+    fn build(&mut self, sender: ComponentSender<Self>) {
         self.entries = scan_workbenches(&state::workbenches_dir());
         while let Some(c) = self.cards.first_child() {
             self.cards.remove(&c);
@@ -536,10 +553,10 @@ impl Launcher {
             .orientation(gtk::Orientation::Vertical)
             .spacing(8)
             .build();
-        let label = e.display.as_deref().unwrap_or(&e.name); 
+        let label = e.display.as_deref().unwrap_or(&e.name);
         let stem = e.name.clone();
         let disp = label.to_string();
-                        let name = gtk::Label::builder()
+        let name = gtk::Label::builder()
             .label(label)
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -550,7 +567,7 @@ impl Launcher {
         let trash = icon_box("trash.svg", "Delete workbench");
         pencil.set_visible(false);
         trash.set_visible(false);
-                        let pencil_send = sender.clone();
+        let pencil_send = sender.clone();
         let pencil_stem = stem.clone();
         let pencil_anchor = pencil.clone();
         wire_click(&pencil, move || {
@@ -596,7 +613,7 @@ impl Launcher {
         }
         btn.set_child(Some(&inner));
         btn.set_tooltip_text(Some(&format!("Open workbench {}", e.name)));
-                                let pencil_v = pencil.clone();
+        let pencil_v = pencil.clone();
         let trash_v = trash.clone();
         let motion = gtk::EventControllerMotion::new();
         motion.connect_enter(move |_c, _x, _y| {
@@ -624,7 +641,7 @@ impl Launcher {
         let tile = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(5)
-            .hexpand(true) 
+            .hexpand(true)
             .css_classes(["alpaca-launchtile"])
             .build();
         let name = gtk::Label::builder()
@@ -655,12 +672,12 @@ impl Launcher {
                     .build();
                 if let Some(vec) = vector::icon("branch.svg") {
                     let img = gtk::Image::from_paintable(Some(&vec));
-                    img.set_pixel_size(12); 
+                    img.set_pixel_size(12);
                     strip.append(&img);
                 }
                 let lbl = gtk::Label::builder()
                     .label(branch)
-                    .max_width_chars(18) 
+                    .max_width_chars(18)
                     .ellipsize(gtk::pango::EllipsizeMode::End)
                     .css_classes(["alpaca-launchbranch"])
                     .xalign(0.0)
@@ -673,8 +690,7 @@ impl Launcher {
         tile
     }
 
-    
-            pub fn probe_click(&self, i: usize) {
+    pub fn probe_click(&self, i: usize) {
         if let Some(btn) = child_widgets(&self.cards)
             .get(i)
             .and_then(|w| w.downcast_ref::<gtk::Button>())
@@ -683,7 +699,7 @@ impl Launcher {
         }
     }
 
-            pub fn probe_texts(&self) -> Vec<(String, Vec<(String, String, String)>)> {
+    pub fn probe_texts(&self) -> CardTexts {
         let mut out = Vec::new();
         for c in child_widgets(&self.cards) {
             let Some(btn) = c.downcast_ref::<gtk::Button>() else {
@@ -692,7 +708,7 @@ impl Launcher {
             let Some(inner) = btn.child().and_downcast::<gtk::Box>() else {
                 continue;
             };
-                        let Some(row) = inner.first_child().and_downcast::<gtk::Box>() else {
+            let Some(row) = inner.first_child().and_downcast::<gtk::Box>() else {
                 continue;
             };
             let Some(name) = row.first_child().and_downcast::<gtk::Label>() else {
@@ -709,7 +725,7 @@ impl Launcher {
                         .and_downcast::<gtk::Label>()
                         .map(|l| l.text().to_string())
                         .unwrap_or_default();
-                                                            let row = tile.first_child().and_then(|n| n.next_sibling());
+                    let row = tile.first_child().and_then(|n| n.next_sibling());
                     let mut lang = String::new();
                     let mut branch = String::new();
                     for w in child_widgets_of(row) {
@@ -718,7 +734,9 @@ impl Launcher {
                         } else if let Some(strip) = w.downcast_ref::<gtk::Box>() {
                             branch = child_widgets(strip)
                                 .iter()
-                                .filter_map(|w| w.downcast_ref::<gtk::Label>().map(|l| l.text().to_string()))
+                                .filter_map(|w| {
+                                    w.downcast_ref::<gtk::Label>().map(|l| l.text().to_string())
+                                })
                                 .next_back()
                                 .unwrap_or_default();
                         }
@@ -731,7 +749,7 @@ impl Launcher {
         out
     }
 
-        pub fn card_icons(&self) -> Vec<(gtk::Box, gtk::Box)> {
+    pub fn card_icons(&self) -> Vec<(gtk::Box, gtk::Box)> {
         child_widgets(&self.cards)
             .into_iter()
             .filter_map(|c| {
@@ -740,7 +758,7 @@ impl Launcher {
                 let inner = child.downcast_ref::<gtk::Box>()?;
                 let first = inner.first_child()?;
                 let row = first.downcast_ref::<gtk::Box>()?;
-                                let mut it = child_widgets(row)
+                let mut it = child_widgets(row)
                     .into_iter()
                     .filter_map(|w| w.downcast::<gtk::Box>().ok());
                 let pencil = it.next()?;
@@ -750,7 +768,7 @@ impl Launcher {
             .collect()
     }
 
-                pub fn probe_trash(&self, i: usize) -> bool {
+    pub fn probe_trash(&self, i: usize) -> bool {
         let icons = self.card_icons();
         let Some((pencil, trash)) = icons.get(i).cloned() else {
             return false;
@@ -767,11 +785,9 @@ impl Launcher {
         });
         pop.is_visible()
     }
-            pub fn probe_pencil(&self, i: usize) -> Option<gtk::Entry> {
+    pub fn probe_pencil(&self, i: usize) -> Option<gtk::Entry> {
         let icons = self.card_icons();
-        let Some((pencil, trash)) = icons.get(i).cloned() else {
-            return None;
-        };
+        let (pencil, trash) = icons.get(i).cloned()?;
         pencil.set_visible(true);
         trash.set_visible(true);
         let e = self.entries.get(i)?.clone();
@@ -791,18 +807,16 @@ impl Launcher {
         pop_entry(&pop)
     }
 
-            pub fn probe_pencil_entry(&self, i: usize) -> Option<gtk::Entry> {
+    pub fn probe_pencil_entry(&self, i: usize) -> Option<gtk::Entry> {
         let icons = self.card_icons();
-        let Some((pencil, _)) = icons.get(i) else {
-            return None;
-        };
+        let (pencil, _) = icons.get(i)?;
         let pop = child_widgets(pencil)
             .into_iter()
             .find_map(|w| w.downcast::<gtk::Popover>().ok())?;
         pop_entry(&pop)
     }
 
-            pub fn probe_delete_ok(&self, i: usize) -> bool {
+    pub fn probe_delete_ok(&self, i: usize) -> bool {
         let icons = self.card_icons();
         let Some((_, trash)) = icons.get(i).cloned() else {
             return false;
@@ -819,7 +833,7 @@ impl Launcher {
         })
     }
 
-                pub fn probe_plus_entry(&self) -> Option<gtk::Entry> {
+    pub fn probe_plus_entry(&self) -> Option<gtk::Entry> {
         self.plus_pop.as_ref().and_then(pop_entry)
     }
 }
@@ -870,7 +884,7 @@ mod tests {
         let a = got.iter().find(|e| e.name == "a").unwrap();
         let b = got.iter().find(|e| e.name == "b").unwrap();
         assert_eq!(a.display.as_deref(), Some("My Backend"));
-        assert_eq!(b.display, None); 
+        assert_eq!(b.display, None);
     }
 
     #[test]
@@ -880,13 +894,17 @@ mod tests {
         write(&d.join("new.json"), r#"{"name":"new","projects":{}}"#);
         write(&d.join("c.json"), "not json at all");
         write(&d.join("e.txt"), r#"{"name":"e","projects":{}}"#);
-                let old = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
-        let f = std::fs::File::options().read(true).open(d.join("a.json")).unwrap();
-        f.set_times(std::fs::FileTimes::new().set_modified(old)).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        let f = std::fs::File::options()
+            .read(true)
+            .open(d.join("a.json"))
+            .unwrap();
+        f.set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
         drop(f);
         let got = scan_workbenches(&d);
-        assert_eq!(got.len(), 2); 
-        assert_eq!(got[0].name, "new"); 
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].name, "new");
         assert_eq!(got[1].name, "a");
     }
 
@@ -905,18 +923,18 @@ mod tests {
         );
         let got = scan_workbenches(&d);
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].projs.len(), 1); 
+        assert_eq!(got[0].projs.len(), 1);
         assert_eq!(got[0].projs[0].name, "rproj");
         assert_eq!(got[0].projs[0].lang.as_deref(), Some("c-sharp"));
-        assert_eq!(got[0].projs[0].branch, None); 
+        assert_eq!(got[0].projs[0].branch, None);
     }
 
     #[test]
     fn lang_label_map_and_fallback() {
         assert_eq!(lang_label("c-sharp"), "C#");
         assert_eq!(lang_label("typescript"), "TS");
-        assert_eq!(lang_label("typescript-jsx"), "TS"); 
-        assert_eq!(lang_label("js"), "JS"); 
+        assert_eq!(lang_label("typescript-jsx"), "TS");
+        assert_eq!(lang_label("js"), "JS");
         assert_eq!(lang_label("rust"), "Rust");
         assert_eq!(lang_label("sh"), "Shell");
         assert_eq!(lang_label("made-up"), "Made up");
@@ -941,19 +959,39 @@ mod tests {
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&z).unwrap();
         let projects: std::collections::HashMap<String, state::ProjectSession> = [
-            (a.to_string_lossy().into_owned(), state::ProjectSession::default()),
-            (z.to_string_lossy().into_owned(), state::ProjectSession::default()),
-            (g.to_string_lossy().into_owned(), state::ProjectSession::default()),
+            (
+                a.to_string_lossy().into_owned(),
+                state::ProjectSession::default(),
+            ),
+            (
+                z.to_string_lossy().into_owned(),
+                state::ProjectSession::default(),
+            ),
+            (
+                g.to_string_lossy().into_owned(),
+                state::ProjectSession::default(),
+            ),
         ]
         .into();
-        let wb = state::WorkbenchFile { name: "w".into(), display: None, projects };
-                let got = open_roots(&wb, Some(Path::new(z.to_str().unwrap())));
+        let wb = state::WorkbenchFile {
+            name: "w".into(),
+            display: None,
+            projects,
+        };
+        let got = open_roots(&wb, Some(Path::new(z.to_str().unwrap())));
         assert_eq!(got, vec![a.clone(), z.clone()]);
-                let got = open_roots(&wb, None);
+        let got = open_roots(&wb, None);
         assert_eq!(got, vec![a.clone(), z.clone()]);
-                let projects: std::collections::HashMap<String, state::ProjectSession> =
-            [(g.to_string_lossy().into_owned(), state::ProjectSession::default())].into();
-        let wb = state::WorkbenchFile { name: "w".into(), display: None, projects };
+        let projects: std::collections::HashMap<String, state::ProjectSession> = [(
+            g.to_string_lossy().into_owned(),
+            state::ProjectSession::default(),
+        )]
+        .into();
+        let wb = state::WorkbenchFile {
+            name: "w".into(),
+            display: None,
+            projects,
+        };
         assert!(open_roots(&wb, None).is_empty());
     }
 }

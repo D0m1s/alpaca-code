@@ -1,77 +1,82 @@
-
 #![allow(deprecated)]
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
-use relm4::gtk::{self, gdk, gio, glib, pango, prelude::*};
 use relm4::component::ComponentController;
+use relm4::gtk::{self, gdk, gio, glib, pango, prelude::*};
 use relm4::{Component, ComponentParts, ComponentSender};
 
-use crate::ui::editor::{Editor, EditorMsg, EditorOutput};
 use crate::fs::filetree::FileTreeMsg;
 use crate::git::gitpanel::{GitPanel, GitPanelMsg, GitPanelOutput, ProbeChild};
 use crate::git::gitview::GitViewMsg;
-use crate::ui::launcher::{Launcher, LauncherMsg, LauncherOutput};
-use crate::ui::panes::{Panes, PanesMsg, PanesOutput, kill_tree};
+use crate::render::vector;
 use crate::support::runctl;
 use crate::support::state;
-use crate::render::vector;
+use crate::ui::editor::{Editor, EditorMsg, EditorOutput};
+use crate::ui::launcher::{Launcher, LauncherMsg, LauncherOutput};
+use crate::ui::panes::{Panes, PanesMsg, PanesOutput, kill_tree};
 
 pub use crate::ui::editor::EditorSnapshot;
 
 #[derive(Debug)]
 pub enum AppMsg {
-            OpenWorkspace(PathBuf),
-        SwitchWorkspace(usize),
-        CloseWorkspace(usize),
-        AddProjectDialog,
-        ShowLauncher,
-            LauncherOpen(String),
-                LauncherAdd(String),
-        OpenNew(PathBuf, String),
-            LauncherRename { stem: String, display: String },
-            LauncherDelete(String),
-        OpenFile(usize, PathBuf),
-        EditorState(usize, EditorSnapshot),
-        RunStarting(usize),
+    OpenWorkspace(PathBuf),
+    SwitchWorkspace(usize),
+    CloseWorkspace(usize),
+    AddProjectDialog,
+    ShowLauncher,
+    LauncherOpen(String),
+    LauncherAdd(String),
+    OpenNew(PathBuf, String),
+    LauncherRename {
+        stem: String,
+        display: String,
+    },
+    LauncherDelete(String),
+    OpenFile(usize, PathBuf),
+    EditorState(usize, EditorSnapshot),
+    RunStarting(usize),
     RunStatus(usize, bool),
-        RunPressed,
+    RunPressed,
     StopPressed,
     FlushTabs,
-        SaveWorkbench,
-            SaveThenClose,
-        SaveAndQuit,
-        RecentMissing(String),
-        OpenDiff {
+    SaveWorkbench,
+    SaveThenClose,
+    SaveAndQuit,
+    RecentMissing(String),
+    OpenDiff {
         ws: usize,
         rel: String,
         letter: String,
     },
-        Commit {
+    Commit {
         ws: usize,
         root: PathBuf,
         paths: Vec<String>,
         msg: String,
     },
-        Flushed(usize),
-        GitChanged(usize, crate::git::gitstatus::Rows),
-        WindowActive,
-        EditOp(EditKind),
-            FocusSearch,
-                ProjectCreated { target: PathBuf, res: Result<(), String> },
-        ProbeS2(PathBuf),
-        ProbeS2Step,
-        ProbeS3(PathBuf),
-        ProbeS3Step,
-            ProbeDraw,
-        ProbeS4(PathBuf),
-        ProbeS4Step,
-            ProbeWBSave(PathBuf),
+    Flushed(usize),
+    GitChanged(usize, crate::git::gitstatus::Rows),
+    WindowActive,
+    EditOp(EditKind),
+    FocusSearch,
+    ProjectCreated {
+        target: PathBuf,
+        res: Result<(), String>,
+    },
+    ProbeS2(PathBuf),
+    ProbeS2Step,
+    ProbeS3(PathBuf),
+    ProbeS3Step,
+    ProbeDraw,
+    ProbeS4(PathBuf),
+    ProbeS4Step,
+    ProbeWBSave(PathBuf),
     ProbeWBStep,
-            ProbeWBRestore(PathBuf),
+    ProbeWBRestore(PathBuf),
     ProbeWBRStep,
-        ProbeLN(PathBuf),
+    ProbeLN(PathBuf),
     ProbeLNStep,
 }
 
@@ -83,9 +88,9 @@ pub const MAX_WORKSPACES: usize = 3;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum AddDecision {
-        Switch(usize),
-        Add,
-        Full,
+    Switch(usize),
+    Add,
+    Full,
 }
 
 pub fn add_decision(open: &[PathBuf], path: &Path) -> AddDecision {
@@ -117,34 +122,39 @@ pub enum EditKind {
 
 pub struct Workspace {
     root: PathBuf,
-        hpane: gtk::Paned,
-            vpane: gtk::Paned,
-            btn: gtk::Button,
+    hpane: gtk::Paned,
+    vpane: gtk::Paned,
+    btn: gtk::Button,
     editor: relm4::Controller<Editor>,
     panes: relm4::Controller<Panes>,
     gitpanel: relm4::Controller<GitPanel>,
-        running: bool,
-        snapshot: EditorSnapshot,
-            pending_commit: Option<(PathBuf, Vec<String>, String)>,
+    running: bool,
+    snapshot: EditorSnapshot,
+    pending_commit: Option<(PathBuf, Vec<String>, String)>,
 }
 
 impl Workspace {
-                    fn new(path: PathBuf, ws: usize, app_out: ComponentSender<App>, sess: Option<state::ProjectSession>) -> Self {
+    fn new(
+        path: PathBuf,
+        ws: usize,
+        app_out: ComponentSender<App>,
+        sess: Option<state::ProjectSession>,
+    ) -> Self {
         let path_str = path.to_string_lossy().into_owned();
         let sess = sess.unwrap_or_default();
 
-                let editor_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let editor_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let app_in = app_out.clone();
         let editor = Editor::builder()
             .launch(())
             .connect_receiver(move |_, out| match out {
                 EditorOutput::StateChanged(s) => app_in.input(AppMsg::EditorState(ws, s)),
-                EditorOutput::Flushed => app_in.input(AppMsg::Flushed(ws)), 
+                EditorOutput::Flushed => app_in.input(AppMsg::Flushed(ws)),
             });
         let tabs = state::project_tabs(&state::load(), &path_str);
         editor_slot.append(editor.widget());
 
-                let app_in = app_out.clone();
+        let app_in = app_out.clone();
         let panes = Panes::builder()
             .launch(())
             .connect_receiver(move |_, out| match out {
@@ -157,12 +167,12 @@ impl Workspace {
         vpane.set_wide_handle(true);
         vpane.set_start_child(Some(&editor_slot));
         vpane.set_end_child(Some(&panes_slot));
-                vpane.set_position(592);
-                                if sess.vpane > 0 {
+        vpane.set_position(592);
+        if sess.vpane > 0 {
             vpane.set_position(sess.vpane);
         }
 
-                let app_in = app_out.clone();
+        let app_in = app_out.clone();
         let gitpanel = GitPanel::builder()
             .launch(())
             .connect_receiver(move |_, out| match out {
@@ -171,44 +181,49 @@ impl Workspace {
                     app_in.input(AppMsg::OpenDiff { ws, rel, letter });
                 }
                 GitPanelOutput::Commit { root, paths, msg } => {
-                    app_in.input(AppMsg::Commit { ws, root, paths, msg });
+                    app_in.input(AppMsg::Commit {
+                        ws,
+                        root,
+                        paths,
+                        msg,
+                    });
                 }
                 GitPanelOutput::GitChanged(rows) => app_in.input(AppMsg::GitChanged(ws, rows)),
             });
 
-                        let hpane = gtk::Paned::new(gtk::Orientation::Horizontal);
+        let hpane = gtk::Paned::new(gtk::Orientation::Horizontal);
         hpane.set_wide_handle(true);
         hpane.set_start_child(Some(&vpane));
         hpane.set_end_child(Some(gitpanel.widget()));
-                                hpane.set_position(1161);
+        hpane.set_position(1161);
         if sess.hpane > 0 {
             hpane.set_position(sess.hpane);
         }
 
-                        let btn = gtk::Button::builder()
+        let btn = gtk::Button::builder()
             .has_frame(false)
             .css_classes(["alpaca-projbtn"])
             .build();
         let lbl = gtk::Label::builder().label(py_basename(&path_str)).build();
         lbl.set_ellipsize(pango::EllipsizeMode::End);
-        lbl.set_max_width_chars(24); 
-                                                                let close = gtk::Box::builder()
+        lbl.set_max_width_chars(24);
+        let close = gtk::Box::builder()
             .css_classes(["alpaca-projclose"])
             .tooltip_text("Close project")
             .build();
-                                close.set_valign(gtk::Align::Center);
+        close.set_valign(gtk::Align::Center);
         if let Some(vec) = vector::icon("x-dim.svg") {
             let img = gtk::Image::from_paintable(Some(&vec));
             img.set_pixel_size(14);
             img.set_valign(gtk::Align::Center);
             close.append(&img);
         } else {
-                        close.append(&gtk::Label::builder().label("✕").build());
+            close.append(&gtk::Label::builder().label("✕").build());
         }
         let click = gtk::GestureClick::new();
         let snd = app_out.clone();
         click.connect_pressed(move |g, _n, _x, _y| {
-                                    if let Some(seq) = g.current_sequence() {
+            if let Some(seq) = g.current_sequence() {
                 g.set_sequence_state(&seq, gtk::EventSequenceState::Claimed);
             }
             snd.input(AppMsg::CloseWorkspace(ws));
@@ -219,12 +234,12 @@ impl Workspace {
         pill_child.append(&close);
         btn.set_child(Some(&pill_child));
         btn.set_tooltip_text(Some(&path_str));
-                let snd = app_out.clone();
+        let snd = app_out.clone();
         btn.connect_clicked(move |_b| snd.input(AppMsg::SwitchWorkspace(ws)));
 
-                        gitpanel.emit(GitPanelMsg::SetRoot(path.clone()));
+        gitpanel.emit(GitPanelMsg::SetRoot(path.clone()));
         if !sess.expanded.is_empty() || !sess.changes_closed.is_empty() {
-                                                gitpanel.emit(GitPanelMsg::SetTreeState {
+            gitpanel.emit(GitPanelMsg::SetTreeState {
                 expanded: sess.expanded.clone(),
                 closed: sess.changes_closed.clone(),
             });
@@ -259,22 +274,22 @@ struct App {
     stack: gtk::Stack,
     proj_box: gtk::Box,
     add_btn: gtk::Button,
-        menu_btn: gtk::MenuButton,
+    menu_btn: gtk::MenuButton,
     run_btn: gtk::Button,
     stop_btn: gtk::Button,
     run_row: gtk::Box,
-                    ws: Vec<Option<Workspace>>,
-        active: usize,
-            launcher: relm4::Controller<Launcher>,
-            probe_ws: Option<(PathBuf, usize)>,
-            probe_s3: Option<(PathBuf, usize)>,
-            probe_s4: Option<(PathBuf, usize)>,
-            probe_wb: Option<(PathBuf, usize)>,
+    ws: Vec<Option<Workspace>>,
+    active: usize,
+    launcher: relm4::Controller<Launcher>,
+    probe_ws: Option<(PathBuf, usize)>,
+    probe_s3: Option<(PathBuf, usize)>,
+    probe_s4: Option<(PathBuf, usize)>,
+    probe_wb: Option<(PathBuf, usize)>,
     probe_wbr: Option<(PathBuf, usize)>,
-        probe_l: Option<(PathBuf, usize)>,
-                wb: Option<state::WorkbenchFile>,
-        wb_name: Option<String>,
-                wb_display: Option<String>,
+    probe_l: Option<(PathBuf, usize)>,
+    wb: Option<state::WorkbenchFile>,
+    wb_name: Option<String>,
+    wb_display: Option<String>,
 }
 
 #[relm4::component]
@@ -291,17 +306,23 @@ impl Component for App {
         }
     }
 
-    fn init(model: Self::Init, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        let arg = model.clone(); 
+    fn init(
+        model: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let arg = model.clone();
 
-                                        let run_btn = gtk::Button::new();
+        let run_btn = gtk::Button::new();
         let run_icon = match vector::icon("play.svg") {
             Some(vec) => {
                 let img = gtk::Image::from_paintable(Some(&vec));
                 img.set_pixel_size(14);
                 img
             }
-            None => gtk::Image::builder().icon_name("media-playback-start-symbolic").build(),
+            None => gtk::Image::builder()
+                .icon_name("media-playback-start-symbolic")
+                .build(),
         };
         run_icon.set_valign(gtk::Align::Center);
         run_btn.set_child(Some(&run_icon));
@@ -315,7 +336,9 @@ impl Component for App {
                 img.set_pixel_size(14);
                 img
             }
-            None => gtk::Image::builder().icon_name("media-playback-stop-symbolic").build(),
+            None => gtk::Image::builder()
+                .icon_name("media-playback-stop-symbolic")
+                .build(),
         };
         stop_icon.set_valign(gtk::Align::Center);
         stop_btn.set_child(Some(&stop_icon));
@@ -325,9 +348,9 @@ impl Component for App {
 
         let header = gtk::HeaderBar::new();
         header.set_css_classes(&["alpaca-header"]);
-                                let proj_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                                                proj_box.set_valign(gtk::Align::Center);
-                                                                                let add_btn = gtk::Button::builder()
+        let proj_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        proj_box.set_valign(gtk::Align::Center);
+        let add_btn = gtk::Button::builder()
             .has_frame(false)
             .css_classes(["alpaca-projadd"])
             .build();
@@ -337,31 +360,33 @@ impl Component for App {
             img.set_valign(gtk::Align::Center);
             add_btn.set_child(Some(&img));
         } else {
-                        add_btn.set_child(Some(&gtk::Label::builder().label("+").build()));
+            add_btn.set_child(Some(&gtk::Label::builder().label("+").build()));
         }
         add_btn.set_tooltip_text(Some("Open project…"));
         proj_box.append(&add_btn);
         let send = sender.clone();
         add_btn.connect_clicked(move |_b| send.input(AppMsg::AddProjectDialog));
         header.set_title_widget(Some(&proj_box));
-                                                        let menu_btn = gtk::MenuButton::new();
+        let menu_btn = gtk::MenuButton::new();
         if let Some(vec) = vector::icon("chevron-down.svg") {
             let img = gtk::Image::from_paintable(Some(&vec));
             img.set_pixel_size(14);
             img.set_valign(gtk::Align::Center);
             menu_btn.set_child(Some(&img));
         } else {
-                        menu_btn.set_child(Some(&gtk::Image::builder()
-                .icon_name("pan-down-symbolic")
-                .pixel_size(14)
-                .valign(gtk::Align::Center)
-                .build()));
+            menu_btn.set_child(Some(
+                &gtk::Image::builder()
+                    .icon_name("pan-down-symbolic")
+                    .pixel_size(14)
+                    .valign(gtk::Align::Center)
+                    .build(),
+            ));
         }
         menu_btn.set_tooltip_text(Some("Workbench"));
         menu_btn.set_popover(Some(&gtk::PopoverMenu::from_model(Some(&workbench_menu()))));
         header.pack_start(&menu_btn);
 
-                                        let run_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let run_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         run_row.set_css_classes(&["alpaca-runpill"]);
         for btn in [&run_btn, &stop_btn] {
             let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -374,17 +399,17 @@ impl Component for App {
         divider.set_margin_top(4);
         divider.set_margin_bottom(4);
         let first = run_row.first_child().unwrap();
-        run_row.insert_child_after(&divider, Some(&first)); 
-                                        run_row.set_valign(gtk::Align::Center);
+        run_row.insert_child_after(&divider, Some(&first));
+        run_row.set_valign(gtk::Align::Center);
         header.pack_end(&run_row);
         root.set_titlebar(Some(&header));
 
-                let send = sender.clone();
+        let send = sender.clone();
         run_btn.connect_clicked(move |_b| send.input(AppMsg::RunPressed));
         let send = sender.clone();
         stop_btn.connect_clicked(move |_b| send.input(AppMsg::StopPressed));
 
-                                let widgets = view_output!();
+        let widgets = view_output!();
         let st = state::load();
         let (w, h) = st
             .window
@@ -395,14 +420,14 @@ impl Component for App {
             root.maximize();
         }
 
-                        let stack = gtk::Stack::builder()
+        let stack = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::None)
             .hexpand(true)
             .vexpand(true)
             .build();
         root.set_child(Some(&stack));
 
-                                let send_l = sender.clone();
+        let send_l = sender.clone();
         let launcher = Launcher::builder()
             .launch(())
             .connect_receiver(move |_, out| match out {
@@ -415,7 +440,7 @@ impl Component for App {
             });
         stack.add_named(launcher.widget(), Some("launcher"));
 
-                                                                        {
+        {
             let menu_c = menu_btn.clone();
             let add_c = add_btn.clone();
             stack.connect_notify_local(Some("visible-child"), move |st, _| {
@@ -428,9 +453,9 @@ impl Component for App {
         menu_btn.set_visible(!on_hub);
         add_btn.set_visible(!on_hub);
 
-                let boot_wb = st.last_workbench.as_deref().and_then(state::load_workbench);
-    let boot_wb_name = boot_wb.as_ref().map(|w| w.name.clone());
-    let model = App {
+        let boot_wb = st.last_workbench.as_deref().and_then(state::load_workbench);
+        let boot_wb_name = boot_wb.as_ref().map(|w| w.name.clone());
+        let model = App {
             stack,
             proj_box,
             add_btn,
@@ -447,45 +472,45 @@ impl Component for App {
             probe_wb: None,
             probe_wbr: None,
             probe_l: None,
-                                                            wb: boot_wb,
+            wb: boot_wb,
             wb_name: boot_wb_name,
             wb_display: None,
         };
 
         register_actions(&relm4::main_application(), &root, sender.clone());
 
-                        let in_active = sender.clone();
+        let in_active = sender.clone();
         root.connect_notify_local(Some("is-active"), move |_, _| {
             in_active.input(AppMsg::WindowActive)
         });
 
-                                                let snd_close = sender.clone();
+        let snd_close = sender.clone();
         root.connect_close_request(move |_| {
             let _ = snd_close.input_sender().send(AppMsg::SaveThenClose);
             glib::Propagation::Stop
         });
 
-                                if let Some(p) = arg {
+        if let Some(p) = arg {
             sender.input(AppMsg::OpenWorkspace(p));
         } else {
             sender.input(AppMsg::ShowLauncher);
         }
-                if let Ok(dir) = std::env::var("ALPACA_PROBE_S2") {
+        if let Ok(dir) = std::env::var("ALPACA_PROBE_S2") {
             sender.input(AppMsg::ProbeS2(PathBuf::from(dir)));
         }
-                if let Ok(dir) = std::env::var("ALPACA_PROBE_S3") {
+        if let Ok(dir) = std::env::var("ALPACA_PROBE_S3") {
             sender.input(AppMsg::ProbeS3(PathBuf::from(dir)));
         }
-                if let Ok(dir) = std::env::var("ALPACA_PROBE_S4") {
+        if let Ok(dir) = std::env::var("ALPACA_PROBE_S4") {
             sender.input(AppMsg::ProbeS4(PathBuf::from(dir)));
         }
-                if let Ok(dir) = std::env::var("ALPACA_PROBE_WB_SAVE") {
+        if let Ok(dir) = std::env::var("ALPACA_PROBE_WB_SAVE") {
             sender.input(AppMsg::ProbeWBSave(PathBuf::from(dir)));
         }
         if let Ok(dir) = std::env::var("ALPACA_PROBE_WB_RESTORE") {
             sender.input(AppMsg::ProbeWBRestore(PathBuf::from(dir)));
         }
-                if let Ok(dir) = std::env::var("ALPACA_PROBE_LN") {
+        if let Ok(dir) = std::env::var("ALPACA_PROBE_LN") {
             sender.input(AppMsg::ProbeLN(PathBuf::from(dir)));
         }
 
@@ -498,14 +523,14 @@ impl Component for App {
             AppMsg::SwitchWorkspace(i) => self.switch_to(i, root),
             AppMsg::CloseWorkspace(slot) => self.close_workspace(slot, root, sender),
             AppMsg::ShowLauncher => {
-                                                self.launcher.emit(LauncherMsg::Build);
+                self.launcher.emit(LauncherMsg::Build);
                 self.stack.set_visible_child_name("launcher");
                 root.set_title(Some("alpaca-code"));
             }
             AppMsg::LauncherOpen(name) => self.open_workbench(&name, sender),
             AppMsg::LauncherAdd(name) => ask_folder(root, "New Workbench", sender, Some(name)),
             AppMsg::OpenNew(p, name) => {
-                                                                                                self.wb = None;
+                self.wb = None;
                 self.wb_name = None;
                 self.wb_display = Some(if name.trim().is_empty() {
                     py_basename(&p.to_string_lossy()).to_string()
@@ -515,7 +540,7 @@ impl Component for App {
                 sender.input(AppMsg::OpenWorkspace(p));
             }
             AppMsg::LauncherRename { stem, display } => {
-                                                                state::set_workbench_display(&stem, &display);
+                state::set_workbench_display(&stem, &display);
                 if self.wb_name.as_deref() == Some(stem.as_str()) {
                     self.wb = state::load_workbench(&stem);
                 }
@@ -524,7 +549,7 @@ impl Component for App {
             AppMsg::LauncherDelete(stem) => {
                 state::delete_workbench(&stem);
                 if self.wb_name.as_deref() == Some(stem.as_str()) {
-                                                            self.wb = None;
+                    self.wb = None;
                     self.wb_name = None;
                     self.wb_display = None;
                 }
@@ -532,7 +557,7 @@ impl Component for App {
             }
             AppMsg::AddProjectDialog => open_project(root, sender),
             AppMsg::OpenFile(ws, p) => {
-                                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
                     w.editor.emit(EditorMsg::OpenFile(p));
                 }
             }
@@ -541,7 +566,7 @@ impl Component for App {
                     w.snapshot = s;
                 }
                 if self.live_len() > 0 {
-                                                                                let sender = sender.clone();
+                    let sender = sender.clone();
                     glib::timeout_add(std::time::Duration::from_millis(1000), move || {
                         sender.input(AppMsg::FlushTabs);
                         glib::ControlFlow::Break
@@ -551,7 +576,7 @@ impl Component for App {
             AppMsg::SaveWorkbench => self.save_all(root),
             AppMsg::SaveThenClose => {
                 self.save_all(root);
-                root.destroy(); 
+                root.destroy();
             }
             AppMsg::SaveAndQuit => {
                 self.save_all(root);
@@ -570,7 +595,7 @@ impl Component for App {
                 state::save(&st);
             }
             AppMsg::RunStatus(ws, running) => {
-                                                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
                     w.running = running;
                 }
                 if ws == self.active {
@@ -584,12 +609,17 @@ impl Component for App {
                     w.running = true;
                 }
                 if ws == self.active {
-                    self.run_btn.set_sensitive(false); 
+                    self.run_btn.set_sensitive(false);
                     self.refresh_run_style();
                 }
             }
             AppMsg::RunPressed => {
-                                let running = self.ws.get(self.active).and_then(|o| o.as_ref()).map(|w| w.running).unwrap_or(true);
+                let running = self
+                    .ws
+                    .get(self.active)
+                    .and_then(|o| o.as_ref())
+                    .map(|w| w.running)
+                    .unwrap_or(true);
                 if running {
                     return;
                 }
@@ -608,9 +638,9 @@ impl Component for App {
                 if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.panes.emit(PanesMsg::LaunchRun { argv: cmd.argv });
                 }
-                                            }
+            }
             AppMsg::StopPressed => {
-                                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.panes.emit(PanesMsg::StopRun);
                 }
                 self.stop_btn.set_sensitive(false);
@@ -625,12 +655,21 @@ impl Component for App {
                 Ok(()) => sender.input(AppMsg::OpenWorkspace(target)),
             },
             AppMsg::OpenDiff { ws, rel, letter } => {
-                                if let Some(w) = self.ws.get(ws).and_then(|o| o.as_ref()) {
-                    w.editor.emit(EditorMsg::OpenDiff { root: w.root.clone(), rel, letter });
+                if let Some(w) = self.ws.get(ws).and_then(|o| o.as_ref()) {
+                    w.editor.emit(EditorMsg::OpenDiff {
+                        root: w.root.clone(),
+                        rel,
+                        letter,
+                    });
                 }
             }
-            AppMsg::Commit { ws, root, paths, msg } => {
-                                                                                                                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
+            AppMsg::Commit {
+                ws,
+                root,
+                paths,
+                msg,
+            } => {
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut()) {
                     w.editor.emit(EditorMsg::SaveOpen(
                         paths.iter().map(|rel| root.join(rel)).collect(),
                     ));
@@ -638,19 +677,27 @@ impl Component for App {
                 }
             }
             AppMsg::Flushed(ws) => {
-                                                                                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut())
-                    && let Some((root, paths, msg)) = w.pending_commit.take() {
-                        w.gitpanel.emit(GitPanelMsg::StartCommit { root, paths, msg });
-                    }
+                if let Some(w) = self.ws.get_mut(ws).and_then(|o| o.as_mut())
+                    && let Some((root, paths, msg)) = w.pending_commit.take()
+                {
+                    w.gitpanel
+                        .emit(GitPanelMsg::StartCommit { root, paths, msg });
+                }
             }
             AppMsg::GitChanged(ws, rows) => {
-                                                                                if let Some(w) = self.ws.get(ws).and_then(|o| o.as_ref()) {
-                    let letters = rows.iter().map(|(rel, letter)| (rel.clone(), letter.clone())).collect();
-                    w.editor.emit(EditorMsg::RefreshDiffs { root: w.root.clone(), letters });
+                if let Some(w) = self.ws.get(ws).and_then(|o| o.as_ref()) {
+                    let letters = rows
+                        .iter()
+                        .map(|(rel, letter)| (rel.clone(), letter.clone()))
+                        .collect();
+                    w.editor.emit(EditorMsg::RefreshDiffs {
+                        root: w.root.clone(),
+                        letters,
+                    });
                 }
             }
             AppMsg::WindowActive => {
-                                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
+                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::RefreshGit);
                 }
             }
@@ -672,37 +719,44 @@ impl Component for App {
                 }
             }
             AppMsg::ProbeS2(dir) => {
-                                                                self.probe_ws = Some((dir, 0));
+                self.probe_ws = Some((dir, 0));
                 let snd = sender.clone();
-                glib::timeout_add(std::time::Duration::from_millis(PROBE_STEP_MS[0]), move || {
-                    snd.input(AppMsg::ProbeS2Step);
-                    glib::ControlFlow::Break
-                });
+                glib::timeout_add(
+                    std::time::Duration::from_millis(PROBE_STEP_MS[0]),
+                    move || {
+                        snd.input(AppMsg::ProbeS2Step);
+                        glib::ControlFlow::Break
+                    },
+                );
             }
             AppMsg::ProbeS2Step => self.probe_step(root, &sender),
             AppMsg::ProbeDraw => {
-                                                                                                                                if self.probe_s3.is_some() {
+                if self.probe_s3.is_some() {
                     root.queue_draw();
                     PROBE_S3_TICKS.with(|t| {
                         let n = t.get() + 1;
                         t.set(n);
-                                                if n % 8 == 0 {
+                        if n % 8 == 0 {
                             println!("PROBE tick {n}: root w={}", root.allocated_width());
                         }
                     });
                 }
             }
             AppMsg::ProbeS4(dir) => {
-                                self.probe_s4 = Some((dir, 0));
+                self.probe_s4 = Some((dir, 0));
                 root.present();
                 let snd = sender.clone();
-                glib::timeout_add(std::time::Duration::from_millis(PROBE_S4_STEP_MS[0]), move || {
-                    snd.input(AppMsg::ProbeS4Step);
-                    glib::ControlFlow::Break
-                });
+                glib::timeout_add(
+                    std::time::Duration::from_millis(PROBE_S4_STEP_MS[0]),
+                    move || {
+                        snd.input(AppMsg::ProbeS4Step);
+                        glib::ControlFlow::Break
+                    },
+                );
             }
             AppMsg::ProbeS4Step => {
-                let Some((ws_dir, step)) = self.probe_s4.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                let Some((ws_dir, step)) = self.probe_s4.as_ref().map(|(w, s)| (w.clone(), *s))
+                else {
                     return;
                 };
                 let say = |name: &str, ok: bool| {
@@ -717,13 +771,16 @@ impl Component for App {
                     1 => {
                         let ws_b = ws_dir.to_string_lossy().replace("wsA", "wsB");
                         self.open_workspace(std::path::Path::new(&ws_b), root, sender.clone());
-                        sender.input(AppMsg::OpenFile(self.active, std::path::Path::new(&ws_b).join("b.txt")));
+                        sender.input(AppMsg::OpenFile(
+                            self.active,
+                            std::path::Path::new(&ws_b).join("b.txt"),
+                        ));
                     }
                     2 => {
                         println!("PROBE step 2: ts={}", epoch_ms());
                         self.switch_to(0, root);
                         say("two-open", self.ws.len() == 2 && self.live_len() == 2);
-                                                                                                                        say(
+                        say(
                             "stack-visible-is-wsA",
                             self.stack
                                 .visible_child()
@@ -731,34 +788,54 @@ impl Component for App {
                         );
                         say(
                             "editor-tabs-preserved",
-                                                        self.ws[0].as_ref().unwrap().snapshot.open_tabs == vec!["a.txt".to_string()],
+                            self.ws[0].as_ref().unwrap().snapshot.open_tabs
+                                == vec!["a.txt".to_string()],
                         );
-                                                                                                                                                let hw = self.ws[0].as_ref().unwrap().hpane.allocated_width();
+                        let hw = self.ws[0].as_ref().unwrap().hpane.allocated_width();
                         let pos = self.ws[0].as_ref().unwrap().hpane.position();
                         println!("PROBE hpane-pos reads pos={pos} hpane-w={hw}");
-                                                                                                let ok = if hw > 0 { pos == 1161.min(hw - 6) } else { pos == 1161 };
+                        let ok = if hw > 0 {
+                            pos == 1161.min(hw - 6)
+                        } else {
+                            pos == 1161
+                        };
                         say("hpane-pos-1161", ok);
                         say(
                             "on-class-wsA",
                             self.ws[0].as_ref().unwrap().btn.has_css_class("alpaca-on")
                                 && !self.ws[1].as_ref().unwrap().btn.has_css_class("alpaca-on"),
                         );
-                                                                                                                                                                                                let bh = self.proj_box.allocated_height();
-                        let bands: Vec<i32> =
-                            self.ws.iter().flatten().map(|w| w.btn.allocated_height()).collect();
-                        println!("PROBE strip: proj_box-h={} pill-band-heights={:?}", bh, bands);
-                        let ok = bh > 0
-                            && bands.len() == 2
-                            && bands.iter().all(|h| *h == bh && *h < 32);
+                        let bh = self.proj_box.allocated_height();
+                        let bands: Vec<i32> = self
+                            .ws
+                            .iter()
+                            .flatten()
+                            .map(|w| w.btn.allocated_height())
+                            .collect();
+                        println!(
+                            "PROBE strip: proj_box-h={} pill-band-heights={:?}",
+                            bh, bands
+                        );
+                        let ok =
+                            bh > 0 && bands.len() == 2 && bands.iter().all(|h| *h == bh && *h < 32);
                         say("pill-band-floats", ok);
-                                                                                                say(
+                        say(
                             "add-btn-icon",
                             self.add_btn.child().and_downcast::<gtk::Image>().is_some(),
                         );
-                                                say(
+                        say(
                             "title-is-basename",
                             root.title().as_deref()
-                                == Some(self.ws[0].as_ref().unwrap().root.file_name().unwrap().to_str().unwrap()),
+                                == Some(
+                                    self.ws[0]
+                                        .as_ref()
+                                        .unwrap()
+                                        .root
+                                        .file_name()
+                                        .unwrap()
+                                        .to_str()
+                                        .unwrap(),
+                                ),
                         );
                     }
                     3 => {
@@ -766,7 +843,7 @@ impl Component for App {
                         self.open_workspace(std::path::Path::new(&ws_c), root, sender.clone());
                         say("three-open", self.ws.len() == 3 && self.live_len() == 3);
                         say("add-btn-disabled", !self.add_btn.is_sensitive());
-                                                                                                                                                sender.spawn_command(move |_| {
+                        sender.spawn_command(move |_| {
                             let st = std::fs::read_to_string(crate::support::state::state_path())
                                 .unwrap_or_default();
                             let ops = st
@@ -779,19 +856,24 @@ impl Component for App {
                                 .to_string();
                             let ok = ["wsA", "wsB", "wsC"].iter().all(|w| ops.contains(w))
                                 && !st.contains("GONE");
-                            println!("PROBE assert: state-open-set-live-truth: {}",
-                                     if ok { "PASS" } else { "FAIL" });
+                            println!(
+                                "PROBE assert: state-open-set-live-truth: {}",
+                                if ok { "PASS" } else { "FAIL" }
+                            );
                             println!("PROBE state open_projects=[{}]", ops.trim());
                         });
-                                                                        self.switch_to(0, root);
+                        self.switch_to(0, root);
                     }
-                                                            4 => {
+                    4 => {
                         self.open_workspace(ws_dir.as_path(), root, sender.clone());
-                        say("re-open-wsA-switches", self.live_len() == 3 && self.active == 0);
+                        say(
+                            "re-open-wsA-switches",
+                            self.live_len() == 3 && self.active == 0,
+                        );
                     }
-                                                                                5 => {
+                    5 => {
                         self.close_workspace(0, root, sender.clone());
-                                                                        say("close-live-2", self.live_len() == 2 && self.ws.len() == 3);
+                        say("close-live-2", self.live_len() == 2 && self.ws.len() == 3);
                         say("close-slot-0-tombstone", self.ws[0].is_none());
                         say(
                             "close-swing-wsB",
@@ -801,14 +883,17 @@ impl Component for App {
                                     .visible_child()
                                     .is_some_and(|v| v == self.ws[1].as_ref().unwrap().hpane),
                         );
-                                                say(
+                        say(
                             "close-pill-class",
                             self.ws[1].as_ref().unwrap().btn.has_css_class("alpaca-on"),
                         );
-                                                say("close-pill-rm", self.proj_box.observe_children().n_items() == 3);
+                        say(
+                            "close-pill-rm",
+                            self.proj_box.observe_children().n_items() == 3,
+                        );
                         say("close-reopen-plus", self.add_btn.is_sensitive());
-                                                let wsb = ws_dir.to_string_lossy().replace("wsA", "wsB");
-                        let wsb_state = wsb.clone(); 
+                        let wsb = ws_dir.to_string_lossy().replace("wsA", "wsB");
+                        let wsb_state = wsb.clone();
                         let wsc = ws_dir.to_string_lossy().replace("wsA", "wsC");
                         sender.spawn_command(move |_| {
                             let st = std::fs::read_to_string(crate::support::state::state_path())
@@ -824,15 +909,14 @@ impl Component for App {
                             let ok = ops.contains(&wsb_state)
                                 && ops.contains(&wsc)
                                 && !ops.contains("wsA");
-                            println!("PROBE assert: close-open-set-pruned: {}",
-                                     if ok { "PASS" } else { "FAIL" });
+                            println!(
+                                "PROBE assert: close-open-set-pruned: {}",
+                                if ok { "PASS" } else { "FAIL" }
+                            );
                             println!("PROBE state open_projects=[{}]", ops.trim());
                         });
-                                                                                                sender.input(AppMsg::OpenFile(
-                            1,
-                            PathBuf::from(&wsb).join("b2.txt"),
-                        ));
-                                                                        sender.input(AppMsg::OpenFile(0, ws_dir.join("a.txt")));
+                        sender.input(AppMsg::OpenFile(1, PathBuf::from(&wsb).join("b2.txt")));
+                        sender.input(AppMsg::OpenFile(0, ws_dir.join("a.txt")));
                     }
                     6 => {
                         let w = self.ws[1].as_ref().unwrap();
@@ -856,16 +940,20 @@ impl Component for App {
                 }
             }
             AppMsg::ProbeWBSave(dir) => {
-                                self.probe_wb = Some((dir, 0));
+                self.probe_wb = Some((dir, 0));
                 root.present();
                 let snd = sender.clone();
-                glib::timeout_add(std::time::Duration::from_millis(PROBE_WB_SAVE_MS[0]), move || {
-                    snd.input(AppMsg::ProbeWBStep);
-                    glib::ControlFlow::Break
-                });
+                glib::timeout_add(
+                    std::time::Duration::from_millis(PROBE_WB_SAVE_MS[0]),
+                    move || {
+                        snd.input(AppMsg::ProbeWBStep);
+                        glib::ControlFlow::Break
+                    },
+                );
             }
             AppMsg::ProbeWBStep => {
-                let Some((ws_dir, step)) = self.probe_wb.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                let Some((ws_dir, step)) = self.probe_wb.as_ref().map(|(w, s)| (w.clone(), *s))
+                else {
                     return;
                 };
                 let say = |name: &str, ok: bool| {
@@ -876,13 +964,15 @@ impl Component for App {
                         self.open_workspace(ws_dir.as_path(), root, sender.clone());
                         let i = self.active;
                         sender.input(AppMsg::OpenFile(i, ws_dir.join("a.txt")));
-                                                                                                root.set_size_request(1586, 992);
+                        root.set_size_request(1586, 992);
                     }
                     1 => {
-                        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else { return };
+                        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else {
+                            return;
+                        };
                         w.vpane.set_position(650);
                         w.hpane.set_position(900);
-                                                                                                w.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Tree(
+                        w.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Tree(
                             FileTreeMsg::RowExpanded(gtk::TreePath::from_string("1").unwrap()),
                         )));
                     }
@@ -893,9 +983,9 @@ impl Component for App {
                             println!("PROBE scroll_state: {:?}", sc);
                         }
                     }
-                    3 => sender.input(AppMsg::SaveWorkbench), 
+                    3 => sender.input(AppMsg::SaveWorkbench),
                     4 => {
-                                                                                                sender.spawn_command(move |_| {
+                        sender.spawn_command(move |_| {
                             let dir = crate::support::state::workbenches_dir();
                             let mut got: Option<String> = None;
                             if let Ok(rd) = std::fs::read_dir(&dir) {
@@ -917,12 +1007,16 @@ impl Component for App {
                                 && st.contains("\"last_workbench\": \"")
                                 && st.contains("\"window\": {");
                             say("wb-save-disk", ok);
-                            println!("PROBE state last_workbench={:?}",
-                                     st.split("\"last_workbench\": ").nth(1)
-                                       .and_then(|s| s.split(',').next()).or(Some("<none>")));
+                            println!(
+                                "PROBE state last_workbench={:?}",
+                                st.split("\"last_workbench\": ")
+                                    .nth(1)
+                                    .and_then(|s| s.split(',').next())
+                                    .or(Some("<none>"))
+                            );
                             println!("PROBE workbench.json = {}", wb.trim());
                         });
-                                                if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
+                        if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                             let (open, closed) = w.gitpanel.model().tree_state();
                             say("wb-open-has-sub", open.iter().any(|d| d.ends_with("/sub")));
                             say("wb-closed-empty", closed.is_empty());
@@ -936,7 +1030,7 @@ impl Component for App {
                     5 => {
                         println!("PROBE WB SAVE DONE");
                         self.probe_wb = None;
-                                                                        root.close();
+                        root.close();
                         return;
                     }
                     _ => {}
@@ -951,16 +1045,20 @@ impl Component for App {
                 }
             }
             AppMsg::ProbeWBRestore(dir) => {
-                                                self.probe_wbr = Some((dir, 0));
+                self.probe_wbr = Some((dir, 0));
                 root.present();
                 let snd = sender.clone();
-                glib::timeout_add(std::time::Duration::from_millis(PROBE_WB_RESTORE_MS[0]), move || {
-                    snd.input(AppMsg::ProbeWBRStep);
-                    glib::ControlFlow::Break
-                });
+                glib::timeout_add(
+                    std::time::Duration::from_millis(PROBE_WB_RESTORE_MS[0]),
+                    move || {
+                        snd.input(AppMsg::ProbeWBRStep);
+                        glib::ControlFlow::Break
+                    },
+                );
             }
             AppMsg::ProbeWBRStep => {
-                let Some((ws_dir, step)) = self.probe_wbr.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                let Some((ws_dir, step)) = self.probe_wbr.as_ref().map(|(w, s)| (w.clone(), *s))
+                else {
                     return;
                 };
                 let say = |name: &str, ok: bool| {
@@ -968,19 +1066,27 @@ impl Component for App {
                 };
                 match step {
                     0 => {
-                                                                                                                        self.launcher.model().probe_click(0);
+                        self.launcher.model().probe_click(0);
                     }
                     1 => {
-                                                say("r-strip", self.live_len() == 1 && self.active == 0);
-                        say("r-page-flipped", self.stack.visible_child_name().as_deref() != Some("launcher"));
+                        say("r-strip", self.live_len() == 1 && self.active == 0);
+                        say(
+                            "r-page-flipped",
+                            self.stack.visible_child_name().as_deref() != Some("launcher"),
+                        );
                         say(
                             "r-adopted",
                             self.wb_name.as_deref()
-                                == self.launcher.model().entries.first().map(|e| e.name.as_str()),
+                                == self
+                                    .launcher
+                                    .model()
+                                    .entries
+                                    .first()
+                                    .map(|e| e.name.as_str()),
                         );
-                        if let Some(w) = self.ws.get(0).and_then(|o| o.as_ref()) {
+                        if let Some(w) = self.ws.first().and_then(|o| o.as_ref()) {
                             say("r-tabs", w.snapshot.open_tabs == vec!["a.txt".to_string()]);
-                                                                                                                let _ = &ws_dir;
+                            let _ = &ws_dir;
                             let hp = w.hpane.position();
                             let ha = w.hpane.allocated_width();
                             let vp = w.vpane.position();
@@ -993,14 +1099,15 @@ impl Component for App {
                                 "r-vpane",
                                 vh <= 0 && vp == 650 || vh > 0 && vp == (650).min(vh - 6),
                             );
-                                                                                                                let sc = w.editor.model().scroll_state();
+                            let sc = w.editor.model().scroll_state();
                             say(
                                 "r-scroll",
-                                sc.as_ref().map(|(r, f)| r == "a.txt" && *f > 0.4)
+                                sc.as_ref()
+                                    .map(|(r, f)| r == "a.txt" && *f > 0.4)
                                     .unwrap_or(false),
                             );
                             println!("PROBE restore hpane {hp}/{ha} vpane {vp}/{vh} scroll {sc:?}");
-                                                        let (open, _closed) = w.gitpanel.model().tree_state();
+                            let (open, _closed) = w.gitpanel.model().tree_state();
                             say("r-open-has-sub", open.iter().any(|d| d.ends_with("/sub")));
                         }
                     }
@@ -1021,24 +1128,27 @@ impl Component for App {
                 }
             }
             AppMsg::ProbeLN(dir) => {
-                                self.probe_l = Some((dir, 0));
+                self.probe_l = Some((dir, 0));
                 root.present();
                 let snd = sender.clone();
-                glib::timeout_add(std::time::Duration::from_millis(PROBE_LN_MS[0]), move || {
-                    snd.input(AppMsg::ProbeLNStep);
-                    glib::ControlFlow::Break
-                });
+                glib::timeout_add(
+                    std::time::Duration::from_millis(PROBE_LN_MS[0]),
+                    move || {
+                        snd.input(AppMsg::ProbeLNStep);
+                        glib::ControlFlow::Break
+                    },
+                );
             }
             AppMsg::ProbeLNStep => {
-                                                let Some((_rig, step)) = self.probe_l.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                let Some((_rig, step)) = self.probe_l.as_ref().map(|(w, s)| (w.clone(), *s)) else {
                     return;
                 };
                 let say = |name: &str, ok: bool| {
                     println!("PROBE assert: {name}: {}", if ok { "PASS" } else { "FAIL" })
                 };
-                                                                                match step {
+                match step {
                     0 => {
-                                                println!("PROBE LN: boot asserts");
+                        println!("PROBE LN: boot asserts");
                         say(
                             "ln-boot-page",
                             self.stack.visible_child_name().as_deref() == Some("launcher"),
@@ -1054,7 +1164,8 @@ impl Component for App {
                         say(
                             "ln-tile0-facts",
                             texts.first().is_some_and(|(_, t)| {
-                                t.first().is_some_and(|x| x.0 == "projA" && x.1 == "C#" && x.2 == "main")
+                                t.first()
+                                    .is_some_and(|x| x.0 == "projA" && x.1 == "C#" && x.2 == "main")
                             }),
                         );
                         say(
@@ -1065,18 +1176,18 @@ impl Component for App {
                                 })
                             }),
                         );
-                                                say(
+                        say(
                             "ln-chrome-hidden",
                             !self.menu_btn.is_visible() && !self.add_btn.is_visible(),
                         );
-                                                                                                                        say("ln-boot-stale-no-adopt", self.wb_name.is_none());
+                        say("ln-boot-stale-no-adopt", self.wb_name.is_none());
                     }
                     1 => {
-                                                                        self.launcher.model().probe_click(0);
+                        self.launcher.model().probe_click(0);
                     }
                     2 => {
                         println!("PROBE LN: open asserts");
-                                                                        say("ln-open-two", self.live_len() == 2 && self.active == 1);
+                        say("ln-open-two", self.live_len() == 2 && self.active == 1);
                         say(
                             "ln-workbench-adopted",
                             self.wb_name.as_deref() == Some("aaaabbbb-0001"),
@@ -1086,16 +1197,16 @@ impl Component for App {
                             self.stack.visible_child_name().as_deref() != Some("launcher"),
                         );
                         say("ln-title", root.title().as_deref() == Some("projB"));
-                                                say(
+                        say(
                             "ln-chrome-shown",
                             self.menu_btn.is_visible() && self.add_btn.is_visible(),
                         );
                     }
                     3 => {
-                                                self.launcher.model().probe_click(1);
+                        self.launcher.model().probe_click(1);
                     }
                     4 => {
-                                                                        say("ln-blend-switch", self.live_len() == 2);
+                        say("ln-blend-switch", self.live_len() == 2);
                         say("ln-blend-active", self.active == 1);
                         say(
                             "ln-workbench-swapped",
@@ -1107,7 +1218,7 @@ impl Component for App {
                         sender.input(AppMsg::ShowLauncher);
                     }
                     6 => {
-                                                                                                                                                println!("PROBE LN: rename drive");
+                        println!("PROBE LN: rename drive");
                         say(
                             "ln-rename-pop-entry",
                             self.launcher.model().probe_pencil(0).is_some_and(|e| {
@@ -1117,7 +1228,7 @@ impl Component for App {
                         );
                     }
                     7 => {
-                                                                                                println!("PROBE LN: rename commit");
+                        println!("PROBE LN: rename commit");
                         let ok = self
                             .launcher
                             .model()
@@ -1127,7 +1238,7 @@ impl Component for App {
                                 true
                             });
                         say("ln-rename-commit", ok);
-                                                                                                say(
+                        say(
                             "ln-rename-commit-adopted",
                             self.launcher.model().probe_pencil(1).is_some_and(|e| {
                                 e.set_text("Adopted 0002");
@@ -1138,14 +1249,17 @@ impl Component for App {
                     }
                     8 => {
                         println!("PROBE LN: rename asserts");
-                                                                        let texts = self.launcher.model().probe_texts();
-                        say("ln-rename-label", texts.first().is_some_and(|(n, _)| n == "Nice wb"));
+                        let texts = self.launcher.model().probe_texts();
+                        say(
+                            "ln-rename-label",
+                            texts.first().is_some_and(|(n, _)| n == "Nice wb"),
+                        );
                         say(
                             "ln-rename-file",
                             state::load_workbench("aaaabbbb-0001")
                                 .is_some_and(|w| w.display.as_deref() == Some("Nice wb")),
                         );
-                                                                        say(
+                        say(
                             "ln-rename-adopt-file",
                             state::load_workbench("aaaabbbb-0002")
                                 .is_some_and(|w| w.display.as_deref() == Some("Adopted 0002")),
@@ -1159,13 +1273,13 @@ impl Component for App {
                             "ln-rename-adopt-untouched",
                             self.wb_name.as_deref() == Some("aaaabbbb-0002"),
                         );
-                                                say(
+                        say(
                             "ln-rename-page",
                             self.stack.visible_child_name().as_deref() == Some("launcher"),
                         );
                     }
                     9 => {
-                                                                                                println!("PROBE LN: delete drive");
+                        println!("PROBE LN: delete drive");
                         say(
                             "ln-del-pop",
                             self.launcher.model().probe_trash(1)
@@ -1175,16 +1289,22 @@ impl Component for App {
                     10 => {
                         println!("PROBE LN: delete asserts");
                         let texts = self.launcher.model().probe_texts();
-                                                                                                say("ln-del-card-gone", texts.len() == 1 && texts[0].0 == "Nice wb");
+                        say(
+                            "ln-del-card-gone",
+                            texts.len() == 1 && texts[0].0 == "Nice wb",
+                        );
                         say(
                             "ln-del-file-gone",
                             state::load_workbench("aaaabbbb-0002").is_none(),
                         );
-                        say("ln-del-adopt-cleared", self.wb_name.is_none() && self.wb.is_none());
-                                                say("ln-del-fresh-rearm", self.wb_display.is_none());
+                        say(
+                            "ln-del-adopt-cleared",
+                            self.wb_name.is_none() && self.wb.is_none(),
+                        );
+                        say("ln-del-fresh-rearm", self.wb_display.is_none());
                     }
                     11 => {
-                                                                                                println!("PROBE LN: plus click");
+                        println!("PROBE LN: plus click");
                         self.launcher.emit(LauncherMsg::PlusClick);
                     }
                     12 => {
@@ -1194,7 +1314,7 @@ impl Component for App {
                         if let Some(ent) = e {
                             say("ln-plus-entry-empty", ent.text().is_empty());
                         }
-                                                let rig = self
+                        let rig = self
                             .probe_l
                             .as_ref()
                             .map(|(d, _)| d.clone())
@@ -1203,8 +1323,11 @@ impl Component for App {
                     }
                     13 => {
                         println!("PROBE LN: create asserts");
-                                                                                                say("ln-new-switch", self.live_len() == 2);
-                        say("ln-new-identity", self.wb_name.is_none() && self.wb.is_none());
+                        say("ln-new-switch", self.live_len() == 2);
+                        say(
+                            "ln-new-identity",
+                            self.wb_name.is_none() && self.wb.is_none(),
+                        );
                         say(
                             "ln-new-display",
                             self.wb_display.as_deref() == Some("My New Wb"),
@@ -1217,7 +1340,7 @@ impl Component for App {
                     }
                     _ => {}
                 }
-                                                                                                if let Some(n) = std::env::var("ALPACA_PROBE_LN_HOLD")
+                if let Some(n) = std::env::var("ALPACA_PROBE_LN_HOLD")
                     .ok()
                     .and_then(|s| s.parse::<usize>().ok())
                     && step + 1 >= n
@@ -1236,59 +1359,100 @@ impl Component for App {
                 }
             }
             AppMsg::ProbeS3(dir) => {
-                                                                self.probe_s3 = Some((dir, 0));
-                                root.present();
+                self.probe_s3 = Some((dir, 0));
+                root.present();
                 let snd = sender.clone();
                 glib::timeout_add(std::time::Duration::from_millis(60), move || {
                     snd.input(AppMsg::ProbeDraw);
                     glib::ControlFlow::Continue
                 });
                 let snd = sender.clone();
-                glib::timeout_add(std::time::Duration::from_millis(PROBE_S3_STEP_MS[0]), move || {
-                    snd.input(AppMsg::ProbeS3Step);
-                    glib::ControlFlow::Break
-                });
+                glib::timeout_add(
+                    std::time::Duration::from_millis(PROBE_S3_STEP_MS[0]),
+                    move || {
+                        snd.input(AppMsg::ProbeS3Step);
+                        glib::ControlFlow::Break
+                    },
+                );
             }
             AppMsg::ProbeS3Step => {
-                                                                let Some((ws_dir, step)) = self.probe_s3.as_ref().map(|(w, s)| (w.clone(), *s)) else {
+                let Some((ws_dir, step)) = self.probe_s3.as_ref().map(|(w, s)| (w.clone(), *s))
+                else {
                     return;
                 };
                 println!("PROBE step {}: ts={}", step, epoch_ms());
-                                                                match step {
+                match step {
                     0 => {
                         self.open_workspace(ws_dir.as_path(), root, sender.clone());
                         let i = self.active;
-                        for f in ["package-lock.json", "next.config.ts", "components.json",
-                                  "related-products.tsx", "trude.json",
-                                  "deep/path/segments/segment-file-with-long-name.tsx"] {
+                        for f in [
+                            "package-lock.json",
+                            "next.config.ts",
+                            "components.json",
+                            "related-products.tsx",
+                            "trude.json",
+                            "deep/path/segments/segment-file-with-long-name.tsx",
+                        ] {
                             sender.input(AppMsg::OpenFile(i, ws_dir.join(f)));
                         }
                     }
                     1 => {
-                        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else { return };
+                        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else {
+                            return;
+                        };
                         let checks = [
-                            ("window", root.measure(gtk::Orientation::Horizontal, -1).0, 560),
-                            ("editor", w.editor.widget().measure(gtk::Orientation::Horizontal, -1).0, 300),
-                            ("panes", w.panes.widget().measure(gtk::Orientation::Horizontal, -1).0, 300),
+                            (
+                                "window",
+                                root.measure(gtk::Orientation::Horizontal, -1).0,
+                                560,
+                            ),
+                            (
+                                "editor",
+                                w.editor
+                                    .widget()
+                                    .measure(gtk::Orientation::Horizontal, -1)
+                                    .0,
+                                300,
+                            ),
+                            (
+                                "panes",
+                                w.panes.widget().measure(gtk::Orientation::Horizontal, -1).0,
+                                300,
+                            ),
                         ];
                         for (name, got, cap) in checks {
                             let ok = got <= cap;
-                            println!("PROBE assert: s3-min-{name} {got}<={cap}: {}",
-                                     if ok { "PASS" } else { "FAIL" });
+                            println!(
+                                "PROBE assert: s3-min-{name} {got}<={cap}: {}",
+                                if ok { "PASS" } else { "FAIL" }
+                            );
                         }
                         w.gitpanel.emit(GitPanelMsg::TreeMin);
                     }
                     2 => {
-                                                                                                                                                                        root.set_size_request(1586, 992);
+                        root.set_size_request(1586, 992);
                     }
-                    3 => if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) { w.hpane.set_position(900); },
+                    3 => {
+                        if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
+                            w.hpane.set_position(900);
+                        }
+                    }
                     4 => {
-                        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else { return };
-                        println!("PROBE hpane pos={} w={} at wide-trace",
-                                 w.hpane.position(), w.hpane.allocated_width());
+                        let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else {
+                            return;
+                        };
+                        println!(
+                            "PROBE hpane pos={} w={} at wide-trace",
+                            w.hpane.position(),
+                            w.hpane.allocated_width()
+                        );
                         w.editor.emit(EditorMsg::ProbeTrace("wide".into()));
                     }
-                    5 => if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) { w.hpane.set_position(850); },
+                    5 => {
+                        if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
+                            w.hpane.set_position(850);
+                        }
+                    }
                     6 => {
                         if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                             w.editor.emit(EditorMsg::ProbeTrace("narrow".into()));
@@ -1297,9 +1461,9 @@ impl Component for App {
                         self.probe_s3 = None;
                         return;
                     }
-                    _ => {} 
+                    _ => {}
                 }
-                                if let Some(next) = PROBE_S3_STEP_MS.get(step + 1) {
+                if let Some(next) = PROBE_S3_STEP_MS.get(step + 1) {
                     self.probe_s3.as_mut().unwrap().1 = step + 1;
                     let snd = sender.clone();
                     glib::timeout_add(std::time::Duration::from_millis(*next), move || {
@@ -1338,20 +1502,25 @@ fn step_ms(i: usize) -> u64 {
 }
 
 impl App {
-            fn probe_step(&mut self, root: &gtk::ApplicationWindow, sender: &ComponentSender<Self>) {
-                const PROBE_MSG: &str = "s2 probe commit";
+    fn probe_step(&mut self, root: &gtk::ApplicationWindow, sender: &ComponentSender<Self>) {
+        const PROBE_MSG: &str = "s2 probe commit";
         let Some((ws, step)) = self.probe_ws.as_ref().map(|(w, s)| (w.clone(), *s)) else {
             return;
         };
-                let ws_b = ws.to_string_lossy().replace("wsA", "wsB");
-                println!("PROBE step {}: ts={}", step, epoch_ms());
+        let ws_b = ws.to_string_lossy().replace("wsA", "wsB");
+        println!("PROBE step {}: ts={}", step, epoch_ms());
         match step {
-                                    0 => {
+            0 => {
                 self.open_workspace(ws.as_path(), root, sender.clone());
                 let i = self.active;
-                for f in ["package-lock.json", "next.config.ts", "components.json",
-                          "related-products.tsx", "trude.json",
-                          "deep/path/segments/segment-file-with-long-name.tsx"] {
+                for f in [
+                    "package-lock.json",
+                    "next.config.ts",
+                    "components.json",
+                    "related-products.tsx",
+                    "trude.json",
+                    "deep/path/segments/segment-file-with-long-name.tsx",
+                ] {
                     sender.input(AppMsg::OpenFile(i, ws.join(f)));
                 }
             }
@@ -1360,14 +1529,14 @@ impl App {
                     w.gitpanel.emit(GitPanelMsg::ModeChanges);
                 }
             }
-                        2 => {
+            2 => {
                 if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Changes(
                         GitViewMsg::ProbeMsg(PROBE_MSG.into()),
                     )));
                 }
             }
-                                    3 => sender.input(AppMsg::OpenDiff {
+            3 => sender.input(AppMsg::OpenDiff {
                 ws: self.active,
                 rel: "a.txt".into(),
                 letter: "M".into(),
@@ -1377,7 +1546,7 @@ impl App {
                     w.editor.emit(EditorMsg::ProbeClip);
                 }
             }
-                                                                        5 => {
+            5 => {
                 if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeEntry("alpha".into()));
                 }
@@ -1394,33 +1563,36 @@ impl App {
             }
             8 => {
                 if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
-                    w.gitpanel.emit(GitPanelMsg::ProbeEntry("alphabetZx".into()));
+                    w.gitpanel
+                        .emit(GitPanelMsg::ProbeEntry("alphabetZx".into()));
                 }
             }
-                                                                        9 => {
+            9 => {
                 if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeEntry("".into()));
                     w.editor.emit(EditorMsg::ProbeDiffScroll);
                 }
             }
-                                                                        10 => {
+            10 => {
                 if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
-                    let mast = || GitPanelMsg::ProbeChild(ProbeChild::Changes(
-                        GitViewMsg::RowToggled(gtk::TreePath::from_string("0").unwrap()),
-                    ));
-                    w.gitpanel.emit(mast()); 
-                    w.gitpanel.emit(mast()); 
+                    let mast = || {
+                        GitPanelMsg::ProbeChild(ProbeChild::Changes(GitViewMsg::RowToggled(
+                            gtk::TreePath::from_string("0").unwrap(),
+                        )))
+                    };
+                    w.gitpanel.emit(mast());
+                    w.gitpanel.emit(mast());
                 }
             }
-                                    11 => {
+            11 => {
                 if let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) {
                     w.gitpanel.emit(GitPanelMsg::ProbeChild(ProbeChild::Changes(
                         GitViewMsg::CommitClicked,
                     )));
                 }
             }
-                                                            12 => self.open_workspace(Path::new(&ws_b), root, sender.clone()),
-                        13 => {
+            12 => self.open_workspace(Path::new(&ws_b), root, sender.clone()),
+            13 => {
                 let ws_a = ws.clone();
                 let wsb: PathBuf = ws_b.clone().into();
                 sender.spawn_command(move |_| {
@@ -1433,9 +1605,13 @@ impl App {
                             .unwrap_or_default()
                     };
                     let say = |name: &str, ok| {
-                        println!("PROBE assert: {}: {}", name, if ok { "PASS" } else { "FAIL" })
+                        println!(
+                            "PROBE assert: {}: {}",
+                            name,
+                            if ok { "PASS" } else { "FAIL" }
+                        )
                     };
-                                                                                say(
+                    say(
                         "wsA-commit-count",
                         git(&ws_a, &["rev-list", "--count", "HEAD"]) == "2",
                     );
@@ -1443,8 +1619,11 @@ impl App {
                         "wsA-commit-msg",
                         git(&ws_a, &["log", "-1", "--format=%s"]) == PROBE_MSG,
                     );
-                    say("wsB-commit-count", git(&wsb, &["rev-list", "--count", "--all"]) == "0");
-                                                            say(
+                    say(
+                        "wsB-commit-count",
+                        git(&wsb, &["rev-list", "--count", "--all"]) == "0",
+                    );
+                    say(
                         "wsA-pushed",
                         git(&ws_a, &["rev-parse", "origin/main"])
                             == git(&ws_a, &["rev-parse", "HEAD"]),
@@ -1454,7 +1633,7 @@ impl App {
                         "state-last-project",
                         st.contains(&format!("\"last_project\": \"{}\"", ws_b)),
                     );
-                                                        });
+                });
             }
             14 => {
                 println!("PROBE S2 DONE");
@@ -1463,7 +1642,7 @@ impl App {
             }
             _ => return,
         }
-                                        if let Some(n) = std::env::var("ALPACA_PROBE_S2_HOLD")
+        if let Some(n) = std::env::var("ALPACA_PROBE_S2_HOLD")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             && step + 1 >= n
@@ -1481,14 +1660,14 @@ impl App {
         });
     }
 
-                        fn open_workspace(
+    fn open_workspace(
         &mut self,
         path: &Path,
         root_win: &gtk::ApplicationWindow,
         sender: ComponentSender<Self>,
     ) {
-                                let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-                        let open_slots: Vec<usize> = self.live_slots();
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let open_slots: Vec<usize> = self.live_slots();
         let open: Vec<PathBuf> = open_slots
             .iter()
             .filter_map(|s| self.ws[*s].as_ref().map(|w| w.root.clone()))
@@ -1499,22 +1678,22 @@ impl App {
             }
             AddDecision::Switch(i) => self.switch_to(open_slots[i], root_win),
             AddDecision::Add => {
-                let i = self.ws.len(); 
+                let i = self.ws.len();
                 let sess = self
                     .wb
                     .as_ref()
                     .and_then(|w| w.projects.get(path.to_string_lossy().as_ref()))
                     .cloned();
                 let ws = Workspace::new(path.to_path_buf(), i, sender.clone(), sess);
-                                self.stack
+                self.stack
                     .add_named(&ws.hpane, Some(&ws.root.to_string_lossy()));
                 self.ws.push(Some(ws));
-                                                                                self.proj_box.remove(&self.add_btn);
+                self.proj_box.remove(&self.add_btn);
                 self.proj_box.append(&self.ws[i].as_ref().unwrap().btn);
                 self.proj_box.append(&self.add_btn);
-                                self.add_btn.set_sensitive(self.live_len() < MAX_WORKSPACES);
+                self.add_btn.set_sensitive(self.live_len() < MAX_WORKSPACES);
                 let path_str = path.to_string_lossy();
-                                                                                                                let mut st = state::remember(state::load(), path_str.as_ref());
+                let mut st = state::remember(state::load(), path_str.as_ref());
                 st.open_projects = self
                     .ws
                     .iter()
@@ -1527,7 +1706,7 @@ impl App {
         }
     }
 
-                            fn open_workbench(&mut self, name: &str, sender: ComponentSender<Self>) {
+    fn open_workbench(&mut self, name: &str, sender: ComponentSender<Self>) {
         let Some(wb) = state::load_workbench(name) else {
             return;
         };
@@ -1536,7 +1715,7 @@ impl App {
             state::load().last_project.as_deref().map(Path::new),
         );
         if roots.is_empty() {
-            return; 
+            return;
         }
         self.wb = Some(wb);
         self.wb_name = Some(name.to_owned());
@@ -1545,15 +1724,15 @@ impl App {
         }
     }
 
-                fn switch_to(&mut self, i: usize, root: &gtk::ApplicationWindow) {
+    fn switch_to(&mut self, i: usize, root: &gtk::ApplicationWindow) {
         let Some(w) = self.ws.get(i).and_then(|o| o.as_ref()) else {
             return;
         };
         let path_str = w.root.to_string_lossy().into_owned();
-        let hpane = w.hpane.clone(); 
+        let hpane = w.hpane.clone();
         self.stack.set_visible_child(&hpane);
         self.active = i;
-                root.set_title(Some(&py_basename(&path_str)));
+        root.set_title(Some(&py_basename(&path_str)));
         state::save(&state::remember(state::load(), &path_str));
         for (j, w) in self.ws.iter().enumerate() {
             if let Some(w) = w.as_ref() {
@@ -1564,17 +1743,17 @@ impl App {
                 }
             }
         }
-                self.sync_run_buttons();
-                if let Some(w) = self.ws.get(i).and_then(|o| o.as_ref()) {
+        self.sync_run_buttons();
+        if let Some(w) = self.ws.get(i).and_then(|o| o.as_ref()) {
             w.gitpanel.emit(GitPanelMsg::RefreshGit);
         }
     }
 
-        fn live_len(&self) -> usize {
+    fn live_len(&self) -> usize {
         self.ws.iter().flatten().count()
     }
 
-                    fn save_all(&mut self, root_win: &gtk::ApplicationWindow) {
+    fn save_all(&mut self, root_win: &gtk::ApplicationWindow) {
         let mut st = state::load();
         for w in self.ws.iter().flatten() {
             st = state::set_tabs(
@@ -1594,24 +1773,20 @@ impl App {
             .wb_name
             .get_or_insert_with(|| glib::uuid_string_random().to_string())
             .clone();
-                                let display = if minted {
-            self.wb_display.take()
-        } else {
-            None
-        };
+        let display = if minted { self.wb_display.take() } else { None };
         let mut wb = state::WorkbenchFile {
             name: name.clone(),
             display,
             projects: Default::default(),
         };
-                                if let Some(old) = self.wb.take() {
+        if let Some(old) = self.wb.take() {
             wb.projects = old.projects;
             if !minted {
-                wb.display = old.display; 
+                wb.display = old.display;
             }
         }
         for w in self.ws.iter().flatten() {
-                                    let (expanded, closed) = w.gitpanel.model().tree_state();
+            let (expanded, closed) = w.gitpanel.model().tree_state();
             wb.projects.insert(
                 w.root.to_string_lossy().into_owned(),
                 state::ProjectSession {
@@ -1631,10 +1806,10 @@ impl App {
         state::save_workbench_to(&wb, &state::workbench_path(&name));
         st.last_workbench = Some(name);
         state::save(&st);
-        self.wb = Some(wb); 
+        self.wb = Some(wb);
     }
 
-            fn live_slots(&self) -> Vec<usize> {
+    fn live_slots(&self) -> Vec<usize> {
         self.ws
             .iter()
             .enumerate()
@@ -1642,21 +1817,26 @@ impl App {
             .collect()
     }
 
-                                    fn close_workspace(&mut self, slot: usize, root: &gtk::ApplicationWindow, sender: ComponentSender<Self>) {
+    fn close_workspace(
+        &mut self,
+        slot: usize,
+        root: &gtk::ApplicationWindow,
+        sender: ComponentSender<Self>,
+    ) {
         let Some(w) = self.ws.get_mut(slot).and_then(|o| o.take()) else {
             return;
         };
-                                                for pid in w.panes.model().live_pids() {
+        for pid in w.panes.model().live_pids() {
             kill_tree(pid);
         }
         self.stack.remove(&w.hpane);
         self.proj_box.remove(&w.btn);
-        drop(w); 
-                        if slot == self.active {
+        drop(w);
+        if slot == self.active {
             match close_target(&self.live_slots(), slot) {
                 Some(next) => self.switch_to(next, root),
                 None => {
-                                                                                                    self.active = 0;
+                    self.active = 0;
                     let mut st = state::load();
                     st.last_project = None;
                     st.open_projects = Vec::new();
@@ -1666,7 +1846,7 @@ impl App {
             }
         }
         self.add_btn.set_sensitive(self.live_len() < MAX_WORKSPACES);
-                        if !self.live_slots().is_empty() {
+        if !self.live_slots().is_empty() {
             let mut st = state::load();
             st.open_projects = self
                 .ws
@@ -1678,7 +1858,7 @@ impl App {
         }
     }
 
-            fn sync_run_buttons(&mut self) {
+    fn sync_run_buttons(&mut self) {
         let Some(w) = self.ws.get(self.active).and_then(|o| o.as_ref()) else {
             self.run_btn.set_sensitive(false);
             self.stop_btn.set_sensitive(false);
@@ -1696,8 +1876,13 @@ impl App {
         self.refresh_run_style();
     }
 
-        fn refresh_run_style(&self) {
-        let running = self.ws.get(self.active).and_then(|o| o.as_ref()).map(|w| w.running).unwrap_or(false);
+    fn refresh_run_style(&self) {
+        let running = self
+            .ws
+            .get(self.active)
+            .and_then(|o| o.as_ref())
+            .map(|w| w.running)
+            .unwrap_or(false);
         if running {
             self.run_row.set_css_classes(&["alpaca-runpill", "running"]);
         } else {
@@ -1708,17 +1893,21 @@ impl App {
 
 pub(crate) fn py_basename(s: &str) -> String {
     let t = s.trim_end_matches('/');
-    t.rsplit('/').find(|c| !c.is_empty()).unwrap_or(t).to_owned()
+    t.rsplit('/')
+        .find(|c| !c.is_empty())
+        .unwrap_or(t)
+        .to_owned()
 }
 
 fn clamp_to_monitor(w: i32, h: i32) -> (i32, i32) {
     if let Some(disp) = gdk::Display::default() {
         let mons = disp.monitors();
         if mons.n_items() > 0
-            && let Some(mon) = mons.item(0).and_downcast::<gdk::Monitor>() {
-                let g = mon.geometry();
-                return (w.min(g.width() - 40), h.min(g.height() - 140));
-            }
+            && let Some(mon) = mons.item(0).and_downcast::<gdk::Monitor>()
+        {
+            let g = mon.geometry();
+            return (w.min(g.width() - 40), h.min(g.height() - 140));
+        }
     }
     (w, h)
 }
@@ -1742,7 +1931,7 @@ fn ask_folder(
     root_win: &gtk::ApplicationWindow,
     title: &str,
     sender: ComponentSender<App>,
-            fresh: Option<String>,
+    fresh: Option<String>,
 ) {
     let dialog = gtk::FileChooserNative::new(
         Some(title),
@@ -1761,13 +1950,14 @@ fn ask_folder(
         };
         d.destroy();
         if let Some(p) = path
-            && p.is_dir() {
-                if let Some(name) = fresh_c.clone() {
-                    sender.input(AppMsg::OpenNew(p, name));
-                } else {
-                    sender.input(AppMsg::OpenWorkspace(p));
-                }
+            && p.is_dir()
+        {
+            if let Some(name) = fresh_c.clone() {
+                sender.input(AppMsg::OpenNew(p, name));
+            } else {
+                sender.input(AppMsg::OpenWorkspace(p));
             }
+        }
     });
     dialog.show();
 }
@@ -1777,12 +1967,20 @@ fn open_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>)
 }
 
 fn new_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) {
-    let d = gtk::Dialog::builder().title("New Project").modal(true).build();
+    let d = gtk::Dialog::builder()
+        .title("New Project")
+        .modal(true)
+        .build();
     d.set_transient_for(Some(root_win));
     d.set_default_size(480, 160);
-    let name_e = gtk::Entry::builder().placeholder_text("project name").build();
+    let name_e = gtk::Entry::builder()
+        .placeholder_text("project name")
+        .build();
     let parent_e = gtk::Entry::new();
-    parent_e.set_text(&format!("{}/FunProjects", glib::home_dir().to_string_lossy()));
+    parent_e.set_text(&format!(
+        "{}/FunProjects",
+        glib::home_dir().to_string_lossy()
+    ));
     name_e.set_hexpand(true);
     parent_e.set_hexpand(true);
     d.content_area().append(&name_e);
@@ -1797,7 +1995,7 @@ fn new_project(root_win: &gtk::ApplicationWindow, sender: ComponentSender<App>) 
             return;
         }
         let target = Path::new(&parent).join(name.as_str());
-                                        let snd = sender.clone();
+        let snd = sender.clone();
         std::thread::spawn(move || {
             let res = runctl::create_project(&target);
             snd.input(AppMsg::ProjectCreated { target, res });
@@ -1856,12 +2054,12 @@ fn register_actions(
 
     let quit = gio::SimpleAction::new("quit", None);
     {
-                        let sender = sender.clone();
+        let sender = sender.clone();
         quit.connect_activate(move |_a, _p| sender.input(AppMsg::SaveAndQuit));
     }
     app.add_action(&quit);
 
-                {
+    {
         let sender = sender.clone();
         let act = gio::SimpleAction::new("new-workbench", None);
         act.connect_activate(move |_a, _p| sender.input(AppMsg::ShowLauncher));
@@ -1874,20 +2072,19 @@ fn register_actions(
         app.add_action(&act);
     }
     {
-                let sender = sender.clone();
+        let sender = sender.clone();
         let a = gio::SimpleAction::new("save-workbench", None);
         a.connect_activate(move |_a, _p| sender.input(AppMsg::SaveWorkbench));
         app.add_action(&a);
     }
     {
-                        let sender = sender.clone();
+        let sender = sender.clone();
         let a = gio::SimpleAction::new("focus-search", None);
         a.connect_activate(move |_a, _p| sender.input(AppMsg::FocusSearch));
         app.add_action(&a);
     }
 
-                
-            for name in ["undo", "redo", "cut", "copy", "paste", "select-all"] {
+    for name in ["undo", "redo", "cut", "copy", "paste", "select-all"] {
         let a = gio::SimpleAction::new(name, None);
         let sender = sender.clone();
         a.connect_activate(move |_a, _p| {
@@ -1913,7 +2110,7 @@ fn register_actions(
 
     let close = gio::SimpleAction::new("close", None);
     {
-                        let sender = sender.clone();
+        let sender = sender.clone();
         close.connect_activate(move |_a, _p| sender.input(AppMsg::SaveThenClose));
     }
     app.add_action(&close);
@@ -1955,7 +2152,7 @@ fn register_actions(
 
 pub fn run(root: Option<String>) {
     let root: Option<PathBuf> = root.filter(|p| Path::new(p).is_dir()).map(Into::into);
-            let relm = relm4::RelmApp::new("io.alpaca.rs").with_args(vec![]);
+    let relm = relm4::RelmApp::new("io.alpaca.rs").with_args(vec![]);
     crate::render::style::init();
     relm.run::<App>(root);
 }
@@ -1970,26 +2167,26 @@ mod tests {
 
     #[test]
     fn close_target_swings_right_then_left() {
-                                assert_eq!(close_target(&[0, 1], 0), Some(1));
+        assert_eq!(close_target(&[0, 1], 0), Some(1));
         assert_eq!(close_target(&[0, 1], 1), Some(0));
         assert_eq!(close_target(&[0, 1, 2], 1), Some(2));
         assert_eq!(close_target(&[0, 1, 2], 2), Some(1));
-                assert_eq!(close_target(&[1, 3], 1), Some(3));
+        assert_eq!(close_target(&[1, 3], 1), Some(3));
         assert_eq!(close_target(&[1, 3], 3), Some(1));
-                assert_eq!(close_target(&[2], 2), None);
+        assert_eq!(close_target(&[2], 2), None);
     }
 
     #[test]
     fn add_decision_switch_add_full() {
-                        let open = [pb("/a"), pb("/b")];
+        let open = [pb("/a"), pb("/b")];
         assert_eq!(add_decision(&open, Path::new("/b")), AddDecision::Switch(1));
         assert_eq!(add_decision(&open, Path::new("/c")), AddDecision::Add);
         let three = [pb("/a"), pb("/b"), pb("/c")];
         assert_eq!(add_decision(&three, Path::new("/d")), AddDecision::Full);
-                assert_eq!(add_decision(&[], Path::new("/a")), AddDecision::Add);
+        assert_eq!(add_decision(&[], Path::new("/a")), AddDecision::Add);
     }
 
-        fn attr(model: &impl glib::object::IsA<gio::MenuModel>, name: &str, i: i32) -> Option<String> {
+    fn attr(model: &impl glib::object::IsA<gio::MenuModel>, name: &str, i: i32) -> Option<String> {
         use gio::prelude::MenuModelExt;
         model
             .item_attribute_value(i, name, None)
@@ -1999,18 +2196,27 @@ mod tests {
     #[test]
     fn workbench_menu_sections_labels_actions() {
         use gio::prelude::MenuModelExt;
-                let m = workbench_menu();
+        let m = workbench_menu();
         assert_eq!(m.n_items(), 3);
         let sec = m.item_link(0, gio::MENU_LINK_SECTION).expect("section 0");
         assert_eq!(sec.n_items(), 2);
         assert_eq!(attr(&sec, "label", 0).as_deref(), Some("New Workbench"));
-        assert_eq!(attr(&sec, "action", 0).as_deref(), Some("app.new-workbench"));
+        assert_eq!(
+            attr(&sec, "action", 0).as_deref(),
+            Some("app.new-workbench")
+        );
         assert_eq!(attr(&sec, "label", 1).as_deref(), Some("Open Workbench"));
-        assert_eq!(attr(&sec, "action", 1).as_deref(), Some("app.open-workbench"));
+        assert_eq!(
+            attr(&sec, "action", 1).as_deref(),
+            Some("app.open-workbench")
+        );
         let sec = m.item_link(1, gio::MENU_LINK_SECTION).expect("section 1");
         assert_eq!(sec.n_items(), 1);
         assert_eq!(attr(&sec, "label", 0).as_deref(), Some("Save Workbench"));
-        assert_eq!(attr(&sec, "action", 0).as_deref(), Some("app.save-workbench"));
+        assert_eq!(
+            attr(&sec, "action", 0).as_deref(),
+            Some("app.save-workbench")
+        );
         let sec = m.item_link(2, gio::MENU_LINK_SECTION).expect("section 2");
         assert_eq!(sec.n_items(), 1);
         assert_eq!(attr(&sec, "label", 0).as_deref(), Some("Exit"));

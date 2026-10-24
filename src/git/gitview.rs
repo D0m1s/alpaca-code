@@ -1,4 +1,3 @@
-
 #![allow(deprecated)]
 
 use std::cell::Cell;
@@ -8,10 +7,10 @@ use std::path::PathBuf;
 use relm4::gtk::{self, gdk_pixbuf, glib, pango, prelude::*};
 use relm4::prelude::*;
 
-use crate::render::badges;
 use crate::fs::filetree::icon_of;
-use crate::git::gitstatus::{self, FlightOut, GitStatusKind, Rows};
 use crate::fs::treehover::{HoverTree, toggle_hit};
+use crate::git::gitstatus::{self, FlightOut, GitStatusKind, Rows};
+use crate::render::badges;
 
 pub fn strip_icons(name: &str, is_dir: bool) -> (Option<gdk_pixbuf::Pixbuf>, Option<&'static str>) {
     let art = if is_dir {
@@ -19,8 +18,11 @@ pub fn strip_icons(name: &str, is_dir: bool) -> (Option<gdk_pixbuf::Pixbuf>, Opt
     } else {
         badges::pixbuf_for(name, false)
     };
-    let fallback =
-        if art.is_some() || is_dir { None } else { Some(icon_of(name, false)) };
+    let fallback = if art.is_some() || is_dir {
+        None
+    } else {
+        Some(icon_of(name, false))
+    };
     (art, fallback)
 }
 
@@ -31,7 +33,7 @@ pub fn letter_color(letter: &str) -> &'static str {
         "D" => "#ef4444",
         "R" | "T" => "#2f80ed",
         "C" => "#ef4444",
-        _ => "#f2c94c", 
+        _ => "#f2c94c",
     }
 }
 
@@ -102,23 +104,40 @@ const COL_ICON_VIS: i32 = 13;
 #[derive(Debug)]
 pub enum GitViewMsg {
     SetRoot(PathBuf),
-    Refresh { keep: bool },
-    Apply { raw: Option<Rows>, ahead: usize, keep: bool },
+    Refresh {
+        keep: bool,
+    },
+    Apply {
+        raw: Option<Rows>,
+        ahead: usize,
+        keep: bool,
+    },
     Filter(String),
     RowToggled(gtk::TreePath),
     Activated(gtk::TreePath),
     RowExpanded(gtk::TreePath),
     RowCollapsed(gtk::TreePath),
     CommitClicked,
-    StartCommit { root: PathBuf, paths: Vec<String>, msg: String },
-                    SetClosed(Vec<String>),
-            ProbeMsg(String),
+    StartCommit {
+        root: PathBuf,
+        paths: Vec<String>,
+        msg: String,
+    },
+    SetClosed(Vec<String>),
+    ProbeMsg(String),
 }
 
 #[derive(Debug, Clone)]
 pub enum GitViewOutput {
-    Open { rel: String, letter: String },
-    Commit { root: PathBuf, paths: Vec<String>, msg: String },
+    Open {
+        rel: String,
+        letter: String,
+    },
+    Commit {
+        root: PathBuf,
+        paths: Vec<String>,
+        msg: String,
+    },
     Status(GitStatusKind, String),
     Busy(bool),
 }
@@ -127,7 +146,13 @@ pub enum GitViewOutput {
 pub enum GitViewCommand {
     Phase,
     Landed(FlightOut),
-                    Refreshed { root: PathBuf, seq: u64, raw: Option<Rows>, ahead: usize, keep: bool },
+    Refreshed {
+        root: PathBuf,
+        seq: u64,
+        raw: Option<Rows>,
+        ahead: usize,
+        keep: bool,
+    },
 }
 
 pub struct ChangesView {
@@ -135,14 +160,14 @@ pub struct ChangesView {
     checked: BTreeSet<String>,
     visible: BTreeSet<String>,
     needle: String,
-    closed: HashSet<String>, 
+    closed: HashSet<String>,
     rows: Rows,
     shown: Rows,
     ahead: usize,
-            refresh_seq: u64,
+    refresh_seq: u64,
     busy: bool,
     flight: bool,
-    tog_w: Cell<Option<i32>>, 
+    tog_w: Cell<Option<i32>>,
     store: gtk::TreeStore,
     view: HoverTree,
     col: gtk::TreeViewColumn,
@@ -163,33 +188,33 @@ impl Component for ChangesView {
         gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
             set_css_classes: &["alpaca-card"],
-            set_overflow: gtk::Overflow::Hidden, 
+            set_overflow: gtk::Overflow::Hidden,
         }
     }
 
     fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-                        let store = gtk::TreeStore::new(&[
-            glib::Type::STRING,                
-            glib::Type::STRING,                
-            glib::Type::STRING,                
-            glib::Type::STRING,                
-            gdk_pixbuf::Pixbuf::static_type(), 
-            gdk_pixbuf::Pixbuf::static_type(), 
-            gdk_pixbuf::Pixbuf::static_type(), 
-            glib::Type::BOOL,                  
-            glib::Type::BOOL,                  
-            glib::Type::BOOL,                  
-            glib::Type::BOOL,                  
-            glib::Type::BOOL,                  
-            glib::Type::STRING,                
-            glib::Type::BOOL,                  
+        let store = gtk::TreeStore::new(&[
+            glib::Type::STRING,
+            glib::Type::STRING,
+            glib::Type::STRING,
+            glib::Type::STRING,
+            gdk_pixbuf::Pixbuf::static_type(),
+            gdk_pixbuf::Pixbuf::static_type(),
+            gdk_pixbuf::Pixbuf::static_type(),
+            glib::Type::BOOL,
+            glib::Type::BOOL,
+            glib::Type::BOOL,
+            glib::Type::BOOL,
+            glib::Type::BOOL,
+            glib::Type::STRING,
+            glib::Type::BOOL,
         ]);
 
         let view = HoverTree::default();
         view.set_model(Some(&store));
         view.set_headers_visible(false);
         view.set_activate_on_single_click(true);
-        view.set_show_expanders(false); 
+        view.set_show_expanders(false);
         view.set_level_indentation(16);
         view.set_tooltip_column(1);
 
@@ -199,22 +224,22 @@ impl Component for ChangesView {
             .build();
         root.append(&tree_page);
 
-                                        let chev = gtk::CellRendererPixbuf::new();
+        let chev = gtk::CellRendererPixbuf::new();
         chev.set_property("xpad", 2u32);
         chev.set_property("ypad", 2u32);
-        chev.set_property("yalign", 2.0f32 / 3.0f32); 
-                let tog = gtk::CellRendererToggle::new();
+        chev.set_property("yalign", 2.0f32 / 3.0f32);
+        let tog = gtk::CellRendererToggle::new();
         tog.set_activatable(false);
-                        let chip = gtk::CellRendererPixbuf::new();
+        let chip = gtk::CellRendererPixbuf::new();
         chip.set_property("xpad", 2u32);
         chip.set_property("ypad", 2u32);
-        chip.set_property("yalign", 1.0f32); 
+        chip.set_property("yalign", 1.0f32);
         let badge = gtk::CellRendererPixbuf::new();
         badge.set_property("xpad", 2u32);
         badge.set_property("ypad", 2u32);
         badge.set_property("yalign", 1.0f32);
         let name = gtk::CellRendererText::new();
-        name.set_property("xpad", 2u32); 
+        name.set_property("xpad", 2u32);
         name.set_property("ypad", 2u32);
         name.set_property("ellipsize", pango::EllipsizeMode::Middle);
         let col = gtk::TreeViewColumn::new();
@@ -230,20 +255,20 @@ impl Component for ChangesView {
         col.pack_start(&badge, false);
         col.add_attribute(&badge, "pixbuf", COL_BADGE);
         col.add_attribute(&badge, "visible", COL_BADGE_VIS);
-                        let icon = gtk::CellRendererPixbuf::new();
+        let icon = gtk::CellRendererPixbuf::new();
         icon.set_property("xpad", 2u32);
         icon.set_property("ypad", 2u32);
-        icon.set_property("yalign", 1.0f32); 
+        icon.set_property("yalign", 1.0f32);
         col.pack_start(&icon, false);
         col.add_attribute(&icon, "icon-name", COL_ICON);
         col.add_attribute(&icon, "visible", COL_ICON_VIS);
-        col.pack_start(&name, true); 
+        col.pack_start(&name, true);
         col.add_attribute(&name, "text", COL_NAME);
         col.set_expand(true);
         view.append_column(&col);
         view.set_css_classes(&["alpaca-tree"]);
 
-                let bar = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let bar = gtk::Box::new(gtk::Orientation::Vertical, 6);
         bar.set_margin_start(12);
         bar.set_margin_end(12);
         bar.set_margin_top(6);
@@ -257,18 +282,18 @@ impl Component for ChangesView {
         msg.set_size_request(-1, 30);
         let btn = gtk::Button::builder()
             .label("Commit and Push")
-            .hexpand(true) 
+            .hexpand(true)
             .css_classes(["alpaca-barbtn"])
             .build();
         bar.append(&msg);
         bar.append(&btn);
         root.append(&bar);
 
-                let snd = sender.clone();
+        let snd = sender.clone();
         view.connect_row_activated(move |_, path, _| {
             snd.input(GitViewMsg::Activated(path.clone()));
         });
-                                let snd = sender.clone();
+        let snd = sender.clone();
         view.connect_row_expanded(move |_, _, path| {
             snd.input(GitViewMsg::RowExpanded(path.clone()));
         });
@@ -276,12 +301,12 @@ impl Component for ChangesView {
         view.connect_row_collapsed(move |_, _, path| {
             snd.input(GitViewMsg::RowCollapsed(path.clone()));
         });
-                        let v2 = view.clone();
+        let v2 = view.clone();
         store.connect_row_inserted(move |_, _, _| v2.refresh_hover());
         let v3 = view.clone();
         store.connect_row_deleted(move |_, _| v3.refresh_hover());
         let snd = sender.clone();
-        msg.connect_activate(move |_| snd.input(GitViewMsg::CommitClicked)); 
+        msg.connect_activate(move |_| snd.input(GitViewMsg::CommitClicked));
         let snd = sender.clone();
         btn.connect_clicked(move |_| snd.input(GitViewMsg::CommitClicked));
 
@@ -313,17 +338,17 @@ impl Component for ChangesView {
         match msg {
             GitViewMsg::SetRoot(root) => {
                 self.root = Some(root);
-                self.closed.clear(); 
-                self.refresh(false, &sender); 
-                                            }
+                self.closed.clear();
+                self.refresh(false, &sender);
+            }
             GitViewMsg::Refresh { keep } => self.refresh(keep, &sender),
             GitViewMsg::Apply { raw, ahead, keep } => self.apply(raw, ahead, keep),
             GitViewMsg::Filter(needle) => {
-                                                                                let n = needle.trim().to_lowercase();
+                let n = needle.trim().to_lowercase();
                 if n == self.needle.trim().to_lowercase() {
                     return;
                 }
-                                                self.needle = needle;
+                self.needle = needle;
                 let shown = filtered(&self.rows, &self.needle);
                 self.fill(&shown);
             }
@@ -332,7 +357,7 @@ impl Component for ChangesView {
             GitViewMsg::RowExpanded(tpath) => self.expand_toggle(&tpath, true),
             GitViewMsg::RowCollapsed(tpath) => self.expand_toggle(&tpath, false),
             GitViewMsg::CommitClicked => self.commit_clicked(&sender),
-            GitViewMsg::ProbeMsg(t) => self.msg.set_text(&t), 
+            GitViewMsg::ProbeMsg(t) => self.msg.set_text(&t),
             GitViewMsg::SetClosed(v) => self.closed = v.into_iter().collect(),
             GitViewMsg::StartCommit { root, paths, msg } => {
                 self.start_commit(root, paths, msg, &sender)
@@ -348,28 +373,37 @@ impl Component for ChangesView {
     ) {
         match message {
             GitViewCommand::Phase => {
-                let _ =
-                    sender.output(GitViewOutput::Status(GitStatusKind::Busy, "Pushing…".into()));
+                let _ = sender.output(GitViewOutput::Status(
+                    GitStatusKind::Busy,
+                    "Pushing…".into(),
+                ));
             }
             GitViewCommand::Landed(out) => {
                 self.busy = false;
-                                                                                let _ = sender.output(GitViewOutput::Busy(false));
+                let _ = sender.output(GitViewOutput::Busy(false));
                 self.flight = false;
                 self.buttons();
                 if out.cok {
-                    self.msg.set_text(""); 
-                    self.refresh(true, &sender); 
+                    self.msg.set_text("");
+                    self.refresh(true, &sender);
                 }
                 if !out.cok {
                     let _ = sender.output(GitViewOutput::Status(GitStatusKind::Err, out.ctext));
                 } else if !out.pok {
-                                                            let _ = sender.output(GitViewOutput::Status(GitStatusKind::Err, out.ptext));
+                    let _ = sender.output(GitViewOutput::Status(GitStatusKind::Err, out.ptext));
                 } else {
-                                        let _ = sender.output(GitViewOutput::Status(GitStatusKind::Ok, "Pushed ✓".into()));
+                    let _ =
+                        sender.output(GitViewOutput::Status(GitStatusKind::Ok, "Pushed ✓".into()));
                 }
             }
-            GitViewCommand::Refreshed { root, seq, raw, ahead, keep } => {
-                                if self.root.as_ref() != Some(&root) || seq != self.refresh_seq {
+            GitViewCommand::Refreshed {
+                root,
+                seq,
+                raw,
+                ahead,
+                keep,
+            } => {
+                if self.root.as_ref() != Some(&root) || seq != self.refresh_seq {
                     return;
                 }
                 self.apply(raw, ahead, keep);
@@ -379,13 +413,13 @@ impl Component for ChangesView {
 }
 
 impl ChangesView {
-            pub fn closed_dirs(&self) -> Vec<String> {
+    pub fn closed_dirs(&self) -> Vec<String> {
         self.closed.iter().cloned().collect()
     }
 
-                fn refresh(&mut self, keep: bool, sender: &ComponentSender<Self>) {
+    fn refresh(&mut self, keep: bool, sender: &ComponentSender<Self>) {
         let Some(root) = self.root.clone() else {
-            self.apply(None, 0, keep); 
+            self.apply(None, 0, keep);
             return;
         };
         self.refresh_seq += 1;
@@ -393,12 +427,22 @@ impl ChangesView {
         sender.spawn_command(move |out| {
             let root_str = root.to_string_lossy().into_owned();
             let raw = gitstatus::changes(&root_str);
-            let ahead = if raw.is_some() { gitstatus::ahead(&root_str) } else { 0 };
-            out.emit(GitViewCommand::Refreshed { root, seq, raw, ahead, keep });
+            let ahead = if raw.is_some() {
+                gitstatus::ahead(&root_str)
+            } else {
+                0
+            };
+            out.emit(GitViewCommand::Refreshed {
+                root,
+                seq,
+                raw,
+                ahead,
+                keep,
+            });
         });
     }
 
-                #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn insert_row(
         &self,
         parent: Option<&gtk::TreeIter>,
@@ -436,16 +480,16 @@ impl ChangesView {
         self.store.insert_with_values(parent, None, &vals)
     }
 
-                    fn apply(&mut self, raw: Option<Rows>, ahead: usize, keep: bool) {
+    fn apply(&mut self, raw: Option<Rows>, ahead: usize, keep: bool) {
         let Some(raw) = raw else {
-            return; 
+            return;
         };
-        self.ahead = ahead; 
-                                                        if keep && raw == self.rows {
+        self.ahead = ahead;
+        if keep && raw == self.rows {
             return;
         }
         self.rows = raw;
-                let fset: BTreeSet<String> = gitstatus::group_tree(&self.rows)
+        let fset: BTreeSet<String> = gitstatus::group_tree(&self.rows)
             .iter()
             .filter(|t| t.kind == "f")
             .map(|t| t.rel.clone())
@@ -453,7 +497,7 @@ impl ChangesView {
         self.checked = if keep {
             self.checked.intersection(&fset).cloned().collect()
         } else {
-            fset 
+            fset
         };
         let shown = filtered(&self.rows, &self.needle);
         self.fill(&shown);
@@ -470,17 +514,43 @@ impl ChangesView {
         let blank = badges::blank_pixbuf();
         if shown.is_empty() {
             self.insert_row(
-                None, "No changes", "", "e", "", &blank, &blank, &blank, false, false, false,
-                false, false, "", false,
-            ); 
+                None,
+                "No changes",
+                "",
+                "e",
+                "",
+                &blank,
+                &blank,
+                &blank,
+                false,
+                false,
+                false,
+                false,
+                false,
+                "",
+                false,
+            );
             self.sync();
             return;
         }
         self.insert_row(
-            None, "Select all", "", "s", "", &blank, &blank, &blank, false, false, false, false,
-            true, "", false,
-        ); 
-                                let mut iters: BTreeMap<String, gtk::TreeIter> = BTreeMap::new();
+            None,
+            "Select all",
+            "",
+            "s",
+            "",
+            &blank,
+            &blank,
+            &blank,
+            false,
+            false,
+            false,
+            false,
+            true,
+            "",
+            false,
+        );
+        let mut iters: BTreeMap<String, gtk::TreeIter> = BTreeMap::new();
         for t in gitstatus::group_tree(shown) {
             let is_dir = t.kind == "d";
             let (art, fallback) = strip_icons(&t.name, is_dir);
@@ -500,8 +570,8 @@ impl ChangesView {
                 .rel
                 .rsplit_once('/')
                 .and_then(|(dir, _)| iters.get(dir).cloned());
-            let badge_vis = art.is_some(); 
-            let chip_vis = !is_dir; 
+            let badge_vis = art.is_some();
+            let chip_vis = !is_dir;
             let tog_vis = true;
             let it = self.insert_row(
                 parent.as_ref(),
@@ -525,30 +595,30 @@ impl ChangesView {
             }
         }
         self.sync();
-                        for (rel, it) in &iters {
+        for (rel, it) in &iters {
             if !self.closed.contains(rel) {
                 self.view.expand_row(&self.store.path(it), false);
             }
         }
     }
 
-    
-                fn sync(&mut self) {
+    fn sync(&mut self) {
         let st = if self.shown.is_empty() {
             BTreeMap::new()
         } else {
-            let lensed: BTreeSet<String> = self
-                .visible
-                .intersection(&self.checked)
-                .cloned()
-                .collect();
+            let lensed: BTreeSet<String> =
+                self.visible.intersection(&self.checked).cloned().collect();
             gitstatus::checked_dir_state(&gitstatus::group_tree(&self.shown), &lensed)
         };
         let mut cur = self.store.iter_first();
         while let Some(i) = cur.take() {
             self.sync_row(&i, &st);
-                        let mut t = i;
-            cur = if self.store.iter_next(&mut t) { Some(t) } else { None };
+            let mut t = i;
+            cur = if self.store.iter_next(&mut t) {
+                Some(t)
+            } else {
+                None
+            };
             self.walk_children(&i, &st);
         }
         self.buttons();
@@ -559,84 +629,126 @@ impl ChangesView {
         while let Some(i) = cur.take() {
             self.sync_row(&i, st);
             let mut t = i;
-            cur = if self.store.iter_next(&mut t) { Some(t) } else { None };
+            cur = if self.store.iter_next(&mut t) {
+                Some(t)
+            } else {
+                None
+            };
             self.walk_children(&i, st);
         }
     }
 
     fn sync_row(&self, it: &gtk::TreeIter, st: &BTreeMap<String, (bool, bool)>) {
-        let kind = self.store.get_value(it, COL_KIND).get::<String>().unwrap_or_default();
+        let kind = self
+            .store
+            .get_value(it, COL_KIND)
+            .get::<String>()
+            .unwrap_or_default();
         if kind == "f" {
-            let rel = self.store.get_value(it, COL_REL).get::<String>().unwrap_or_default();
+            let rel = self
+                .store
+                .get_value(it, COL_REL)
+                .get::<String>()
+                .unwrap_or_default();
             let v = self.checked.contains(&rel);
             self.store.set_value(it, COL_CHECKED as u32, &v.to_value());
         } else if kind == "d" {
-            let rel = self.store.get_value(it, COL_REL).get::<String>().unwrap_or_default();
+            let rel = self
+                .store
+                .get_value(it, COL_REL)
+                .get::<String>()
+                .unwrap_or_default();
             let (allc, somec) = *st.get(&rel).unwrap_or(&(false, false));
-            self.store.set_value(it, COL_CHECKED as u32, &allc.to_value());
-            self.store.set_value(it, COL_INCONSIST as u32, &(!allc && somec).to_value());
+            self.store
+                .set_value(it, COL_CHECKED as u32, &allc.to_value());
+            self.store
+                .set_value(it, COL_INCONSIST as u32, &(!allc && somec).to_value());
         } else if kind == "s" {
-            let allc = !self.visible.is_empty()
-                && self.visible.iter().all(|r| self.checked.contains(r));
+            let allc =
+                !self.visible.is_empty() && self.visible.iter().all(|r| self.checked.contains(r));
             let somec = self.checked.iter().any(|r| self.visible.contains(r));
-            self.store.set_value(it, COL_CHECKED as u32, &allc.to_value());
-            self.store.set_value(it, COL_INCONSIST as u32, &(!allc && somec).to_value());
+            self.store
+                .set_value(it, COL_CHECKED as u32, &allc.to_value());
+            self.store
+                .set_value(it, COL_INCONSIST as u32, &(!allc && somec).to_value());
         }
-            }
+    }
 
-            fn buttons(&self) {
+    fn buttons(&self) {
         self.btn
             .set_sensitive(!self.busy && (!self.checked.is_empty() || self.ahead > 0));
         self.msg.set_sensitive(!self.busy);
     }
 
-    
     fn row_toggled(&mut self, tpath: &gtk::TreePath) {
         let Some(it) = self.store.iter(tpath) else {
             return;
         };
-        let kind = self.store.get_value(&it, COL_KIND).get::<String>().unwrap_or_default();
-        let rel = self.store.get_value(&it, COL_REL).get::<String>().unwrap_or_default();
+        let kind = self
+            .store
+            .get_value(&it, COL_KIND)
+            .get::<String>()
+            .unwrap_or_default();
+        let rel = self
+            .store
+            .get_value(&it, COL_REL)
+            .get::<String>()
+            .unwrap_or_default();
         if let Some(next) = toggled_checked(&kind, &rel, &self.checked, &self.visible) {
             self.checked = next;
-            self.sync(); 
+            self.sync();
         }
     }
 
-        fn expand_toggle(&mut self, tpath: &gtk::TreePath, expanded: bool) {
+    fn expand_toggle(&mut self, tpath: &gtk::TreePath, expanded: bool) {
         let Some(it) = self.store.iter(tpath) else {
             return;
         };
-        let rel = self.store.get_value(&it, COL_REL).get::<String>().unwrap_or_default();
+        let rel = self
+            .store
+            .get_value(&it, COL_REL)
+            .get::<String>()
+            .unwrap_or_default();
         if rel.is_empty() {
             return;
         }
         if expanded {
-            self.closed.remove(&rel); 
+            self.closed.remove(&rel);
         } else {
             self.closed.insert(rel.clone());
         }
         let chev = badges::chevron_pixbuf(expanded).unwrap_or_else(badges::blank_pixbuf);
         self.store.set_value(&it, COL_CHEV as u32, &chev.to_value());
         if expanded {
-                                    let mut cur = self.store.iter_children(Some(&it));
+            let mut cur = self.store.iter_children(Some(&it));
             while let Some(i) = cur.take() {
-                let kind = self.store.get_value(&i, COL_KIND).get::<String>().unwrap_or_default();
-                let child_rel = self.store.get_value(&i, COL_REL).get::<String>().unwrap_or_default();
+                let kind = self
+                    .store
+                    .get_value(&i, COL_KIND)
+                    .get::<String>()
+                    .unwrap_or_default();
+                let child_rel = self
+                    .store
+                    .get_value(&i, COL_REL)
+                    .get::<String>()
+                    .unwrap_or_default();
                 if kind == "d" && !self.closed.contains(&child_rel) {
                     self.view.expand_row(&self.store.path(&i), false);
                 }
                 let mut t = i;
-                cur = if self.store.iter_next(&mut t) { Some(t) } else { None };
+                cur = if self.store.iter_next(&mut t) {
+                    Some(t)
+                } else {
+                    None
+                };
             }
         }
     }
 
-    
     fn activated(&mut self, tpath: &gtk::TreePath, sender: &ComponentSender<Self>) {
-                                let (px, _py) = self.view.press_xy();
+        let (px, _py) = self.view.press_xy();
         if px >= 0.0 {
-                                    let ca = self.view.cell_area(Some(tpath), Some(&self.col));
+            let ca = self.view.cell_area(Some(tpath), Some(&self.col));
             if ca.width() > 0 && toggle_hit(px, ca.x(), self.tog_w()) {
                 sender.input(GitViewMsg::RowToggled(tpath.clone()));
                 return;
@@ -645,17 +757,29 @@ impl ChangesView {
         let Some(it) = self.store.iter(tpath) else {
             return;
         };
-        let kind = self.store.get_value(&it, COL_KIND).get::<String>().unwrap_or_default();
-        let rel = self.store.get_value(&it, COL_REL).get::<String>().unwrap_or_default();
+        let kind = self
+            .store
+            .get_value(&it, COL_KIND)
+            .get::<String>()
+            .unwrap_or_default();
+        let rel = self
+            .store
+            .get_value(&it, COL_REL)
+            .get::<String>()
+            .unwrap_or_default();
         if kind == "d" && !rel.is_empty() {
             if self.closed.contains(&rel) {
-                self.view.expand_row(tpath, false); 
+                self.view.expand_row(tpath, false);
             } else {
                 self.view.collapse_row(tpath);
             }
         } else if kind == "f" {
-            let letter = self.store.get_value(&it, COL_LETTER).get::<String>().unwrap_or_default();
-            let _ = sender.output(GitViewOutput::Open { rel, letter }); 
+            let letter = self
+                .store
+                .get_value(&it, COL_LETTER)
+                .get::<String>()
+                .unwrap_or_default();
+            let _ = sender.output(GitViewOutput::Open { rel, letter });
         }
     }
 
@@ -663,18 +787,23 @@ impl ChangesView {
         if let Some(w) = self.tog_w.get() {
             return w;
         }
-                        let (min, natural) = self.tog.preferred_width(&self.view);
-        let w = if natural > 0 { natural } else if min > 0 { min } else { 24 };
+        let (min, natural) = self.tog.preferred_width(&self.view);
+        let w = if natural > 0 {
+            natural
+        } else if min > 0 {
+            min
+        } else {
+            24
+        };
         self.tog_w.set(Some(w));
         w
     }
 
-        
     fn commit_clicked(&mut self, sender: &ComponentSender<Self>) {
         if self.busy || self.root.is_none() {
-            return; 
+            return;
         }
-        let paths: Vec<String> = self.checked.iter().cloned().collect(); 
+        let paths: Vec<String> = self.checked.iter().cloned().collect();
         if paths.is_empty() && self.ahead == 0 {
             let _ = sender.output(GitViewOutput::Status(
                 GitStatusKind::Err,
@@ -682,7 +811,7 @@ impl ChangesView {
             ));
             return;
         }
-        let msg = self.msg.text().trim().to_string(); 
+        let msg = self.msg.text().trim().to_string();
         if !paths.is_empty() && msg.is_empty() {
             let _ = sender.output(GitViewOutput::Status(
                 GitStatusKind::Err,
@@ -690,16 +819,21 @@ impl ChangesView {
             ));
             return;
         }
-                let root = self.root.clone().unwrap();
-        self.busy = true; 
+        let root = self.root.clone().unwrap();
+        self.busy = true;
         self.buttons();
         let _ = sender.output(GitViewOutput::Status(
             GitStatusKind::Busy,
-            if paths.is_empty() { "Pushing…" } else { "Committing…" }.into(),
+            if paths.is_empty() {
+                "Pushing…"
+            } else {
+                "Committing…"
+            }
+            .into(),
         ));
         let _ = sender.output(GitViewOutput::Busy(true));
         let _ = sender.output(GitViewOutput::Commit { root, paths, msg });
-            }
+    }
 
     fn start_commit(
         &mut self,
@@ -709,12 +843,12 @@ impl ChangesView {
         sender: &ComponentSender<Self>,
     ) {
         if self.flight {
-            return; 
+            return;
         }
         self.flight = true;
         sender.spawn_command(move |out| {
             let out_f = if paths.is_empty() {
-                                gitstatus::commit_then_push(&root.to_string_lossy(), &paths, &msg, None)
+                gitstatus::commit_then_push(&root.to_string_lossy(), &paths, &msg, None)
             } else {
                 let outp = out.clone();
                 let phase_fn = move |_k: &str| outp.emit(GitViewCommand::Phase);
@@ -729,7 +863,9 @@ mod tests {
     use super::*;
 
     fn rows_of(v: &[(&str, &str)]) -> Rows {
-        v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+        v.iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
     }
 
     #[test]
@@ -745,10 +881,14 @@ mod tests {
 
     #[test]
     fn filtered_matches_basename_or_rel() {
-        let rows = rows_of(&[("z.md", "M"), ("a/b/c.md", "A")]); 
+        let rows = rows_of(&[("z.md", "M"), ("a/b/c.md", "A")]);
         assert_eq!(filtered(&rows, ""), rows, "empty needle → identity");
         assert_eq!(filtered(&rows, "c.md")[0].0, "a/b/c.md", "basename match");
-        assert_eq!(filtered(&rows, "A/b")[0].0, "a/b/c.md", "rel match, case-insensitive");
+        assert_eq!(
+            filtered(&rows, "A/b")[0].0,
+            "a/b/c.md",
+            "rel match, case-insensitive"
+        );
         let both = filtered(&rows, "md");
         assert_eq!(both.len(), 2, "both names carry md");
         assert!(filtered(&rows, "zzz").is_empty());
@@ -757,33 +897,42 @@ mod tests {
     #[test]
     fn toggled_checked_laws() {
         let vis = BTreeSet::from([
-            "a/c.txt".to_string(), "a/d/m.md".to_string(), "e.md".to_string(),
+            "a/c.txt".to_string(),
+            "a/d/m.md".to_string(),
+            "e.md".to_string(),
         ]);
         let ck = BTreeSet::from(["a/c.txt".to_string(), "a/d/m.md".to_string()]);
-                let c = toggled_checked("f", "a/d/m.md", &ck, &vis).unwrap();
+        let c = toggled_checked("f", "a/d/m.md", &ck, &vis).unwrap();
         assert!(!c.contains("a/d/m.md") && c.contains("a/c.txt"));
-                        let ck2 = BTreeSet::from(["a/c.txt".to_string()]);
+        let ck2 = BTreeSet::from(["a/c.txt".to_string()]);
         let c = toggled_checked("d", "a/d", &ck2, &vis).unwrap();
         assert!(c.contains("a/d/m.md"), "none selected → add all under dir");
-                let full = BTreeSet::from(["a/c.txt".to_string(), "a/d/m.md".to_string(),
-                                   "e.md".to_string()]);
+        let full = BTreeSet::from([
+            "a/c.txt".to_string(),
+            "a/d/m.md".to_string(),
+            "e.md".to_string(),
+        ]);
         let c = toggled_checked("d", "a", &full, &vis).unwrap();
-                        assert_eq!(c, BTreeSet::from(["e.md".to_string()]), "descendants cleared, rest kept");
-                let c = toggled_checked("s", "", &full, &vis).unwrap();
+        assert_eq!(
+            c,
+            BTreeSet::from(["e.md".to_string()]),
+            "descendants cleared, rest kept"
+        );
+        let c = toggled_checked("s", "", &full, &vis).unwrap();
         assert!(c.is_empty());
         let c = toggled_checked("s", "", &BTreeSet::new(), &vis).unwrap();
         assert_eq!(c, vis);
-                        let c = toggled_checked("d", "zzz", &ck, &vis).unwrap();
+        let c = toggled_checked("d", "zzz", &ck, &vis).unwrap();
         assert_eq!(c, ck);
-                assert!(toggled_checked("e", "x", &ck, &vis).is_none());
+        assert!(toggled_checked("e", "x", &ck, &vis).is_none());
     }
 
     #[test]
     fn strip_icons_law() {
-                                        assert_eq!(strip_icons("editor.rs", false).1, None);
+        assert_eq!(strip_icons("editor.rs", false).1, None);
         assert!(strip_icons("editor.rs", false).0.is_some());
-        assert_eq!(strip_icons("LICENSE", false).1, None); 
-        assert!(strip_icons("whatever.zzz", false).0.is_some()); 
-                assert_eq!(strip_icons("src", true).1, None);
+        assert_eq!(strip_icons("LICENSE", false).1, None);
+        assert!(strip_icons("whatever.zzz", false).0.is_some());
+        assert_eq!(strip_icons("src", true).1, None);
     }
 }

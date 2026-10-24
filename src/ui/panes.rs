@@ -1,4 +1,3 @@
-
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -6,8 +5,8 @@ use std::time::Instant;
 
 use relm4::gtk::{self, gdk, gio, glib, pango, prelude::*};
 use relm4::{Component, ComponentParts, ComponentSender};
-use vte4::prelude::*;
 use vte4::PtyFlags;
+use vte4::prelude::*;
 
 use crate::render::vector;
 
@@ -20,14 +19,20 @@ pub fn alive(pid: Option<i32>) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
-        Swallow,
-        Ignore,
-        Respawn,
-        RespawnRearm,
-        Exhausted,
+    Swallow,
+    Ignore,
+    Respawn,
+    RespawnRearm,
+    Exhausted,
 }
 
-pub fn respawn_decision(kills_pending: bool, rooted: bool, in_spawned: bool, lived: f64, budget: i32) -> Decision {
+pub fn respawn_decision(
+    kills_pending: bool,
+    rooted: bool,
+    in_spawned: bool,
+    lived: f64,
+    budget: i32,
+) -> Decision {
     if kills_pending {
         return Decision::Swallow;
     }
@@ -55,16 +60,16 @@ pub struct RunState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Landed {
-        Track,
-        KillFresh(i32),
-        FailedToStart,
+    Track,
+    KillFresh(i32),
+    FailedToStart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stopped {
-        KilledAlive(i32),
-        Pending,
-        Nothing,
+    KilledAlive(i32),
+    Pending,
+    Nothing,
 }
 
 impl RunState {
@@ -76,7 +81,7 @@ impl RunState {
         self.starting || alive(self.pid)
     }
 
-        pub fn launch(&mut self) -> bool {
+    pub fn launch(&mut self) -> bool {
         if self.has_running() {
             return false;
         }
@@ -85,7 +90,7 @@ impl RunState {
         true
     }
 
-        pub fn on_landed(&mut self, pid: i32, error: Option<String>) -> Landed {
+    pub fn on_landed(&mut self, pid: i32, error: Option<String>) -> Landed {
         self.starting = false;
         if error.is_some() || pid <= 0 {
             return Landed::FailedToStart;
@@ -99,7 +104,7 @@ impl RunState {
         Landed::Track
     }
 
-        pub fn on_stop(&mut self) -> Stopped {
+    pub fn on_stop(&mut self) -> Stopped {
         match self.pid {
             Some(p) if alive(Some(p)) => {
                 self.pid = None;
@@ -114,7 +119,7 @@ impl RunState {
         }
     }
 
-                pub fn on_child_exited(&mut self) -> Option<()> {
+    pub fn on_child_exited(&mut self) -> Option<()> {
         if self.pid.is_none() && !self.starting {
             return None;
         }
@@ -123,11 +128,10 @@ impl RunState {
     }
 }
 
-
 pub fn kill_tree(pid: i32) {
     let pgid = unsafe { libc::getpgid(pid) };
     if pgid < 0 {
-        return; 
+        return;
     }
     unsafe {
         let res = libc::killpg(pgid, libc::SIGHUP);
@@ -149,7 +153,6 @@ pub fn kill_tree(pid: i32) {
     });
 }
 
-
 pub const VTE_FG: &str = "#e6e8ee";
 pub const VTE_BG: &str = "#0d1017";
 pub const ANSI: [&str; 16] = [
@@ -163,10 +166,13 @@ fn make_term() -> vte4::Terminal {
     let mut font = pango::FontDescription::from_string("Noto Sans Mono");
     font.set_absolute_size(13.0 * pango::SCALE as f64);
     t.set_font(Some(&font));
-    t.set_cell_height_scale(1.08); 
+    t.set_cell_height_scale(1.08);
     let fg = gdk::RGBA::parse(VTE_FG).expect("VTE_FG parses");
     let bg = gdk::RGBA::parse(VTE_BG).expect("VTE_BG parses");
-    let pal: Vec<gdk::RGBA> = ANSI.iter().filter_map(|h| gdk::RGBA::parse(*h).ok()).collect();
+    let pal: Vec<gdk::RGBA> = ANSI
+        .iter()
+        .filter_map(|h| gdk::RGBA::parse(*h).ok())
+        .collect();
     let pal: Vec<&gdk::RGBA> = pal.iter().collect();
     t.set_colors(Some(&fg), Some(&bg), &pal);
     t
@@ -194,18 +200,26 @@ struct PaneSlot {
 #[derive(Debug, Clone)]
 pub enum PanesMsg {
     SetRoot(PathBuf),
-    LaunchRun { argv: Vec<String> },
+    LaunchRun {
+        argv: Vec<String>,
+    },
     StopRun,
-                SpawnLanded { key: &'static str, pid: i32, error: Option<String> },
-            PaneExited { key: &'static str },
-            RunExited,
-            EnsureCurrent(Option<i32>),
+    SpawnLanded {
+        key: &'static str,
+        pid: i32,
+        error: Option<String>,
+    },
+    PaneExited {
+        key: &'static str,
+    },
+    RunExited,
+    EnsureCurrent(Option<i32>),
 }
 
 #[derive(Debug, Clone)]
 pub enum PanesOutput {
-        RunStarting,
-                RunStatus { running: bool },
+    RunStarting,
+    RunStatus { running: bool },
 }
 
 pub struct Panes {
@@ -239,30 +253,40 @@ impl Component for Panes {
     }
 
     fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        let agent = PaneSlot { term: make_term(), pid: Cell::new(None) };
-        let term = PaneSlot { term: make_term(), pid: Cell::new(None) };
-        let out = PaneSlot { term: make_term(), pid: Cell::new(None) };
+        let agent = PaneSlot {
+            term: make_term(),
+            pid: Cell::new(None),
+        };
+        let term = PaneSlot {
+            term: make_term(),
+            pid: Cell::new(None),
+        };
+        let out = PaneSlot {
+            term: make_term(),
+            pid: Cell::new(None),
+        };
 
-                                                        let out_send = sender.clone();
+        let out_send = sender.clone();
         out.term.connect_child_exited(move |_t, _status| {
-            if out_send.input_sender().send(PanesMsg::RunExited).is_err() {
-                return;
-            }
+            let _ = out_send.input_sender().send(PanesMsg::RunExited);
         });
         let agent_send = sender.clone();
         agent.term.connect_child_exited(move |_t, _status| {
-            if agent_send.input_sender().send(PanesMsg::PaneExited { key: "agent" }).is_err() {
-                return;
-            }
+            let _ = agent_send
+                .input_sender()
+                .send(PanesMsg::PaneExited { key: "agent" });
         });
         let term_send = sender.clone();
         term.term.connect_child_exited(move |_t, _status| {
-            if term_send.input_sender().send(PanesMsg::PaneExited { key: "term" }).is_err() {
-                return;
-            }
+            let _ = term_send
+                .input_sender()
+                .send(PanesMsg::PaneExited { key: "term" });
         });
 
-                let nb = gtk::Notebook::builder().vexpand(true).scrollable(true).build();
+        let nb = gtk::Notebook::builder()
+            .vexpand(true)
+            .scrollable(true)
+            .build();
         nb.add_css_class("alpaca-panes");
         let pages: [(&vte4::Terminal, &str, &str); 3] = [
             (&agent.term, "Agent", "bot.svg"),
@@ -282,13 +306,9 @@ impl Component for Panes {
         }
         let switch_send = sender.clone();
         nb.connect_switch_page(move |_, _, index| {
-                        if switch_send
+            let _ = switch_send
                 .input_sender()
-                .send(PanesMsg::EnsureCurrent(Some(index as i32)))
-                .is_err()
-            {
-                return;
-            }
+                .send(PanesMsg::EnsureCurrent(Some(index as i32)));
         });
         root.append(&nb);
 
@@ -329,11 +349,13 @@ impl Panes {
         self.run.has_running()
     }
 
-        fn status(&self, sender: ComponentSender<Self>) {
-        let _ = sender.output(PanesOutput::RunStatus { running: self.has_running_run() });
+    fn status(&self, sender: ComponentSender<Self>) {
+        let _ = sender.output(PanesOutput::RunStatus {
+            running: self.has_running_run(),
+        });
     }
 
-                    fn spawn(
+    fn spawn(
         send: ComponentSender<Panes>,
         key: &'static str,
         term: &vte4::Terminal,
@@ -343,7 +365,7 @@ impl Panes {
         let envv = crate::support::runctl::pane_environ();
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         let envv: Vec<&str> = envv.iter().map(String::as_str).collect();
-                let argv0 = argv[0].to_owned();
+        let argv0 = argv[0].to_owned();
         let cb_send = send.clone();
         term.spawn_async(
             PtyFlags::DEFAULT,
@@ -362,13 +384,14 @@ impl Panes {
                 if let Some(e) = &error {
                     eprintln!("spawn failed ({argv0}): {e}");
                 }
-                                                let _ = cb_send.input_sender().send(PanesMsg::SpawnLanded { key, pid, error });
+                let _ = cb_send
+                    .input_sender()
+                    .send(PanesMsg::SpawnLanded { key, pid, error });
             },
         );
     }
 
-    
-                    pub fn live_pids(&self) -> Vec<i32> {
+    pub fn live_pids(&self) -> Vec<i32> {
         let mut pids = Vec::new();
         if let Some(pid) = self.run.pid {
             pids.push(pid);
@@ -381,19 +404,21 @@ impl Panes {
         pids
     }
 
-            fn set_root(&mut self, path: PathBuf, sender: ComponentSender<Self>) {
+    fn set_root(&mut self, path: PathBuf, sender: ComponentSender<Self>) {
         if let Some(pid) = self.run.pid
-            && alive(Some(pid)) {
-                                kill_tree(pid);
-            }
+            && alive(Some(pid))
+        {
+            kill_tree(pid);
+        }
         self.run.pid = None;
         self.kills_pending.clear();
         for (slot, key) in [(&self.agent, "agent"), (&self.term, "term")] {
             if let Some(pid) = slot.pid.get()
-                && alive(Some(pid)) {
-                    kill_tree(pid);
-                    self.kills_pending.insert(key, 1); 
-                }
+                && alive(Some(pid))
+            {
+                kill_tree(pid);
+                self.kills_pending.insert(key, 1);
+            }
         }
         self.spawned.clear();
         self.spawned_at.clear();
@@ -406,17 +431,19 @@ impl Panes {
         self.status(sender.clone());
         let idle_send = sender;
         glib::idle_add_local(move || {
-                                    let _ = idle_send.input_sender().send(PanesMsg::EnsureCurrent(None));
+            let _ = idle_send.input_sender().send(PanesMsg::EnsureCurrent(None));
             glib::ControlFlow::Break
         });
     }
 
-        fn ensure_current(&mut self, page_ix: Option<i32>, sender: ComponentSender<Self>) {
+    fn ensure_current(&mut self, page_ix: Option<i32>, sender: ComponentSender<Self>) {
         if self.root.is_none() {
             return;
         }
-                        let i = page_ix.or(self.nb.current_page().map(|p| p as i32)).unwrap_or(-1);
-                if i == 0 && !self.spawned.contains("agent") {
+        let i = page_ix
+            .or(self.nb.current_page().map(|p| p as i32))
+            .unwrap_or(-1);
+        if i == 0 && !self.spawned.contains("agent") {
             self.respawns.remove("agent");
             self.spawn_pane("agent", true, sender);
         } else if i == 1 && !self.spawned.contains("term") {
@@ -425,32 +452,41 @@ impl Panes {
         }
     }
 
-        fn spawn_pane(&mut self, key: &'static str, is_agent: bool, sender: ComponentSender<Self>) {
+    fn spawn_pane(&mut self, key: &'static str, is_agent: bool, sender: ComponentSender<Self>) {
         self.spawned.insert(key);
-                                self.spawned_at.insert(key, Instant::now());
+        self.spawned_at.insert(key, Instant::now());
         let argv: Vec<String> = if is_agent {
             vec!["claude".to_owned()]
         } else {
             vec![std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_owned())]
         };
-        let term = if is_agent { &self.agent.term } else { &self.term.term };
+        let term = if is_agent {
+            &self.agent.term
+        } else {
+            &self.term.term
+        };
         let cwd = self.root.clone().map(|p| p.to_string_lossy().into_owned());
         Self::spawn(sender, key, term, cwd.as_deref(), &argv);
     }
 
-    
-        fn launch_run(&mut self, argv: Vec<String>, sender: ComponentSender<Self>) {
+    fn launch_run(&mut self, argv: Vec<String>, sender: ComponentSender<Self>) {
         if !self.run.launch() {
             return;
         }
-        self.nb.set_current_page(Some(2u32)); 
+        self.nb.set_current_page(Some(2u32));
         self.out.term.reset(true, true);
         let cwd = self.root.clone().map(|p| p.to_string_lossy().into_owned());
-        Self::spawn(sender.clone(), "output", &self.out.term, cwd.as_deref(), &argv);
+        Self::spawn(
+            sender.clone(),
+            "output",
+            &self.out.term,
+            cwd.as_deref(),
+            &argv,
+        );
         let _ = sender.output(PanesOutput::RunStarting);
     }
 
-        fn on_spawn_landed(
+    fn on_spawn_landed(
         &mut self,
         key: &'static str,
         pid: i32,
@@ -465,45 +501,49 @@ impl Panes {
                     if alive(Some(pid)) {
                         self.status(sender);
                     } else {
-                        self.run.pid = None; 
+                        self.run.pid = None;
                         self.status(sender);
                     }
                 }
             }
             return;
         }
-        let slot = if key == "agent" { &self.agent } else { &self.term };
+        let slot = if key == "agent" {
+            &self.agent
+        } else {
+            &self.term
+        };
         if pid > 0 {
             slot.pid.set(Some(pid));
         } else {
             slot.pid.set(None);
-                                    self.spawned.remove(key);
+            self.spawned.remove(key);
         }
     }
 
-        fn stop_run(&mut self, sender: ComponentSender<Self>) {
+    fn stop_run(&mut self, sender: ComponentSender<Self>) {
         if let Stopped::KilledAlive(p) = self.run.on_stop() {
             kill_tree(p);
         }
         self.status(sender);
     }
 
-                fn on_run_exited(&mut self, sender: ComponentSender<Self>) {
+    fn on_run_exited(&mut self, sender: ComponentSender<Self>) {
         if self.run.on_child_exited().is_some() {
             self.status(sender);
         }
     }
 
-        fn on_pane_exited(&mut self, key: &'static str, sender: ComponentSender<Self>) {
+    fn on_pane_exited(&mut self, key: &'static str, sender: ComponentSender<Self>) {
         let kills = *self.kills_pending.get(key).unwrap_or(&0);
         let rooted = self.root.is_some();
         let in_spawned = self.spawned.contains(key);
-                        let lived = self
+        let lived = self
             .spawned_at
             .get(key)
             .map_or(f64::INFINITY, |t| t.elapsed().as_secs_f64());
         let budget = *self.respawns.get(key).unwrap_or(&0);
-                match respawn_decision(kills > 0, rooted, in_spawned, lived, budget) {
+        match respawn_decision(kills > 0, rooted, in_spawned, lived, budget) {
             Decision::Swallow => *self.kills_pending.get_mut(key).unwrap() -= 1,
             Decision::Ignore => {}
             Decision::Respawn => {
@@ -515,7 +555,7 @@ impl Panes {
                 self.spawn_pane(key, key == "agent", sender);
             }
             Decision::Exhausted => {
-                self.spawned.remove(key); 
+                self.spawned.remove(key);
                 self.status(sender);
             }
         }
@@ -529,53 +569,83 @@ mod tests {
     #[test]
     fn alive_rules() {
         assert!(!alive(None), "None pid is never alive");
-        assert!(!alive(Some(999_999_999)), "unborn pid is not alive"); 
-                let me: i32 = std::process::id() as i32;
+        assert!(!alive(Some(999_999_999)), "unborn pid is not alive");
+        let me: i32 = std::process::id() as i32;
         assert!(alive(Some(me)));
     }
 
     #[test]
     fn respawns_policy() {
-                                assert_eq!(respawn_decision(true, true, true, 100.0, 0), Decision::Swallow);
-        assert_eq!(respawn_decision(false, false, true, 100.0, 0), Decision::Ignore);
-        assert_eq!(respawn_decision(false, true, false, 100.0, 0), Decision::Ignore);
-        assert_eq!(respawn_decision(false, true, true, 2.0, 0), Decision::Ignore); 
-        assert_eq!(respawn_decision(false, true, true, 10.0, 0), Decision::Respawn);
-        assert_eq!(respawn_decision(false, true, true, 10.0, 2), Decision::Respawn);
-        assert_eq!(respawn_decision(false, true, true, 10.0, 3), Decision::Exhausted); 
-                assert_eq!(respawn_decision(false, true, true, 3_600.0, 1), Decision::RespawnRearm);
-        assert_eq!(respawn_decision(false, true, true, 3_600.0, 3), Decision::RespawnRearm);
+        assert_eq!(
+            respawn_decision(true, true, true, 100.0, 0),
+            Decision::Swallow
+        );
+        assert_eq!(
+            respawn_decision(false, false, true, 100.0, 0),
+            Decision::Ignore
+        );
+        assert_eq!(
+            respawn_decision(false, true, false, 100.0, 0),
+            Decision::Ignore
+        );
+        assert_eq!(
+            respawn_decision(false, true, true, 2.0, 0),
+            Decision::Ignore
+        );
+        assert_eq!(
+            respawn_decision(false, true, true, 10.0, 0),
+            Decision::Respawn
+        );
+        assert_eq!(
+            respawn_decision(false, true, true, 10.0, 2),
+            Decision::Respawn
+        );
+        assert_eq!(
+            respawn_decision(false, true, true, 10.0, 3),
+            Decision::Exhausted
+        );
+        assert_eq!(
+            respawn_decision(false, true, true, 3_600.0, 1),
+            Decision::RespawnRearm
+        );
+        assert_eq!(
+            respawn_decision(false, true, true, 3_600.0, 3),
+            Decision::RespawnRearm
+        );
     }
 
     #[test]
     fn run_lifecycle_transitions() {
-                let mut st = RunState::new();
+        let mut st = RunState::new();
         assert!(st.launch());
         assert!(!st.launch());
         assert!(st.has_running());
 
-                assert!(matches!(st.on_landed(4242, None), Landed::Track));
+        assert!(matches!(st.on_landed(4242, None), Landed::Track));
         assert!(st.on_child_exited().is_some());
         assert!(!st.has_running());
         assert!(st.launch(), "relaunch allowed after exit");
 
-                let mut st = RunState::new();
+        let mut st = RunState::new();
         st.launch();
-        assert!(matches!(st.on_landed(0, Some("boom".into())), Landed::FailedToStart));
+        assert!(matches!(
+            st.on_landed(0, Some("boom".into())),
+            Landed::FailedToStart
+        ));
 
-                let mut st = RunState::new();
+        let mut st = RunState::new();
         st.launch();
         assert!(matches!(st.on_stop(), Stopped::Pending));
         assert!(matches!(st.on_landed(77, None), Landed::KillFresh(77)));
         assert!(!st.has_running());
 
-                let mut st = RunState::new();
+        let mut st = RunState::new();
         st.launch();
         assert!(matches!(st.on_landed(77, None), Landed::Track));
         assert!(matches!(st.on_stop(), Stopped::KilledAlive(77)));
         assert!(!st.has_running());
         assert_eq!(st.on_child_exited(), None);
 
-                assert!(matches!(st.on_stop(), Stopped::Nothing));
+        assert!(matches!(st.on_stop(), Stopped::Nothing));
     }
 }
