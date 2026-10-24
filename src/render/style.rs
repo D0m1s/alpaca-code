@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use gtk4::prelude::*;
 
-const CSS: &str = include_str!("../assets/app.css");
-const SCHEME: &str = include_str!("../assets/style-schemes/alpaca-dark.xml");
+const CSS: &str = include_str!("../../assets/app.css");
+const SCHEME: &str = include_str!("../../assets/style-schemes/alpaca-dark.xml");
 
 /// $XDG_DATA_HOME or $HOME/.local/share, namespaced by the app.
 fn dirs_xdg() -> PathBuf {

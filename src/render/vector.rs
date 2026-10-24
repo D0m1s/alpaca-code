@@ -6,7 +6,7 @@
 //! (the double resample that blurred the old pipeline, CLAUDE.md 2026-10-04).
 //! Tree cells and editor tab badges KEEP pixbuf/Texture.
 
-use crate::badges;
+use crate::render::badges;
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::gdk::subclass::prelude::*; // PaintableImpl + Ext (gdk4 subclass mod prelude)
@@ -426,7 +426,7 @@ pub(crate) fn icon(name: &str) -> Option<VecIcon> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::badges::svg_data;
+    use crate::render::badges::svg_data;
 
     const GOLDEN: [(&str, f32, usize); 13] = [
         // (icon, viewBox units, walked raw shape count) — frozen against the

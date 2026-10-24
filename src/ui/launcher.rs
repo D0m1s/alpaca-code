@@ -26,12 +26,14 @@ use gdk_pixbuf::prelude::*;
 use relm4::gtk::{self, gdk, gio, prelude::*};
 use relm4::prelude::*;
 
-use crate::{gitstatus, state, vector};
+use crate::git::gitstatus;
+use crate::support::state;
+use crate::render::vector;
 
 /// The llama, baked one-shot (magick Lanczos 1254→80) from the user-supplied
 /// "Cute Fluffy Llama Icon.png" — frozen artifact like the seti set; the bake
 /// is NOT tracked. Shown 1:1 at its 80px bake (no resample anywhere).
-const LLAMA: &[u8] = include_bytes!("../assets/alpaca-80.png");
+const LLAMA: &[u8] = include_bytes!("../../assets/alpaca-80.png");
 /// The launcher's credit link (user decision 2026-10-15).
 const BY_URI: &str = "https://github.com/D0m1s";
 
@@ -105,7 +107,7 @@ pub fn scan_workbenches(dir: &Path) -> Vec<WbEntry> {
             .into_iter()
             .filter(|(root, _)| Path::new(root).is_dir())
             .map(|(root, sess)| Proj {
-                name: crate::app::py_basename(&root),
+                name: crate::ui::app::py_basename(&root),
                 lang: sess.language,
                 branch: gitstatus::branch_of(&root),
             })

@@ -21,7 +21,8 @@ use std::time::Duration;
 use relm4::gtk::{self, gio, glib, pango, gdk_pixbuf, prelude::*};
 use relm4::prelude::*;
 
-use crate::{badges, gitstatus};
+use crate::render::badges;
+use crate::git::gitstatus;
 
 pub const SKIP_DIRS: [&str; 7] = [
     "node_modules",
@@ -364,7 +365,7 @@ mod tests {
 // chain-up — rows' transparent CSS background lets the band show, while
 // opaque paint (selected #1b3560, cells' text) draws on top of it.
 
-use crate::treehover::HoverTree;
+use crate::fs::treehover::HoverTree;
 
 
 // ---- FileTree component ----------------------------------------------------

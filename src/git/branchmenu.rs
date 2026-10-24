@@ -20,8 +20,8 @@ use std::time::Duration;
 use relm4::gtk::{self, glib, prelude::*};
 use relm4::prelude::*;
 
-use crate::vector;
-use crate::gitstatus::{self, GitStatusKind};
+use crate::render::vector;
+use crate::git::gitstatus::{self, GitStatusKind};
 
 #[derive(Debug)]
 pub enum BranchMenuMsg {

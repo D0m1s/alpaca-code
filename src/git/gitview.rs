@@ -20,10 +20,10 @@ use std::path::PathBuf;
 use relm4::gtk::{self, gdk_pixbuf, glib, pango, prelude::*};
 use relm4::prelude::*;
 
-use crate::badges;
-use crate::filetree::icon_of;
-use crate::gitstatus::{self, FlightOut, GitStatusKind, Rows};
-use crate::treehover::{HoverTree, toggle_hit};
+use crate::render::badges;
+use crate::fs::filetree::icon_of;
+use crate::git::gitstatus::{self, FlightOut, GitStatusKind, Rows};
+use crate::fs::treehover::{HoverTree, toggle_hit};
 
 /// CHANGES strip icon law — WORKSPACE parity (filetree.rs push_row): chip art
 /// when the extension has a badge, else the themed symbolic fallback when it

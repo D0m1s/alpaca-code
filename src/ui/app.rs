@@ -15,15 +15,17 @@ use relm4::gtk::{self, gdk, gio, glib, pango, prelude::*};
 use relm4::component::ComponentController;
 use relm4::{Component, ComponentParts, ComponentSender};
 
-use crate::editor::{Editor, EditorMsg, EditorOutput};
-use crate::filetree::FileTreeMsg;
-use crate::gitpanel::{GitPanel, GitPanelMsg, GitPanelOutput, ProbeChild};
-use crate::gitview::GitViewMsg;
-use crate::launcher::{Launcher, LauncherMsg, LauncherOutput};
-use crate::panes::{Panes, PanesMsg, PanesOutput, kill_tree};
-use crate::{runctl, state, vector};
+use crate::ui::editor::{Editor, EditorMsg, EditorOutput};
+use crate::fs::filetree::FileTreeMsg;
+use crate::git::gitpanel::{GitPanel, GitPanelMsg, GitPanelOutput, ProbeChild};
+use crate::git::gitview::GitViewMsg;
+use crate::ui::launcher::{Launcher, LauncherMsg, LauncherOutput};
+use crate::ui::panes::{Panes, PanesMsg, PanesOutput, kill_tree};
+use crate::support::runctl;
+use crate::support::state;
+use crate::render::vector;
 
-pub use crate::editor::EditorSnapshot;
+pub use crate::ui::editor::EditorSnapshot;
 
 #[derive(Debug)]
 pub enum AppMsg {
@@ -89,7 +91,7 @@ pub enum AppMsg {
     /// editor SaveOpen's ack — the ONLY thing that releases pending_commit
     Flushed(usize),
     /// git rows → that workspace's diff-tab renewal
-    GitChanged(usize, crate::gitstatus::Rows),
+    GitChanged(usize, crate::git::gitstatus::Rows),
     /// window notify::is-active → the ACTIVE workspace's git re-sync
     WindowActive,
     /// Edit menu → the active workspace's editor
@@ -1064,7 +1066,7 @@ impl Component for App {
                         // it from the open set (a persisted ghost steals a
                         // cap slot and evicts live workspaces at next boot)
                         sender.spawn_command(move |_| {
-                            let st = std::fs::read_to_string(crate::state::state_path())
+                            let st = std::fs::read_to_string(crate::support::state::state_path())
                                 .unwrap_or_default();
                             let ops = st
                                 .split("\"open_projects\": [")
@@ -1120,7 +1122,7 @@ impl Component for App {
                         let wsb_state = wsb.clone(); // closure gets its own copy
                         let wsc = ws_dir.to_string_lossy().replace("wsA", "wsC");
                         sender.spawn_command(move |_| {
-                            let st = std::fs::read_to_string(crate::state::state_path())
+                            let st = std::fs::read_to_string(crate::support::state::state_path())
                                 .unwrap_or_default();
                             let ops = st
                                 .split("\"open_projects\": [")
@@ -1220,7 +1222,7 @@ impl Component for App {
                         // The uuid name is unknowable here — read the dir's one
                         // workbenches/<uuid>.json (S4's grep-on-disk style)
                         sender.spawn_command(move |_| {
-                            let dir = crate::state::workbenches_dir();
+                            let dir = crate::support::state::workbenches_dir();
                             let mut got: Option<String> = None;
                             if let Ok(rd) = std::fs::read_dir(&dir) {
                                 for e in rd.flatten() {
@@ -1231,7 +1233,7 @@ impl Component for App {
                                 }
                             }
                             let wb = got.unwrap_or_default();
-                            let st = std::fs::read_to_string(crate::state::state_path())
+                            let st = std::fs::read_to_string(crate::support::state::state_path())
                                 .unwrap_or_default();
                             let ok = wb.contains("\"vpane\": 650")
                                 && wb.contains("\"hpane\": 900")
@@ -2050,7 +2052,7 @@ impl App {
         let Some(wb) = state::load_workbench(name) else {
             return;
         };
-        let roots = crate::launcher::open_roots(
+        let roots = crate::ui::launcher::open_roots(
             &wb,
             state::load().last_project.as_deref().map(Path::new),
         );
@@ -2153,7 +2155,7 @@ impl App {
             wb.projects.insert(
                 w.root.to_string_lossy().into_owned(),
                 state::ProjectSession {
-                    language: crate::filetree::dominant_language(&w.root),
+                    language: crate::fs::filetree::dominant_language(&w.root),
                     vpane: w.vpane.position(),
                     hpane: w.hpane.position(),
                     scroll: w
@@ -2559,7 +2561,7 @@ pub fn run(root: Option<String>) {
     // Empty argv: RelmApp's default (process argv) makes g_application_run
     // treat the project dir as a "file to open" → 'can not open files' critical.
     let relm = relm4::RelmApp::new("io.alpaca.rs").with_args(vec![]);
-    crate::style::init();
+    crate::render::style::init();
     relm.run::<App>(root);
 }
 

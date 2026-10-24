@@ -12,7 +12,7 @@ use relm4::{Component, ComponentParts, ComponentSender};
 use vte4::prelude::*;
 use vte4::PtyFlags;
 
-use crate::vector;
+use crate::render::vector;
 
 /// /proc/<pid> existence — zombies keep /proc (life is judged by exit
 /// status elsewhere).
@@ -409,7 +409,7 @@ impl Panes {
         cwd: Option<&str>,
         argv: &[String],
     ) {
-        let envv = crate::runctl::pane_environ();
+        let envv = crate::support::runctl::pane_environ();
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         let envv: Vec<&str> = envv.iter().map(String::as_str).collect();
         // every spawn failure prints keyed by argv[0]

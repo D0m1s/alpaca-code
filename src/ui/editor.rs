@@ -21,9 +21,9 @@ use relm4::gtk::subclass::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
 use sourceview5::prelude::*; // BufferExt: set_style_scheme/set_language
 
-use crate::vector;
-use crate::badges;
-use crate::gitstatus::{self, Sides};
+use crate::render::vector;
+use crate::render::badges;
+use crate::git::gitstatus::{self, Sides};
 
 pub const GONE_NOTE: &str = "‹file has been deleted›";
 pub const BINARY_NOTE: &str = "‹file changed on disk — not UTF-8 text›";

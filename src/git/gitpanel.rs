@@ -10,10 +10,10 @@ use relm4::gtk::{self, gio, glib, pango, prelude::*};
 use relm4::prelude::*;
 use relm4::component::ComponentController;
 
-use crate::branchmenu::{BranchMenu, BranchMenuMsg, BranchMenuOutput};
-use crate::filetree::{FileTree, FileTreeMsg, FileTreeOutput};
-use crate::gitstatus::{self, GitStatusKind, Rows};
-use crate::gitview::{ChangesView, GitViewMsg, GitViewOutput};
+use crate::git::branchmenu::{BranchMenu, BranchMenuMsg, BranchMenuOutput};
+use crate::fs::filetree::{FileTree, FileTreeMsg, FileTreeOutput};
+use crate::git::gitstatus::{self, GitStatusKind, Rows};
+use crate::git::gitview::{ChangesView, GitViewMsg, GitViewOutput};
 
 /// Probe-only child driver: T8's probe sends child inputs through the panel so
 /// probe-driven flights behave exactly like real ones (child outputs still
@@ -544,7 +544,7 @@ impl GitPanel {
             // probe-only fix-1 assert instrument: the wrapper times these
             // lines — a landed commit must NOT keep this flight from firing
             if std::env::var("ALPACA_PROBE_S2").is_ok() {
-                println!("PROBE probe-flight: root={root} ts={}", crate::app::epoch_ms());
+                println!("PROBE probe-flight: root={root} ts={}", crate::ui::app::epoch_ms());
             }
             // old-probe order restored: changes()/ahead() fired regardless of
             // branch_of — a detached-HEAD repo still yields rows + GitChanged

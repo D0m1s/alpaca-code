@@ -915,7 +915,7 @@ mod tests {
         // file rasterizable by the system svg loader into a full 16px cell
         for stem in STEMS {
             let name = format!("seti-{stem}.svg");
-            let pix = crate::badges::svg_pixbuf(&name, 16)
+            let pix = crate::render::badges::svg_pixbuf(&name, 16)
                 .unwrap_or_else(|| panic!("{name}: rasterize failed"));
             assert_eq!(pix.width(), 16, "{name}");
         }

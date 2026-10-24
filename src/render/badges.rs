@@ -7,7 +7,7 @@
 //! since the 2026-10-09 seti swap; the old cairo text-chip pipeline stays only for the
 //! gitview status letter tiles.
 
-use crate::seti;
+use crate::render::seti;
 use gdk_pixbuf::prelude::*;
 use gdk_pixbuf::{Colorspace, Pixbuf, PixbufLoader};
 use gtk4::cairo::{Context, FontSlant, Format, FontWeight, ImageSurface};
