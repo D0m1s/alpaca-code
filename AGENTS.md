@@ -5,7 +5,7 @@ alpaca-code — a GTK4 desktop editor (Rust, relm4) wrapping the raw `claude` CL
 ## Commands
 
 ```sh
-cargo test          # THE gate — displayless, all 70 unit tests
+cargo test          # THE gate — displayless, all 71 unit tests
 cargo build         # cargo test does NOT refresh the runnable bin
 ./target/debug/alpaca-code-rs [project-dir]   # no arg → boot launcher hub
 ```

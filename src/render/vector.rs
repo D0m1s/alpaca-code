@@ -502,8 +502,9 @@ pub(crate) mod tests {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn vecicon_snapshot_records_nodes() {
+    #[test]
+    fn vecicon_snapshot_records_nodes() {
+        gtk4::init().unwrap();
         for (name, _, _) in GOLDEN {
             let v = icon(name).unwrap_or_else(|| panic!("{name}: icon None"));
             let snap = gtk4::Snapshot::new();

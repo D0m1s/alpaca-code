@@ -1,19 +1,48 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gtk4::prelude::*;
 
 const CSS: &str = include_str!("../../assets/app.css");
 const SCHEME: &str = include_str!("../../assets/style-schemes/alpaca-dark.xml");
 const ICON_THEME_BUNDLE: &[u8] = include_bytes!("../../assets/app-icons.gresource");
+const ICON_SIZES: [(&str, &[u8]); 6] = [
+    (
+        "16x16",
+        include_bytes!("../../assets/icons/io.alpaca.rs-16.png"),
+    ),
+    (
+        "32x32",
+        include_bytes!("../../assets/icons/io.alpaca.rs-32.png"),
+    ),
+    (
+        "48x48",
+        include_bytes!("../../assets/icons/io.alpaca.rs-48.png"),
+    ),
+    (
+        "64x64",
+        include_bytes!("../../assets/icons/io.alpaca.rs-64.png"),
+    ),
+    (
+        "128x128",
+        include_bytes!("../../assets/icons/io.alpaca.rs-128.png"),
+    ),
+    (
+        "256x256",
+        include_bytes!("../../assets/icons/io.alpaca.rs-256.png"),
+    ),
+];
 
-fn dirs_xdg() -> PathBuf {
-    let base = std::env::var("XDG_DATA_HOME")
+fn data_home() -> PathBuf {
+    std::env::var("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             PathBuf::from(std::env::var("HOME").expect("HOME unset")).join(".local/share")
-        });
-    base.join("alpaca-code-rs")
+        })
+}
+
+fn dirs_xdg() -> PathBuf {
+    data_home().join("alpaca-code-rs")
 }
 
 fn scheme_dir() -> PathBuf {
@@ -26,7 +55,20 @@ fn scheme_dir() -> PathBuf {
     dir
 }
 
+pub fn write_app_icons(data_root: &Path) {
+    for (size, bytes) in &ICON_SIZES {
+        let dir = data_root.join("icons/hicolor").join(*size).join("apps");
+        fs::create_dir_all(&dir).expect("create hicolor icon dir");
+        let target = dir.join("io.alpaca.rs.png");
+        if fs::read(&target).ok().as_deref() != Some(*bytes) {
+            fs::write(&target, bytes).expect("write app icon");
+        }
+    }
+}
+
 pub fn init_icons() {
+    write_app_icons(&data_home());
+
     let bundle = gtk4::gio::Resource::from_data(&gtk4::glib::Bytes::from_static(ICON_THEME_BUNDLE))
         .expect("app-icons.gresource is a valid bundle");
     gtk4::gio::resources_register(&bundle);
@@ -50,14 +92,20 @@ pub fn init() {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    #[cfg(test)]
-    pub(crate) fn bundled_app_icon_resolves_by_name() {
-        let theme = gtk4::IconTheme::new();
-        theme.add_resource_path("/io/alpaca/theme");
-        assert!(
-            theme.has_icon("io.alpaca.rs"),
-            "bundled hicolor theme must make io.alpaca.rs resolvable"
-        );
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_icons_install_completely_and_drift() {
+        let root = std::env::temp_dir().join(format!("alpaca-icons-{}", std::process::id()));
+        write_app_icons(&root);
+        for (size, bytes) in &ICON_SIZES {
+            let target = root
+                .join("icons/hicolor")
+                .join(size)
+                .join("apps/io.alpaca.rs.png");
+            assert_eq!(fs::read(&target).unwrap().as_slice(), *bytes);
+        }
+        std::fs::remove_dir_all(&root).ok();
     }
 }

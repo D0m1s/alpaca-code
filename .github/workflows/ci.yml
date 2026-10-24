@@ -33,7 +33,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2.9.3
 
-      - name: test (70 units, under xvfb — the VecIcon golden test calls gtk4::init, which needs a display)
+      - name: test (71 units, under xvfb — the VecIcon golden test calls gtk4::init, which needs a display)
         run: xvfb-run --auto-servernum cargo test --locked
 
   clippy:
