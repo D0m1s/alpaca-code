@@ -97,6 +97,18 @@ fn git_run(
     env_prompt: bool,
     timeout: Duration,
 ) -> Option<std::process::Output> {
+    git_run_env(root, &[], args, env_prompt, timeout)
+}
+
+/// git_run with extra index/session env vars (GIT_INDEX_FILE for the
+/// staged-removal commit; Command::env merges onto the inherited environ).
+fn git_run_env(
+    root: &str,
+    envs: &[(&str, String)],
+    args: &[&str],
+    env_prompt: bool,
+    timeout: Duration,
+) -> Option<std::process::Output> {
     if root.is_empty() {
         return None;
     }
@@ -107,6 +119,9 @@ fn git_run(
         .stderr(Stdio::piped());
     if env_prompt {
         cmd.env("GIT_TERMINAL_PROMPT", "0");
+    }
+    for (k, v) in envs {
+        cmd.env(k, v);
     }
     let mut child = cmd.spawn().ok()?;
     let mut out_h = child.stdout.take()?;
@@ -477,6 +492,29 @@ pub fn diff_for(root: &str, rel: &str, is_untracked: bool) -> Option<(String, bo
     Some((text, false))
 }
 
+/// Rel paths among `paths` whose change is a STAGED removal — index already
+/// records the deletion (`git rm --cached` on a keep-on-disk file: the row
+/// reads `D ` although the file still exists). Such a path must NEVER ride
+/// `git add`: git refuses index-removed + gitignored worktree files outright
+/// ("The following paths are ignored by one of your .gitignore files", rc≠0,
+/// failing the WHOLE batch — measured) and silently RE-TRACKS non-ignored
+/// ones, undoing the untracking. `diff --cached` only (unstaged ` D` deletions
+/// commit fine through the `--only` pathspec); `-z` + `--diff-filter=D` =
+/// bare NUL names, no letter/quote parsing.
+fn staged_removals(root: &str, paths: &[String]) -> BTreeSet<String> {
+    let mut args: Vec<&str> = vec!["diff", "--cached", "--name-only", "--diff-filter=D", "-z", "--"];
+    args.extend(paths.iter().map(|s| s.as_str()));
+    match git_out(root, &args, 15) {
+        Some(bytes) => bytes
+            .split(|b| *b == 0)
+            .map(|s| String::from_utf8_lossy(s).to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        // no HEAD / spawn fail / timeout → no staged removals; the common flow
+        None => BTreeSet::new(),
+    }
+}
+
 pub fn commit(root: &str, paths: &[String], msg: &str) -> (bool, String) {
     if paths.is_empty() || !has_git(root) {
         return (false, "No files selected".into());
@@ -488,13 +526,25 @@ pub fn commit(root: &str, paths: &[String], msg: &str) -> (bool, String) {
     // index; a path existing solely as a staged removal (git rm/mv/rename)
     // refuses `git add` (fatal pathspec, rc 128 measured) and needs no add —
     // the pathspec is already staged. Keep the FULL list for --only; add only
-    // what exists (the symlink_metadata check keeps a dangling symlink's typechange addable).
+    // what exists (the symlink_metadata check keeps a dangling symlink's typechange addable)
+    // minus staged removals kept on disk (staged_removals law above).
+    let staged_rm = staged_removals(root, paths);
     let present: Vec<&String> = paths.iter().filter(|p| {
         std::path::Path::new(root).join(*p).symlink_metadata().is_ok()
     }).collect();
-    if !present.is_empty() {
+    let addable: Vec<&String> = present.iter().copied()
+        .filter(|p| !staged_rm.contains(*p))
+        .collect();
+    // every selected removal, staged (`D `) or unstaged (` D`) — both must be
+    // force-removed from the commit index: the unstaged one still rides the
+    // real index, the staged one only lives as an index-vs-HEAD difference
+    let mut removals: BTreeSet<String> = paths.iter()
+        .filter(|p| !present.contains(p))
+        .cloned().collect();
+    removals.extend(staged_rm);
+    if !addable.is_empty() {
         let mut args: Vec<&str> = vec!["add", "--"];
-        args.extend(present.iter().map(|s| s.as_str()));
+        args.extend(addable.iter().map(|s| s.as_str()));
         let Some(r) = git_run(root, &args, true, Duration::from_secs(30)) else {
             return (false, "git failed: timed out".into());
         };
@@ -503,17 +553,94 @@ pub fn commit(root: &str, paths: &[String], msg: &str) -> (bool, String) {
             return (false, clip400(&text));
         }
     }
-    let mut args: Vec<&str> = vec!["commit", "--only", "-m", msg, "--"];
-    args.extend(paths.iter().map(|s| s.as_str()));
-    let Some(r) = git_run(root, &args, true, Duration::from_secs(60)) else {
+    if removals.is_empty() {
+        let mut args: Vec<&str> = vec!["commit", "--only", "-m", msg, "--"];
+        args.extend(paths.iter().map(|s| s.as_str()));
+        let Some(r) = git_run(root, &args, true, Duration::from_secs(60)) else {
+            return (false, "git failed: timed out".into());
+        };
+        if !r.status.success() {
+            let text = either(&r, "git commit failed");
+            return (false, clip400(&text));
+        }
+        let out = String::from_utf8_lossy(&r.stdout).to_string();
+        let first = out.trim().lines().next().unwrap_or("Committed.").to_string();
+        return (true, clip400(&first));
+    }
+    // Removals selected: `git commit --only` cannot carry them — its temp
+    // index takes WORKTREE content for pathspec paths (it would re-track the
+    // keep-on-disk untracked files and erase the staged state; measured) and
+    // resets the real index to the new HEAD, discarding other staged work.
+    // So: build a temp index (HEAD − removals + selected worktree content)
+    // and commit it whole; the real index is touched only by the final
+    // unify below.
+    let gitdir = match git_out(root, &["rev-parse", "--git-dir"], 5) {
+        Some(b) => String::from_utf8_lossy(b.trim_ascii()).to_string(),
+        None => return (false, "git failed: rev-parse".into()),
+    };
+    let gitdir = std::path::Path::new(root).join(&gitdir); // relative ".git" → root
+    let tmpidx = std::env::temp_dir().join(format!(
+        "alpaca-commit-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let envs = [("GIT_INDEX_FILE", tmpidx.to_string_lossy().into_owned())];
+    let _ = std::fs::copy(gitdir.join("index"), &tmpidx); // fresh index ok — read-tree below
+    let Some(r) = git_run_env(root, &envs, &["read-tree", "HEAD"], true, Duration::from_secs(15)) else {
+        let _ = std::fs::remove_file(&tmpidx);
+        return (false, "git failed: timed out".into());
+    };
+    if !r.status.success() {
+        let text = either(&r, "git read-tree failed");
+        let _ = std::fs::remove_file(&tmpidx);
+        return (false, clip400(&text));
+    }
+    let mut args: Vec<&str> = vec!["update-index", "--force-remove", "--"];
+    let removal_list: Vec<String> = removals.iter().cloned().collect();
+    args.extend(removal_list.iter().map(|s| s.as_str()));
+    let Some(r) = git_run_env(root, &envs, &args, true, Duration::from_secs(15)) else {
+        let _ = std::fs::remove_file(&tmpidx);
+        return (false, "git failed: timed out".into());
+    };
+    if !r.status.success() {
+        let text = either(&r, "git update-index failed");
+        let _ = std::fs::remove_file(&tmpidx);
+        return (false, clip400(&text));
+    }
+    // the addable worktree content rides the temp index too (a plain commit
+    // below is index-only — git commit --only's worktree-taking is what we're
+    // avoiding; here it is what we do instead)
+    if !addable.is_empty() {
+        let mut args: Vec<&str> = vec!["update-index", "--add", "--"];
+        args.extend(addable.iter().map(|s| s.as_str()));
+        let Some(r) = git_run_env(root, &envs, &args, true, Duration::from_secs(15)) else {
+            let _ = std::fs::remove_file(&tmpidx);
+            return (false, "git failed: timed out".into());
+        };
+        if !r.status.success() {
+            let text = either(&r, "git update-index failed");
+            let _ = std::fs::remove_file(&tmpidx);
+            return (false, clip400(&text));
+        }
+    }
+    let Some(r) = git_run_env(root, &envs, &["commit", "-m", msg], true, Duration::from_secs(60)) else {
+        let _ = std::fs::remove_file(&tmpidx);
         return (false, "git failed: timed out".into());
     };
     if !r.status.success() {
         let text = either(&r, "git commit failed");
+        let _ = std::fs::remove_file(&tmpidx);
         return (false, clip400(&text));
     }
     let out = String::from_utf8_lossy(&r.stdout).to_string();
     let first = out.trim().lines().next().unwrap_or("Committed.").to_string();
+    // Unify the REAL index with the removals it still previews (unstaged
+    // deletions keep their entry; --ignore-unmatch no-ops the already-staged
+    // ones). Untouched for everything else — unlike `--only`, which resets it.
+    let mut args: Vec<&str> = vec!["rm", "--cached", "--ignore-unmatch", "-q", "--"];
+    args.extend(removals.iter().map(|s| s.as_str()));
+    let _ = git_run(root, &args, true, Duration::from_secs(15));
+    let _ = std::fs::remove_file(&tmpidx);
     (true, clip400(&first))
 }
 
@@ -1110,6 +1237,79 @@ mod tests {
                 && calls.load(std::sync::atomic::Ordering::Relaxed) == 1,
                 "commit fail stops the flight: {r:?}");
         assert_eq!(r.ctext, "Empty commit message");
+    }
+
+    #[test]
+    fn commit_keeps_untracked_kept_staged_removals() {
+        // The techshop incident: `git rm --cached` a keep-on-disk file that is
+        // now gitignored — the batch `git add` errors ("The following paths
+        // are ignored by one of your .gitignore files") and aborts every
+        // commit; and `commit --only` would RE-TRACK the worktree copy. The
+        // removal must skip add and land as a real deletion, file kept.
+        // Also: staged-but-unselected state must not leak into the commit,
+        // and unstaged deletions ride the old --only pathspec as before.
+        let p = repo("rmkeep");
+        w(&p, "a.txt", "v1\n");
+        w(&p, "ignored.txt", "keep me\n");
+        w(&p, "kept.txt", "unignored keeper\n");
+        w(&p, "stale.txt", "old\n");
+        git(&p, &["add", "."]);
+        git(&p, &["commit", "-q", "-m", "base"]);
+        // build the incident: modified a, untrack-and-ignore ignored.txt,
+        // untrack (NOT ignored) kept.txt, unrelated STAGED other.txt
+        git(&p, &["rm", "-q", "--cached", "ignored.txt", "kept.txt"]);
+        w(&p, ".gitignore", "ignored.txt\n");
+        w(&p, "a.txt", "v2\n");
+        w(&p, "other.txt", "staged, unselected\n");
+        git(&p, &["add", "other.txt"]);
+        let staged_rm = staged_removals(p.to_str().unwrap(), &[
+            "a.txt".into(), "ignored.txt".into(), "kept.txt".into(),
+        ]);
+        assert_eq!(staged_rm.len(), 2, "both staged removals detected, a.txt not");
+        let (ok, text) = commit(p.to_str().unwrap(), &[
+            "a.txt".into(), "ignored.txt".into(), "kept.txt".into(),
+        ], "removals ride the temp index");
+        assert!(ok, "commit with kept staged removals failed: {text}");
+        // a's edit committed, BOTH removals committed as deletions
+        let files = Command::new("git").arg("-C").arg(&p).args(
+            ["show", "--name-only", "--format="],
+        ).output().unwrap();
+        let names = String::from_utf8_lossy(&files.stdout);
+        assert!(names.contains("ignored.txt") && names.contains("kept.txt")
+                && names.contains("a.txt"), "all three in the commit: {names}");
+        let head_a = Command::new("git").arg("-C").arg(&p)
+            .args(["show", "HEAD:a.txt"]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&head_a.stdout), "v2\n", "a's edit rode along");
+        let head_ignored = Command::new("git").arg("-C").arg(&p)
+            .args(["show", "HEAD:ignored.txt"]).output().unwrap();
+        assert!(!head_ignored.status.success(), "ignored.txt must read DELETED at HEAD");
+        // the worktree copies SURVIVE untouched, and neither is re-tracked
+        assert!(p.join("ignored.txt").is_file() && p.join("kept.txt").is_file());
+        let ls = Command::new("git").arg("-C").arg(&p).args(
+            ["ls-files"],
+        ).output().unwrap();
+        let tracked = String::from_utf8_lossy(&ls.stdout);
+        assert!(!tracked.contains("ignored.txt") && !tracked.contains("kept.txt"),
+                "untrackings must hold: {tracked}");
+        // staged-and-unselected other.txt did NOT leak into the commit and
+        // SURVIVES as staged (the --only reset law would have erased it)
+        let head_other = Command::new("git").arg("-C").arg(&p)
+            .args(["show", "HEAD:other.txt"]).output().unwrap();
+        assert!(!head_other.status.success(), "unselected staged file must not leak");
+        let st = Command::new("git").arg("-C").arg(&p).args(
+            ["status", "--porcelain=v1"],
+        ).output().unwrap();
+        let lines = String::from_utf8_lossy(&st.stdout).replace('\0', "\n");
+        assert!(lines.contains("A  other.txt"), "other staged state survives: {lines}");
+        // no ghost rows on the committed paths (the index got unified)
+        assert!(!lines.contains("a.txt"), "committed a.txt clean, no MM ghost: {lines}");
+        // removals-ONLY selection (no addable) still lands
+        git(&p, &["rm", "-q", "--cached", "stale.txt"]);
+        let (ok, text) = commit(p.to_str().unwrap(), &["stale.txt".into()], "deletion only");
+        assert!(ok, "deletion-only commit failed: {text}");
+        let head_stale = Command::new("git").arg("-C").arg(&p)
+            .args(["show", "HEAD:stale.txt"]).output().unwrap();
+        assert!(!head_stale.status.success(), "stale.txt deleted at HEAD");
     }
 
     #[test]

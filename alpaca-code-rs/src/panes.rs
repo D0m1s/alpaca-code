@@ -300,17 +300,28 @@ impl Component for Panes {
         let out = PaneSlot { term: make_term(), pid: Cell::new(None) };
 
         // child-exited routing: output → run lifecycle; agent/term → revive
+        // close law: input() PANICS on a dropped runtime — the closing
+        // workspace's widget tree destroys these terminals and the notebook's
+        // dispose can still fire switch-page into the dead runtime. send()
+        // reports instead; a dead send is a no-op (the listener dies with
+        // the widget it hangs on).
         let out_send = sender.clone();
         out.term.connect_child_exited(move |_t, _status| {
-            out_send.input(PanesMsg::RunExited);
+            if out_send.input_sender().send(PanesMsg::RunExited).is_err() {
+                return;
+            }
         });
         let agent_send = sender.clone();
         agent.term.connect_child_exited(move |_t, _status| {
-            agent_send.input(PanesMsg::PaneExited { key: "agent" });
+            if agent_send.input_sender().send(PanesMsg::PaneExited { key: "agent" }).is_err() {
+                return;
+            }
         });
         let term_send = sender.clone();
         term.term.connect_child_exited(move |_t, _status| {
-            term_send.input(PanesMsg::PaneExited { key: "term" });
+            if term_send.input_sender().send(PanesMsg::PaneExited { key: "term" }).is_err() {
+                return;
+            }
         });
 
         // pane notebook: scrollable, load-bearing page order 0=agent 1=term 2=out
@@ -334,7 +345,14 @@ impl Component for Panes {
         }
         let switch_send = sender.clone();
         nb.connect_switch_page(move |_, _, index| {
-            switch_send.input(PanesMsg::EnsureCurrent(Some(index as i32)));
+            // close law: dispose reselects a page → input() would panic
+            if switch_send
+                .input_sender()
+                .send(PanesMsg::EnsureCurrent(Some(index as i32)))
+                .is_err()
+            {
+                return;
+            }
         });
         root.append(&nb);
 
@@ -414,12 +432,31 @@ impl Panes {
                 if let Some(e) = &error {
                     eprintln!("spawn failed ({argv0}): {e}");
                 }
-                cb_send.input(PanesMsg::SpawnLanded { key, pid, error });
+                // close law: input() panics on a dropped runtime — a spawn in
+                // flight at a close lands with the terminal already dying
+                let _ = cb_send.input_sender().send(PanesMsg::SpawnLanded { key, pid, error });
             },
         );
     }
 
     // ---- workspace -----------------------------------------------------------
+
+    /// Live pane pids for the workspace close (App kills them SYNCHRONOUSLY
+    /// before dropping the component — a queued kill message races relm4's
+    /// shutdown branch in `futures::select!` and can be dropped with it),
+    /// run pid first (session leaders — the pgid kill reaches the tree).
+    pub fn live_pids(&self) -> Vec<i32> {
+        let mut pids = Vec::new();
+        if let Some(pid) = self.run.pid {
+            pids.push(pid);
+        }
+        for slot in [&self.agent, &self.term] {
+            if let Some(pid) = slot.pid.get() {
+                pids.push(pid);
+            }
+        }
+        pids
+    }
 
     /// set_root: kill live children, clear all bookkeeping, reset all
     /// three terminals, status "Ready", idle ensure_current.
@@ -449,7 +486,9 @@ impl Panes {
         self.status(sender.clone());
         let idle_send = sender;
         glib::idle_add_local(move || {
-            idle_send.input(PanesMsg::EnsureCurrent(None));
+            // close law: input() panics on a dropped runtime — the idle can
+            // outlive a close that lands between turns
+            let _ = idle_send.input_sender().send(PanesMsg::EnsureCurrent(None));
             glib::ControlFlow::Break
         });
     }
@@ -527,7 +566,14 @@ impl Panes {
             return;
         }
         let slot = if key == "agent" { &self.agent } else { &self.term };
-        slot.pid.set(if pid > 0 { Some(pid) } else { None });
+        if pid > 0 {
+            slot.pid.set(Some(pid));
+        } else {
+            slot.pid.set(None);
+            // spawn failed (missing binary): drop the once-gate so re-entering
+            // the tab retries — re-entry-triggered only, no respawn loop.
+            self.spawned.remove(key);
+        }
     }
 
     /// stop_run: kill+clear the live run else arm stop-pending; "Ready".

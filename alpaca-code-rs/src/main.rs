@@ -6,6 +6,7 @@ mod filetree;
 mod gitpanel;
 mod gitstatus;
 mod gitview;
+mod launcher;
 mod treehover;
 mod panes;
 mod runctl;

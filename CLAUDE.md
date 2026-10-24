@@ -17,7 +17,241 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
 
 ## Status
 
-- **S1/S2/S3 complete (2026-10-09).**
+- **Workbench naming + deletion (2026-10-15):** the launcher cards gained
+  hover pencil (rename) / trash (delete) and the big `+` gained a NAME
+  prompt. The name lives in the workbench FILE's new `display: Option<String>`
+  field — the file STEM stays the uuid (workbench_path's hex+dash sanitize
+  law keeps arbitrary text out of paths; adopt/Open/last_workbench/mtime
+  laws all still key on the stem). Card label = `display.unwrap_or(stem)`
+  (old files need no migration). Rename = `state::set_workbench_display`
+  (load → set → save) RESTORING the file's mtime after the write (card order
+  = last save; a rename must not ride the top — unit-tested). Delete =
+  `state::delete_workbench` — gio `File::trash()` first (recoverable), unlink
+  fallback on trash-unsupported mounts (never raises; ponytail comment names
+  the ceiling). Popovers = the branchmenu-shape builders (`entry_pop` /
+  `confirm_pop` in launcher.rs): title label + (entry) + Cancel/OK row;
+  Enter or OK commits the TRIMMED text — empty commits TOO and the CALLER
+  decides (rename no-ops, `+` falls back to the folder basename); Esc pops
+  down; ok-css tint `.alpaca-wbok` (blue) / `.alpaca-wbdel` (red) in app.css.
+  The icons are plain Boxes + own GestureClick CLAIMED ON PRESS (the measured
+  `.alpaca-projclose` law; a nested Button never fires) — HIDDEN at rest,
+  revealed by `EventControllerMotion` enter/leave on the card; css `display`
+  doesn't exist on this build (the scrollbar law) — `set_visible` only; the
+  leave arm must NOT hide an icon whose popover is live (an unmapped ancestor
+  unmaps its popover — `popover_open_of` checks first). NEW LAW (measured by
+  the probe's first red run): a popover cannot map on a HIDDEN ancestor —
+  the probe fns reveal the icons before opening (`probe_pencil`/
+  `probe_trash`); production never sees it (hover reveals first). `+` flow =
+  `add.connect_clicked → LauncherMsg::PlusClick → update()'s open_plus`
+  (the prior prompt's popover unparents there — css-DOM children would pile
+  up per click) → output New(name) → `AppMsg::LauncherAdd(name)` →
+  `ask_folder(.., Some(name))` → `OpenNew(p, name)` sets `App.wb_display`
+  (rides in memory; save_all CONSUMES it only when minting a fresh uuid — an
+  adopted save preserves the FILE's `wb.display` instead). The menu New
+  Workbench action now routes ShowLauncher (one naming path — the + prompt).
+  Boot adopt filter: `wb_name` is set ONLY when the workbench file actually
+  loads (stale last_workbench → wb_name None → next save mints fresh, no
+  resurrection; ln-boot-stale-no-adopt probe assert + a preseeded stale
+  state.json in the rig). New icons `pencil.svg` (2 shapes) / `trash.svg`
+  (5 shapes) registered in badges::svg_data + vector GOLDEN (13 entries).
+  Files touched: state.rs (display/delete/_at variants), launcher.rs
+  (namerow/icon_box/wire_click/entry_pop/confirm_pop/walkers), app.rs
+  (AppMsg::LauncherAdd(String)/OpenNew(_, String)/LauncherRename/
+  LauncherDelete + wb_display + boot filter), app.css (launchicon patch +
+  wbpoptitle/wb*button rules with :backdrop restatements — launchcard's
+  `label:backdrop` PIERCES the popovers, css-DOM child law). Probe: LN
+  chain = 15 steps (0-4 untouched, 5 hub, 6+7 rename open/commit —
+  HOLD=7 = the parked popover+revealed-icons capture, 8-10 rename+delete
+  asserts, 11-13 the + prompt (COMMIT never driven — it opens the native
+  picker) + OpenNew identity, 14 DONE; PROBE_LN_MS 15 entries;
+  `ALPACA_PROBE_LN_HOLD=N` parks after step N-1 = the S2_HOLD precedent;
+  /tmp/lnprobe.sh = full chain run, /tmp/lnhold.sh N OUT WAIT = parked
+  capture (WAIT must exceed the chain's ms-sum to the park — a short sleep
+  shoots MID-CHAIN and reads as a different state). 34 asserts green, no
+  parser errors. Entry commit rides `emit_activate()` (probe) — the gesture
+  claim itself stays the measured close-pill law (paint-verified).
+
+- **Workbench Launcher (2026-10-15, workbenches phase step 2):** the hub is a
+  GtkStack PAGE (`launcher`) in the main window (no second window):
+  launcher.rs lists `~/.config/alpaca-code/workbenches/*.json` as one
+  `.alpaca-launchcard` per file, most recent MTIME first (the last save
+  rides first; the file STEM = the workbench name — LauncherOpen loads by it
+  via the workbench_path sanitize law). Boot = the HUB AT EVERY BOOT (user
+  decision; open_projects no longer auto-reopens at boot — BootActivate and
+  slot_of were deleted, the field stays WRITE-ONLY via add/close's
+  live-truth rebuild + the S4 probe's state assert); the CLI `[dir]` arg
+  still boots straight into the project. Card click = `open_workbench`:
+  ADOPT the file (wb/wb_name = that uuid → the next save writes THAT file;
+  the old-preserve law keeps closed projects' sessions across strip edits),
+  roots via `launcher::open_roots` (alphabetical, state's last_project LAST
+  — open_workspace leaves the last-processed root ACTIVE), each through the
+  shared OpenWorkspace (already-open → switch; cap-full reports; sessions
+  restore like any Add). Tiles: basename (py_basename now pub(crate)), the
+  SAVED ProjectSession.language as a chip (`lang_label`: c-sharp→`C#`,
+  typescript→`TS`, prettified fallback; hue = seti palette via `.alpaca-lc-*`
+  classes, each restating `:backdrop` per the leak law) + `branch_of` live
+  read with branch.svg 12px (None → omitted). The big `+` →
+  LauncherOutput::New → LauncherAdd → the shared chooser with fresh=true →
+  `OpenNew` CLEARS wb/wb_name THEN opens (fresh workbench; first save mints
+  its uuid). Zero-workspace close swing now shows the launcher
+  (close_target None arm); New/Open Workbench menu stubs now route there.
+  Masthead llama = assets/alpaca-80.png (1254px source bakes ONE-SHOT
+  magick Lanczos → 80, frozen artifact; include_bytes → PixbufLoader →
+  gdk::Texture for_pixbuf (4.20-deprecated, no replacement binding shipped
+  in gdk4 0.11.5 — targeted allow) drawn 1:1 with set_pixel_size(80): bare
+  paintables draw at the 16px measure floor otherwise — caught in the
+  broadway capture). Footer "By @D0m1s" 10px #5a6375 →
+  `gio::AppInfo::launch_default_for_uri` github.com/D0m1s. Probe:
+  `ALPACA_PROBE_LN=<rig dir>` — 14 asserts (boot page + card order + tile
+  facts via launcher's probe_texts widget walk; card clicks ride
+  probe_click = the REAL Button activation; the blend click asserts the
+  switch-not-add law + identity swap; wrapper /tmp/lnshot.sh = same rig
+  content WITHOUT the probe env → static capture). WB_RESTORE's chain was
+  rewritten for the hub boot (step 0 clicks the card; r-strip/r-adopted/
+  r-page-flipped + the old restore set). Baseline-equal FAILs (pristine
+  HEAD with the same rebuilt rigs, so NOT this change): S2 diff-bar-drive
+  (merged h-bar drive) and S4 pill-band-floats (the never-allocated race).
+  The launcher-at-boot also exposed two capture-rig numbers: broadway's
+  http port = display+8080 (:11 → 8091), and google-chrome-stable is the
+  chromium binary on this box.
+
+- **Launcher chrome hide + language tally (2026-10-15):** while the hub page
+  is visible the header's workspace furniture is HIDDEN — the workbench-menu
+  chevron (`menu_btn`, now an App field) and the projadd `+`. ONE
+  `stack.connect_notify_local(Some("visible-child"))` hook covers every flip
+  (boot/open/switch/close-to-hub); the explicit init set carries boot
+  because the visible page is ALREADY the launcher at init — the queued
+  ShowLauncher is a no-op change and fires no notify. LN chain = 14 asserts
+  now (`ln-chrome-hidden` step 0, `ln-chrome-shown` step 2); paint-verified
+  via lnshot crops (band empty left+center, run/stop + window controls kept).
+  The card chip's language source `filetree::dominant_language` is
+  linguist-style now: git repos tally `git ls-files -z --cached --others
+  --exclude-standard` (gitignored NOT counted — .superpowers/ leaked in the
+  old walk) BYTE-weighted, prose exts (md/rst/txt) skipped, ties lexically
+  smallest (BTreeMap); no git → the old count-walk unchanged. Measured root
+  cause of "XML": the count fold let 203 tracked seti `.svg` badge assets
+  out-count 17 `.rs` (x.svg → xml), and ignored `.superpowers/` added 27
+  more svg — dropping ignored files alone would still have shown XML, bytes
+  are what make rs 533K beat svg 195K. The chip reads the SAVED language,
+  so real repos show the fix from their NEXT Ctrl+Shift+S (no migration).
+  Second chip misfire same day (techshop-admin-frontend read JSON):
+  generated lockfiles are EXCLUDED too — `GENERATED_NAMES`
+  (package-lock.json 603K outweighed that repo's tsx+ts 572K combined) +
+  `GENERATED_EXTS` = ["lock"] (yarn/Cargo/composer; x.lock maps to TOML on
+  this GtkSourceView so Cargo.lock would even hide behind a toml chip).
+  Measured id map on this box: x.tsx → typescript-jsx (chip "TS" via its
+  lang_label rule), x.mjs/x.js → id "js" (not "javascript") — both in the
+  launcher label/class tables.
+  Tests ride the `dominant_ext_of` seam (`LanguageManager::default()`
+  aborts in the displayless run: "Gtk has to be initialized" — never touch
+  it in a unit test).
+
+- **Workbench save/restore (2026-10-14, step 1 of the workbench phase):**
+  Ctrl+Shift+S, the menu Save row, the X button and
+  Exit/Ctrl+Q all run `App::save_all` — tabs flush (defeats the 1s
+  debounce), window geom + `last_workbench` into state.json, and the full
+  session into `~/.config/alpaca-code/workbenches/<uuid>.json` (name =
+  `glib::uuid_string_random()` placeholder; new/open-workbench SURFACE THE
+  LAUNCHER now — 2026-10-15, see its block above). Per live project it saves: paned positions (vpane now STORED on
+  `Workspace`), dominant language (`filetree::dominant_language` =
+  scan_project ext tally → top ext → `LanguageManager::guess_language` id;
+  store-only, no display), filetree open set (abs) + gitview closed set
+  (rel) via the getters `GitPanel::tree_state()` (model access = the
+  `panes.model().live_pids()` law), and the ACTIVE file's scroll
+  (`Editor::scroll_state()` reads the page's vadj live — no mirror,
+  diff pages → None). Save-time reads only; nothing mirrors in App.
+  Restore: `Workspace::new` takes `sess: Option<ProjectSession>` — paned
+  `set_position(saved > 0)` AT CONSTRUCTION (S4 hidden-page clamp law:
+  asserts accept `min(saved, allocated−6)`), gitview closed rides
+  `GitViewMsg::SetClosed` + fill()'s replay, filetree rides the EXISTING
+  `FileTreeMsg::RestoreTree` via `GitPanelMsg::SetTreeState`/`RestoreTree`
+  — the tree half forwards IDLE-DEFERRED. At boot that's belt only (the
+  search entry is EMPTY so SetRoot's `entry.set_text("")` is a no-op —
+  no wipe is queued); the deferral matters for a future re-root with
+  entry text, where the ~150ms search-delay `EntryChanged("")` wipe would
+  land AFTER a direct idle forward and erase it. Editor `Restore` grew the scroll arg — applied via `restore_frac` ONLY
+  when the active page's rel matches the saved rel (clamped-active
+  must not spray). Close path: `connect_close_request` → guarded
+  `input_sender().send(AppMsg::SaveThenClose)` → `Propagation::Stop`
+  ALWAYS (Proceed lets GTK destroy before the queued msg runs), handler
+  saves then `root.destroy()` (destroy ≠ close: no re-emission); quit
+  action → `SaveAndQuit` → save + `main_application().quit()`. Window
+  geom: size+maximized saved, restore clamps like the default and
+  `maximize()` is best-effort; POSITION is impossible on GTK4/Wayland.
+  Probe: `ALPACA_PROBE_WB_SAVE` + `ALPACA_PROBE_WB_RESTORE` (same rig
+  XDG config across the two runs) — save run ends with the real
+  `root.close()`; restore asserts hpane/vpane/scroll/tabs/open-set.
+
+- **Header menu row swap (2026-10-14):** the
+  File/Edit/Window/Help label buttons are GONE — one icon-mode chevron
+  MenuButton (`chevron-down.svg` as custom child) at the header's left opens
+  the workbench menu (New/Open | Save | Exit; `gio::Menu` sections = the
+  separator lines; new → LauncherAdd (fresh workbench), open → ShowLauncher,
+  save → the full save, Exit = `app.quit`).
+  Static popover attached ONCE at init — `refresh_menus`, `HeaderButtons`,
+  `no_arrow` and the old menu-model fns are deleted (the open/recent/
+  minimize/close/about/edit-op ACTIONS stay registered, surface-less, for
+  the workbench phase). Menu test: `workbench_menu_sections_labels_actions`.
+
+- **S1/S2/S3 complete (2026-10-09). S4 (multi-workspace tabs) complete
+  (2026-10-14):** every open project = one `Workspace` (app.rs) — its own
+  Editor/Panes/GitPanel controllers + hpaned assembly; the window child is a
+  `GtkStack` (transition None = instant switch); hidden pages stay ALIVE
+  (VTE children, git probes, diff pages keep running per project; NOTHING is
+  ever re-rooted, so the old dirty-gate discard dialog is deleted). Header
+  center = project pill strip + `+` (`MAX_WORKSPACES=3`; 4th open → dialog;
+  close-pill shipped same day: the ✕ rides INSIDE the pill (image #17: one
+  band covers label + ✕) — pill child box `[label(4px gap)✕]`, pill padding
+  `1px 4px 1px 8px` (tab law: ✕ tucked right, label 8 left; image #18's
+  right-inset tightening was REVERTED same day — the user wanted the right
+  gap back), `.alpaca-projclose`
+  = plain BOX + own GestureClick (C-probe: a nested Button NEVER fires — the
+  outer pill's GestureClick claims the press, measured via CDP real-click on
+  broadway); the ✕'s gesture CLAIMS ON PRESS (`current_sequence()` → Claimed)
+  so the pill click is denied — CDP-click-rig proof: close + active swing +
+  state prune all landed from one real pointer click. Label rule is
+  DESCENDANT `.alpaca-projbtn label` now, x-dim.svg 14px; the ✕'s hover
+  patch = SQUARE 18×18 (`min-height: 18px` + box `valign(Center)` in the
+  21px band — a band-filling patch was a tall bar; image #18 ruling:
+  measured patch insets 4/4/4/4 on the CDP hover rig), color #2b3448. Close =
+  `AppMsg::CloseWorkspace(slot)` → `ws: Vec<Option<Workspace>>` TOMBSTONE:
+  slots are never shifted or reused, so the closure-captured ws tags (the
+  Add-time index every component output carries) stay valid forever — that
+  IS the re-tag law's solution; `close_target` swings the active to the next
+  live slot right else nearest left else zero-workspace (unit test
+  `close_target_swings_right_then_left`). The kill is SYNCHRONOUS: App
+  reads `panes.model().live_pids()` and `kill_tree`s each BEFORE dropping —
+  a queued PanesMsg kill races relm4's shutdown branch in `futures::select!`
+  and can be dropped with it (measured). Per-project `open_tabs` SURVIVE a
+  close (reopen restores pages); closing all clears open_projects +
+  last_project so boot's fallback can't resurrect the closed project. S4
+  probe steps 5–6 assert the whole close (tombstone, swing, state prune,
+  the re-tag proof: an OpenFile output still routes into slot 1 after
+  slot 0 died).
+- **relm4 close law (2026-10-14, measured — the S4 close-probe aborted on
+  it): `ComponentSender::input()` PANICS once the runtime is shut down
+  ("The runtime of the component was shutdown…", relm4 `channel/component.rs`
+  expect) — and two paths fire after a shutdown on every close: (a) glib
+  timers/`spawn_async` callbacks/`idle_add` closures that captured a
+  component sender outlive their own `Controller` drop, (b) relm4's runtime
+  task holds `rt_root`, so the widget tree finalizes INSIDE that task when
+  its shutdown branch returns — `GtkNotebook` dispose reselects a page and
+  emits `switch-page` from inside `drop_glue` (measured backtrace:
+  trampoline mid-`drop_glue::<Box>`). So EVERY closure that can fire without
+  user input (timers, child-exited, spawn-landed, sub-component output
+  bridges, notebook switch-page, popover closed) sends via the guarded form
+  `snd.input_sender().send(msg).is_err() → retire/no-op` instead of
+  `.input()`; `Sender::send`/`.emit` return Options/warnings (never panic)
+  but only `input_sender().send` is checkable from a `ComponentSender`.
+  `#[relm4::component]` does NOT forward a `shutdown` hook (no "shutdown"
+  in relm4-macros 0.11) — cleanup that must be deterministic can't ride it. The persisted
+  `open_projects` is REBUILT from the live strip on every workspace ADD
+  (only growth path — a deleted project's ghost can't evict a live tab;
+  S4's state-open-set-live-truth pins it). All
+  routing is index-tagged (`AppMsg`'s usize first field); `Workspace` holds
+  the per-ws run mirror, snapshot, pending_commit. State: `open_projects`
+  (cap 3, add order) + last_project doubles as the active project; boot
+  reopens the strip then `BootActivate` swings to the remembered one.
   Wayland frame-callback freeze (measured, this stage): after a KWin restart,
   surfaces get no frame callbacks until touched, so GTK allocations FREEZE at
   the startup paint (~0.9-2.2s) — positional/live geometry is unreachable
@@ -35,8 +269,22 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   green unit tests because the bookkeeping is widget-layer. Kill the pane child externally and count resurrections via
   `pgrep -P <app>`; that is the pane-exit path's only live gate.
 - Rust probe envs (PROBE-ONLY chains in app.rs, never run with env unset):
-  `ALPACA_PROBE_S2=<dir>` (workspace chain) and `ALPACA_PROBE_S3=<dir>` (hpane
-  width-step chain + tab strip). S3's wrapper arms a 60ms root `queue_draw`
+  `ALPACA_PROBE_LN=<rig dir>` (launcher chain: boot page + card order + tile
+  facts + real card-click opens + the blend-click law; /tmp/lnshot.sh = the
+  same rig content without the env = a static launcher capture),
+  `ALPACA_PROBE_S2=<dir>` (workspace chain), `ALPACA_PROBE_S3=<dir>` (hpane
+  width-step chain + tab strip), `ALPACA_PROBE_S4=<dir>` (multi-workspace
+  chain: 2 opens + switch-survival + cap asserts + a close step (5–6:
+  tombstone/swing/state-prune/re-tag proof); wsB/wsC are the passed
+  dir's name-replaced siblings — each rig dir needs its letter file
+  (a.txt/b.txt, plus wsB/b2.txt = the re-tag proof's OpenFile target);
+  rig/`XDG_CONFIG_HOME` isolation per note
+  below), `ALPACA_PROBE_WB_SAVE=<wsA dir>` +
+  `ALPACA_PROBE_WB_RESTORE=<wsA dir>` (workbench pair: SAVE builds a
+  session, saves, greps the written files, ends with the real `root.close()`;
+  RESTORE boots on the SAME config dir and asserts the restored paneds/
+  scroll/tabs/open-set — rig: a.txt needs ~300 lines so the scroll span > 0;
+  row 1 = "sub" dir). S3's wrapper arms a 60ms root `queue_draw`
   damage keeper because an occluded/late-mapped Wayland surface gets no frame
   callbacks and its allocations freeze after the first paint (see S3 row
   above); it prints `PROBE step N`/tick traces, and the probe script kills the
@@ -196,20 +444,34 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   surface. Label buttons must size their child labels' natural width (never
   max_width_chars/ellipsize inside a popover list — natural-width collapse
   shrink the popover to "…").
-- Menubar hover pill: paint = header(34) − the button's own v-margins; Breeze's 16px
-  child v-margin (= 18px paint) inflates if padding/min-height grow (bar 34→36/38,
-  measured). Grow the paint by SHRINKING the child v-margin: paint tracks the button's
-  internal box exactly (34−2·margin): `margin: 3px 0` → 28px pill (rows 3..30, pixel
-  capture), matching the run-cell band; bar untouched. Same phantom law as the run pill
-  (buttons track child req +16).
+- Menubar hover pill: paint = header interior (32 today; the bar was 34 when this was
+  first measured) − the button's own v-margins; Breeze's 16px child v-margin (= 18px
+  paint) inflates if padding/min-height grow (bar 34→36/38, measured). Grow the
+  paint by SHRINKING the child v-margin: paint tracks the button's internal box
+  exactly (`interior − 2·margin`). Same phantom law as the run pill (buttons track
+  child req +16).
+- Header band heights EQUAL (2026-10-14, image #13, pixel-scan of the user's
+  screenshot): selected project pill band ~24 (top-gap 4) is the reference;
+  `.alpaca-header menubutton > button` margin `4px 0` → 24; `.alpaca-runpill` +
+  `.alpaca-runpill button` min-height 24 → the run cells paint 24 too. All three
+  bands share the header-interior center (valign/padding must stay 0 on pill text,
+  image valign CENTER). Re-measure if the header interior ever changes. Hover
+  bands are SQUARE = width EQUALS height, not right angles (user ruling
+  2026-10-14, images #14-16, first misunderstood as radius-0 then corrected):
+  height clamped at 24, so width comes to 24 via the 14px icons' horizontal
+  padding `0 5px` (menubutton, `.alpaca-projadd`, runpill buttons); corner
+  radii are the originals (6px menubutton/projadd-family/runcell, 8px runpill
+  row shell).
 - Run-cell hover band (2026-10-05, replaces the bg-image inset): the band is the
   cell's own `background-color` at FULL allocation — `background-image` could only
   be square or arc-bitten (bg-image is clipped to the cell's radius path: full-width
   = bite, inset = square, measured both ways). A bg-color paint is clipped to the
-  same radius, so corners stay ROUND by construction — no inset arithmetic. Band
-  height = 28 exactly BECAUSE the run row stands only 28 tall: `run_row.set_valign(
-  Center)` in app.rs (default FILL would make the row allocate the header
-  interior 32 — band would grow to 32). Keep this alignment if the header changes.
+  same radius, so the shape comes from the cell's own `border-radius` — radius 0 =
+  square by the 2026-10-14 ruling (was round). Band height = the run row's own
+  min-height (24 since 2026-10-14) exactly BECAUSE the row stands that tall:
+  `run_row.set_valign(Center)` in app.rs (default FILL would make the row allocate
+  the header interior 32 — band would grow to 32). Keep this alignment if the
+  header changes.
 - Button metrics live at USER priority, and only after a zero-first sweep
   (2026-10-05): rules at APPLICATION (600) LOSE `button min-height` to Breeze on
   this build (32px button mins); USER (800) moves buttons to px-true. Then the
@@ -296,6 +558,8 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   `display:none` selectors (`arrow`, `icon.down`, `button > box > icon`) don't match it
   either — fix = walk toggle → child box → css class `down`, `set_visible(False)`
   (stable across set_popover/set_label). Icon-mode buttons hide the arrow themselves.
+  (2026-10-14: no label-mode MenuButton survives — the header's one menu button is a
+  custom-child icon button; the walk law is kept for future label menus.)
 - Uniform pill insets belong on the tab's head Box (`.alpaca-panetab { padding: 0 12px }`,
   never on the label: label-side padding leaves the leading icon flush with the pill
   edge (0px) while the text keeps ~9px — the "icon cramped, text floating" look.
@@ -367,7 +631,11 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   `gtk4-broadwayd :N` (fresh number per run) + `dbus-run-session -- env
   GDK_BACKEND=broadway BROADWAY_DISPLAY=:N ALPACA_PROBE_S2=…` (own session →
   own instance); delete `/run/user/1000/broadway*.socket` between runs;
-  pkill -x broadwayd.
+  pkill -x gtk4-broadwayd (measured: the binary/proc NAME is gtk4-broadwayd —
+  `pkill -x broadwayd` matches NOTHING and orphans daemons, 5 collected in one
+  afternoon). Probe rigs must also isolate state.json: `XDG_CONFIG_HOME=<rig dir>`
+  — probe sessions that open projects write open_projects/last_project, which
+  without isolation would leak into the USER's next startup tab strip.
 - GTK widget pairing laws (all measured 2026-10-13 via broadway probe captures
  + app probe runs): (a) `notify::allocation` NEVER fires on this GTK —
   allocation-notify retries were inert and are gone from diff_link;
@@ -389,6 +657,15 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   the split area's first allocation) and set_position must fire at IDLE: a
   set mid-allocation-cascade is discarded (position property 482 with
   children still at the unset 1|958 compute — the S3 same-step law).
+- Stack-page paned law (measured 2026-10-14, S4): a workspace tab opened
+  HIDDEN (non-current stack page) holds its constructed paned position
+  property (1161) across boot and first map — either unallocated (property
+  intact, allocated_width 0) or clamped at first allocation to
+  `min(1161, allocated_width − 6px separator)` (broadway vfb is narrow —
+  observed 966 at hpane-w 972, the clamp doing its job, NOT a recompute).
+  Asserts must accept both (`pos == 1161.min(hw-6)` when allocated, else
+  `pos == 1161`); a pos unrelated to either under a wide hpane WOULD be the
+  real hidden-page recompute (re-apply set_position at switch).
 - Diff line numbers (Task 4): numbers are the REAL @@-hunk file numbers
   (Hunk.old_start/new_start now parsed, `Sides.old_no/new_no`, 0 = pad/hunk
   gap); text = `diff_num_text` (right-aligned via mono spaces, field =
@@ -425,11 +702,48 @@ System deps (Arch): `sudo pacman -S --needed gtksourceview5 vte4`.
   path (wsB = name-replace, not the parent /tmp/s2probe — wrong dir =
   diff-presence FAIL + zero commits).
 
+- Commit vs deliberately-untracked files (2026-10-24, techshop incident,
+  measured): a checked path that is worktree-PRESENT but index-REMOVED
+  (`git rm --cached` untracking, file kept on disk, row reads `D `) must
+  never ride `git add` — git refuses index-removed + gitignored pathspecs
+  ("The following paths are ignored by one of your .gitignore files", rc≠0,
+  ONE bad name fails the WHOLE batch = every commit aborted) and silently
+  RE-TRACKS non-ignored ones; `git commit --only` can't carry them either —
+  its temp index takes WORKTREE content for pathspec paths (resurrects the
+  kept files) and resets the real index to the new HEAD (erases other staged
+  work) — both measured. commit() classifies via `staged_removals()`
+  (`git diff --cached --diff-filter=D -z` — NUL-split names, no letter
+  parsing; no HEAD → none) UNION the ¬present selection paths, never adds
+  them, and commits via a temp index: `GIT_INDEX_FILE=<tmp>` copy + read-tree
+  HEAD + `update-index --force-remove` the removals + `--add` the rest, then
+  a plain `git commit` (hooks/idents run normally) and
+  `git rm --cached --ignore-unmatch` to unify the real index — which the
+  temp commit never otherwise touches, so UNSELECTED staged state survives
+  (--only's reset doesn't). The common no-removals selection stays the old
+  add + `--only` flow byte-identical. Regression test
+  `commit_keeps_untracked_kept_staged_removals` (gitstatus.rs).
+
 ## Persistence schema
 
 `~/.config/alpaca-code/state.json` (atomic temp-file + rename write):
 
 ```json
 {"last_project": "/path|null", "recents": ["/path", …cap 10, newest first],
- "projects": {"/path": {"open_tabs": ["rel/path", …], "active_tab": 0}}}
+ "open_projects": ["/path", …cap 3, opened-order],   // write-only at boot since the 2026-10-15 launcher — still mirrors the live strip
+ "projects": {"/path": {"open_tabs": ["rel/path", …], "active_tab": 0}},
+ "last_workbench": "<uuid>|null", "window": {"width": 1586, "height": 992, "maximized": false}}
+```
+
+`~/.config/alpaca-code/workbenches/<uuid>.json` (per workbench, workbench
+step 2026-10-14; name = `glib::uuid_string_random()` placeholder; tolerant
+`parse_workbench` never raises):
+
+```json
+{"name": "<uuid>", "display": "<user name>|null",  // stem stays the uuid (sanitize law); display = the card label (rename/`+` prompt); absent on old files
+ "projects": {"/abs/project": {
+  "language": "rust|null",            // GtkSourceView id from the top ext tally; the launcher's card chip displays it
+  "vpane": 592, "hpane": 1161,        // 0/neg = not saved → built-in default
+  "scroll": {"rel": "src/main.rs", "frac": 0.37},  // ACTIVE file only; diff pages → null
+  "expanded": ["/abs/project/sub"],   // filetree open set (abs dirs)
+  "changes_closed": ["src"]}}}        // gitview closed set (rel dirs; fill() replays)
 ```

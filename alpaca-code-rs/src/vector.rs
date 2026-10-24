@@ -428,22 +428,25 @@ mod tests {
     use super::*;
     use crate::badges::svg_data;
 
-    const GOLDEN: [(&str, f32, usize); 11] = [
+    const GOLDEN: [(&str, f32, usize); 13] = [
         // (icon, viewBox units, walked raw shape count) — frozen against the
         // art on 2026-10-08 (per-file: path+rect+circle element counts:
         // bot 4+1+0=5, branch 2+0+2=4, chevron-down 1, chevron 1, folder 2,
-        // play 1, plus 2, prompt 2+1=3, stop 1, terminal 2, x-dim 2).
+        // play 1, plus 2, prompt 2+1=3, stop 1, terminal 2, x-dim 2;
+        // launcher 2026-10-15: pencil 2 = body outline + nib line, trash 5).
         // A count change means art or walker drifted — re-walk, don't edit.
         ("bot.svg", 16.0, 5),
         ("branch.svg", 16.0, 4),
         ("chevron-down.svg", 16.0, 1),
         ("chevron.svg", 16.0, 1),
         ("folder.svg", 16.0, 2),
+        ("pencil.svg", 16.0, 2),
         ("play.svg", 16.0, 1),
         ("plus.svg", 16.0, 2),
         ("prompt.svg", 16.0, 3),
         ("stop.svg", 16.0, 1),
         ("terminal.svg", 16.0, 2),
+        ("trash.svg", 16.0, 5),
         ("x-dim.svg", 16.0, 2),
     ];
 

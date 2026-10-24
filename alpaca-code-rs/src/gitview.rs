@@ -135,6 +135,11 @@ pub enum GitViewMsg {
     RowCollapsed(gtk::TreePath),
     CommitClicked,
     StartCommit { root: PathBuf, paths: Vec<String>, msg: String },
+    /// boot restore (workbench step): the saved user-collapsed dir rels —
+    /// fill()'s expand pass replays them on every (re)fill, so no immediate
+    /// replay is needed (boot opens in tree mode; the first changes fill is
+    /// later)
+    SetClosed(Vec<String>),
     /// probe-only: sets the commit-bar entry text (T8's step — the entry is a
     /// user-typed widget; production never constructs this)
     ProbeMsg(String),
@@ -390,6 +395,7 @@ impl Component for ChangesView {
             GitViewMsg::RowCollapsed(tpath) => self.expand_toggle(&tpath, false),
             GitViewMsg::CommitClicked => self.commit_clicked(&sender),
             GitViewMsg::ProbeMsg(t) => self.msg.set_text(&t), // probe-only
+            GitViewMsg::SetClosed(v) => self.closed = v.into_iter().collect(),
             GitViewMsg::StartCommit { root, paths, msg } => {
                 self.start_commit(root, paths, msg, &sender)
             }
@@ -444,6 +450,12 @@ impl Component for ChangesView {
 
 // ---- data ----------------------------------------------------------------------
 impl ChangesView {
+    /// The `closed` set as save-time data (user-collapsed dir REL paths) —
+    /// the workbench save reads this through gitpanel.
+    pub fn closed_dirs(&self) -> Vec<String> {
+        self.closed.iter().cloned().collect()
+    }
+
     /// The refresh as a command flight — the git calls leave the UI
     /// thread, the landing is apply() via Refreshed (landing
     /// order is the flight completion order; the seq token discards leftovers).

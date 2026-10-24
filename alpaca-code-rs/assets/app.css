@@ -39,48 +39,93 @@ paned > separator { background: transparent; min-width: 6px; min-height: 6px; }
 headerbar.alpaca-header windowcontrols { padding: 0; margin: 0; }
 headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22px;
                                                 padding: 0; margin: 0; }
-.alpaca-wintitle { color: #6b7487; font-weight: 500; font-size: 13px; }
-/* menu buttons floor at 34px on this build/theme (GtkImage 16px floor + 18px
-   13px label, measured) — zero vertical padding keeps them from riding higher.
-   Hover pill must grow WITHOUT growing the bar: pill paint = wrapper(34) − child
-   v-margins (wrapper keeps a 16px child v-margin: paint 34−2·8 = 18, measured) —
-   shrinking the child margin grew the paint 18→22 (margin 6) →28 (margin 3),
-   matching the runpill hover band height; min untouched. */
+/* --- workspace pills (multi-project header, 2026-10-14) ---
+   Idle = the EXACT old wintitle look (user requirement 2); hover = the branch
+   pill's #1c2431 fill. Inactive rides dimmer so the active still reads as the
+   current title. has_frame(false) buttons; text color rides the button
+   (branchbtn law) + explicit label:backdrop states (leak law). The runpill
+   sweep first (headerbar buttons' ~16px vertical additive dies ONLY with the
+   everything-0 sweep), then the wanted shape re-raised same block. */
+.alpaca-projbtn, .alpaca-projbtn > box,
+.alpaca-projadd, .alpaca-projadd > label {
+    background: transparent; border: none; border-radius: 6px;
+    min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border-spacing: 0px;
+}
+/* the ✕ rides INSIDE the pill (user image #17): one band covers label + ✕ —
+   padding asymmetric (tab law: label 8px in left, ✕ tucked right — right
+   inset measured to MATCH the ink's top inset: 2px pill + 1px ✕ + ~1.5px
+   glyph margin ≈ 4.5 = the img-centered top gap, user image #18 ruling) */
+.alpaca-projbtn { color: #4d5666; font-size: 13px; font-weight: 500; padding: 1px 4px 1px 8px; }
+/* ink law (the .alpaca-tabname fix): the eye anchors the dense ink band and a
+   centered label hangs ~1.3-1.8px low — 3px bottom pad re-centers the ink in
+   the pill band so the tight hover outline reads optically centred */
+.alpaca-projbtn label, .alpaca-projadd > label { padding: 0 0 3px 0; }
+.alpaca-projbtn.alpaca-on { color: #e6e8ee; background: #1c2431; }
+.alpaca-projbtn:hover, .alpaca-projbtn.alpaca-on:hover, .alpaca-projadd:hover,
+.alpaca-branchbtn:hover, .alpaca-branchbtn.alpaca-open { background: #1c2431; color: #e6e8ee; }
+.alpaca-projbtn label:backdrop { color: #4d5666; }
+.alpaca-projbtn.alpaca-on label:backdrop { color: #e6e8ee; }
+.alpaca-projbtn:hover label:backdrop, .alpaca-projbtn.alpaca-on:hover label:backdrop { color: #e6e8ee; }
+.alpaca-projadd { color: #8a93a6; font-size: 13px; font-weight: 500; padding: 1px 5px; }
+.alpaca-projadd:disabled { color: #3d4454; opacity: 0.35; }
+/* the strip ✕ (close-pill, user image #17): INSIDE the pill — one band
+   covers label + ✕. NOT a button: a Button-in-Button's outer GestureClick
+   claims the press on this build and the ✕ never fires — the ✕ is a plain
+   box node with its own GestureClick claimed on press (innermost gesture in
+   bubble sees it first; the pill click is denied). The additive sweep is
+   kept for the child IMAGE (runpill law). Ink = the baked x-dim stroke
+   (baked-stroke law: css can't recolor); hover = a lighter patch inside
+   the pill band. Image #18 ruling: the patch is a SQUARE 18×18 (img 14 +
+   2×2 pad), not a band-filling bar — min-height 18 + the box valign Center
+   in the 21px pill band → the patch's top inset = its right inset ≈ 4.5. */
+.alpaca-projclose, .alpaca-projclose > box, .alpaca-projclose > image {
+    background: transparent; border: none; border-radius: 4px;
+    min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border-spacing: 0px;
+}
+.alpaca-projclose { color: #4d5666; padding: 0 2px; min-height: 18px; }
+.alpaca-projclose:hover { background: #2b3448; color: #e6e8ee; }
+/* The workbench chevron (the one header MenuButton, 2026-10-14): band =
+   interior 32 − 2·margin → margin 4px 0 = 24px tall; width = icon 14 +
+   2·5px pad = 24 → a 24×24 SQUARE band (ruling images #14-16: band
+   width = height, since height is clamped; rounded corners as before,
+   the project pills' shared 6px radius). The old label-floor arithmetic
+   (34pxGtkImage+label) retired with the File/Edit/Window/Help row. */
 .alpaca-header menubutton > button { background: transparent; color: #e6e8ee; font-size: 13px;
-                                     border: none; border-radius: 6px; padding: 0 8px;
-                                     min-height: 2px; margin: 3px 0; }
+                                     border: none; border-radius: 6px; padding: 0 5px;
+                                     min-height: 2px; margin: 4px 0; }
 .alpaca-header menubutton > button:hover { background: #111723; }
 /* Run/Stop: flat idle like the menu buttons (user: the idle raised pill read as
    wrong fill) — the shell exists only while a run is live (class toggled by
    window._refresh_run_style). No border in either state, so the running flip
-   never jumps layout. The cells are 28px tall (runpill min-height): the
-   buttons themselves refuse to shrink vertically at APPLICATION priority
-   (min-height 2px / padding 0 measured 32px button mins, probe_pill9-16) —
-   USER priority moves them (probe_mtx: px-true 12/13/14/16 tall, minh28 → 28).
+   never jumps layout. The cells are 24px tall (runpill min-height, equalized
+   with the project pills' selected band 2026-10-14): the buttons themselves
+   refuse to shrink vertically at APPLICATION priority (min-height 2px /
+   padding 0 measured 32px button mins, probe_pill9-16) — USER priority moves
+   them (probe_mtx: px-true 12/13/14/16 tall, minh28 → 28).
    Hover swatches live on the wrapper cells, NOT the buttons: cells paint
-   their full (fill) allocation, so a rounded background-color on
-   .alpaca-runcell:hover is a rounded 24/22 × 28 band flush with the menu
-   pills' height. */
+   their full (fill) allocation, so a background-color on .alpaca-runcell:hover
+   is a 24×24 SQUARE band (ruling images #14-16: band width = height — button
+   pad 5px × icon 14; corner radius back to the original 6px/8px). */
 .alpaca-runpill { background: transparent; border: none; border-radius: 8px;
-                  min-height: 28px; }
+                  min-height: 24px; }
 .alpaca-runpill.running, .alpaca-runpill.running:hover { background: #111723; }
 /* Zero the button's OWN css metrics first (min-height/padding/border on a
    headerbar-ancestry button are lost to a ~16px vertical additive that
    survives every button-side kill — probe_dis: headerbar button = 28 css + 16
    = 44; everything-0 incl. the child sweep drops it to 14x14), then re-raise
-   the wanted 28x22 in the later rule (last equal-priority rule wins). */
+   the wanted 24x22 in the later rule (last equal-priority rule wins). */
 .alpaca-runpill button, .alpaca-runpill button > box,
 .alpaca-runpill button > box > image {
     min-height: 0px; min-width: 0px; padding: 0px; margin: 0px; border: none;
     border-spacing: 0px; }
 .alpaca-runpill button { background: transparent; border: none;
-                         min-height: 28px; padding: 0 4px; }
+                         min-height: 24px; padding: 0 5px; }
 .alpaca-runpill button:disabled { opacity: 0.35; }
 /* the hover paint is a real background-color at the cell's full allocation —
-   radius-6 clipped by the paint itself, so the corners are ROUND (the
-   background-image band this replaced could only paint square or arc-bitten
-   corners: bg-image is clipped to the cell's radius path — full-width = bite,
-   inset = square, measured both ways). */
+   radius 6 = the original rounded corners (the background-image band this
+   replaced could only paint square or arc-bitten corners: bg-image is
+   clipped to the cell's radius path — measured both ways; the SQUARE here
+   is geometric, 24 wide × 24 tall). */
 .alpaca-runcell { border-radius: 6px; }
 .alpaca-runcell:hover { background-color: #111723; }
 .alpaca-runpill.running .alpaca-runcell:hover { background-color: #1b2233; }
@@ -145,7 +190,6 @@ headerbar.alpaca-header windowcontrols button { min-width: 24px; min-height: 22p
    .alpaca-hint/.alpaca-branchitem at the same USER tier — hint rendered
    #e6e8ee bright (measured 227,229,235). Every popover label carries its own
    explicit rule → inherits can't reach them, only the pill's own strip label. */
-.alpaca-branchbtn:hover, .alpaca-branchbtn.alpaca-open { background: #1c2431; color: #e6e8ee; }
 .alpaca-branchbtn label:backdrop { color: #8a93a6; }   /* tabs' label:backdrop leak law */
 /* popovers: Breeze paints popover > contents (bg + #4c4e51 border + tail) —
    styling the popover node too paints a double frame (measured 17,23,35 ring
@@ -286,3 +330,72 @@ notebook.alpaca-panes > header > tabs > tab:checked { min-height: 28px; }
    keeps 3px) drops the pane pill's ink the extra ~1px the user read as centered */
 .alpaca-panetabname { font-size: 13px; font-weight: 500; color: #8a93a6; padding: 0 0 2px 0; }
 tab:checked .alpaca-panetabname { color: #e6e8ee; }
+
+/* --- workbench launcher (hub page, 2026-10-15) ---
+   A stack page on the app's own dark window: cards = the .alpaca-card family,
+   tiles = the darker strip tone (#0a0d13); the same raised/airline tokens as
+   everywhere else. Buttons here carry NO headerbar ancestry — the 16px
+   vertical additive dies with headerbar buttons only, so a flat
+   min-height:0 + user-priority rule is enough (branchbtn precedent). */
+.alpaca-launch { padding: 28px 38px 8px; }
+/* the card is a has_frame(false) Button (click = open the workbench): wipe
+   the theme button box, then raise the card shape in the same rule */
+.alpaca-launchcard { background: #0d1017; border: 1px solid #1c2230;
+                     border-radius: 4px; outline: none; box-shadow: none;
+                     min-height: 0; min-width: 0; margin: 0; border-spacing: 0;
+                     padding: 12px 14px; }
+.alpaca-launchcard:hover { background: #111723; border-color: #2b3448; }
+/* label:backdrop leak law: every label inside a button-state node restates
+   its color (Breeze brightens backdrop labels; name/tile read dim otherwise) */
+.alpaca-launchcard label:backdrop { color: #e6e8ee; }
+.alpaca-launchname { font-size: 16px; font-weight: 600; color: #e6e8ee; }
+.alpaca-launchtile { background: #0a0d13; border: 1px solid #1c2230;
+                     border-radius: 4px; padding: 9px 12px; }
+.alpaca-launchtile label { font-size: 13px; color: #e6e8ee; }
+.alpaca-launchlang { font-size: 11px; font-weight: 600; }   /* chip text + hue below */
+.alpaca-lc-blue, .alpaca-lc-blue:backdrop { color: #519aba; }
+.alpaca-lc-green, .alpaca-lc-green:backdrop { color: #8dc149; }
+.alpaca-lc-yellow, .alpaca-lc-yellow:backdrop { color: #cbcb41; }
+.alpaca-lc-purple, .alpaca-lc-purple:backdrop { color: #a074c4; }
+.alpaca-lc-orange, .alpaca-lc-orange:backdrop { color: #e37933; }
+.alpaca-lc-red, .alpaca-lc-red:backdrop { color: #cc3e44; }
+.alpaca-lc-grey, .alpaca-lc-grey:backdrop { color: #6d8086; }
+.alpaca-lc-muted, .alpaca-lc-muted:backdrop { color: #8a93a6; }
+.alpaca-launchbranch, .alpaca-launchbranch:backdrop { font-size: 12px; color: #8a93a6; }
+.alpaca-launchadd { background: #0d1017; border: 1px solid #1c2230;
+                    border-radius: 4px; outline: none; box-shadow: none;
+                    min-height: 0; min-width: 0; margin: 0; border-spacing: 0;
+                    padding: 15px 0; }
+.alpaca-launchadd:hover { background: #1c2431; }
+/* hover pencil/trash: plain Box + GestureClick (the close-pill law) — the
+   21px-band law's SQUARE 18×18 patch ruling (image #18) applies here too:
+   14px img + 2px pad, radius from the card family */
+.alpaca-launchicon { padding: 2px; border-radius: 4px;
+                     min-width: 18px; min-height: 18px; }
+.alpaca-launchicon:hover { background: #2b3448; }
+/* popover content rules — launchcard's `label:backdrop` etc. PIERCE them
+   (popovers are css-DOM children of their parent widget), so every label
+   and button here carries its own explicit full rule */
+.alpaca-wbpoptitle { font-size: 13px; font-weight: 600; color: #8a93a6; }
+.alpaca-wbpoptitle:backdrop { color: #8a93a6; }
+.alpaca-wbcancel, .alpaca-wbok, .alpaca-wbdel {
+    background: #0a0d13; color: #e6e8ee; border: 1px solid #1c2230;
+    border-radius: 4px; outline: none; box-shadow: none; padding: 4px 12px;
+    min-height: 24px; min-width: 0; border-spacing: 0; }
+.alpaca-wbcancel:hover, .alpaca-wbok:hover, .alpaca-wbdel:hover {
+    background: #1c2230; color: #e6e8ee; }
+.alpaca-wbok { background: #12233a; border-color: #2f80ed; }
+.alpaca-wbok:hover { background: #1a3050; }
+.alpaca-wbdel { background: #2a1418; border-color: #cc3e44; }
+.alpaca-wbdel:hover { background: #3a1c22; }
+.alpaca-wbcancel label:backdrop, .alpaca-wbok label:backdrop,
+.alpaca-wbdel label:backdrop { color: #e6e8ee; }
+.alpaca-launchsection { font-size: 13px; font-weight: 600; color: #e6e8ee;
+                        padding-bottom: 6px; border-bottom: 1px solid #1c2230; }
+.alpaca-launchtitle { font-size: 28px; font-weight: 400; color: #e6e8ee; }
+.alpaca-launchby { background: transparent; border: none; box-shadow: none;
+                   outline: none; min-height: 0; min-width: 0; margin: 0;
+                   border-spacing: 0; padding: 2px 4px; font-size: 10px;
+                   color: #5a6375; }
+.alpaca-launchby:hover { color: #8a93a6; }
+.alpaca-launchby label:backdrop { color: #5a6375; }

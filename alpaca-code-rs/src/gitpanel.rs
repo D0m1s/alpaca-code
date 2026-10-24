@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use relm4::gtk::{self, gio, glib, pango, prelude::*};
 use relm4::prelude::*;
+use relm4::component::ComponentController;
 
 use crate::branchmenu::{BranchMenu, BranchMenuMsg, BranchMenuOutput};
 use crate::filetree::{FileTree, FileTreeMsg, FileTreeOutput};
@@ -21,6 +22,9 @@ use crate::gitview::{ChangesView, GitViewMsg, GitViewOutput};
 #[derive(Debug)]
 pub enum ProbeChild {
     Changes(GitViewMsg),
+    /// probe drives the filetree directly (WB save-run's expand step; each
+    /// value sent once, no Clone)
+    Tree(FileTreeMsg),
 }
 
 #[derive(Debug)]
@@ -29,6 +33,11 @@ pub enum GitPanelMsg {
     ModeTree,
     ModeChanges,
     EntryChanged(String),
+    /// Ctrl+Shift+F → put the caret in the shared search entry. No text
+    /// touched here (set_text("") queues the delayed Search("") wipe) — the
+    /// entry routes itself: EntryChanged already fans out per mode
+    /// (tree → FileTreeMsg::Search, changes → GitViewMsg::Filter).
+    FocusSearch,
     /// gitview + branchmenu status reports land here (window wiring's target)
     ChildStatus(GitStatusKind, String),
     ChildBusy(bool),
@@ -54,6 +63,15 @@ pub enum GitPanelMsg {
     /// PROBE-ONLY (ALPACA_PROBE_S3) — filetree min-width assert; production
     /// never sends it
     TreeMin,
+    /// boot restore (workbench step): saved tree-open dirs (abs) + changes
+    /// closed dirs (rel). Workspace::new sends it right after SetRoot.
+    SetTreeState {
+        expanded: Vec<String>,
+        closed: Vec<String>,
+    },
+    /// the DEFERRED replay of the tree half — the idle hops past SetRoot's
+    /// queued EntryChanged("") (its Search("") wipe), see the handler
+    RestoreTree(Vec<String>),
 }
 
 #[derive(Debug)]
@@ -141,12 +159,17 @@ impl Component for GitPanel {
         // each receiver routes the child's outputs through the panel as real
         // inputs/outputs — the same path real flights take (T8's ProbeChild
         // rides it too)
+        // sub-component bridges. close law: an independent sub-runtime can
+        // outlive this panel's own shutdown by turns (relm4 select! races) —
+        // its late output must not input() into a dead parent channel.
         let snd_ft = sender.clone();
         let ft = FileTree::builder().launch(()).connect_receiver(move |_, out| match out {
             FileTreeOutput::OpenFile(p) => {
                 let _ = snd_ft.output(GitPanelOutput::OpenFile(p));
             }
-            FileTreeOutput::Count(n) => snd_ft.input(GitPanelMsg::Count(n)),
+            FileTreeOutput::Count(n) => {
+                let _ = snd_ft.input_sender().send(GitPanelMsg::Count(n));
+            }
         });
         let snd_ch = sender.clone();
         let changes = ChangesView::builder()
@@ -158,12 +181,18 @@ impl Component for GitPanel {
                 GitViewOutput::Commit { root, paths, msg } => {
                     let _ = snd_ch.output(GitPanelOutput::Commit { root, paths, msg });
                 }
-                GitViewOutput::Status(kind, text) => snd_ch.input(GitPanelMsg::ChildStatus(kind, text)),
-                GitViewOutput::Busy(b) => snd_ch.input(GitPanelMsg::ChildBusy(b)),
+                GitViewOutput::Status(kind, text) => {
+                    let _ = snd_ch.input_sender().send(GitPanelMsg::ChildStatus(kind, text));
+                }
+                GitViewOutput::Busy(b) => {
+                    let _ = snd_ch.input_sender().send(GitPanelMsg::ChildBusy(b));
+                }
             });
         let snd_br = sender.clone();
         let branch = BranchMenu::builder().launch(()).connect_receiver(move |_, out| match out {
-            BranchMenuOutput::Status(kind, text) => snd_br.input(GitPanelMsg::ChildStatus(kind, text)),
+            BranchMenuOutput::Status(kind, text) => {
+                let _ = snd_br.input_sender().send(GitPanelMsg::ChildStatus(kind, text));
+            }
         });
 
         // ---- card chrome
@@ -295,7 +324,13 @@ impl Component for GitPanel {
         // (GitPanelMsg contains TreePath via ProbeChild — unsafe for a
         // cross-thread Sender; the local sources dodge the bound entirely)
         glib::timeout_add_local(Duration::from_millis(2000), move || {
-            snd_tick.input(GitPanelMsg::ProbeTick);
+            // close-shutdown law: relm4's ComponentSender::input PANICS on a
+            // dropped runtime — a workspace close drops this panel while the
+            // source lives. send() reports instead; a dead send retires the
+            // timer (the forever probe's only stop condition).
+            if snd_tick.input_sender().send(GitPanelMsg::ProbeTick).is_err() {
+                return glib::ControlFlow::Break;
+            }
             glib::ControlFlow::Continue
         });
 
@@ -330,6 +365,9 @@ impl Component for GitPanel {
             GitPanelMsg::ModeTree => self.set_mode("tree"),
             GitPanelMsg::ModeChanges => self.set_mode("changes"),
             GitPanelMsg::EntryChanged(text) => self.entry_changed(&text),
+            GitPanelMsg::FocusSearch => {
+                self.entry.grab_focus();
+            }
             GitPanelMsg::ChildStatus(kind, text) => self.show_git_status(kind, text, &sender),
             GitPanelMsg::ChildBusy(b) => self.changes_busy = b,
             GitPanelMsg::Count(n) => self.count_label.set_text(&format!("{n} files")),
@@ -347,7 +385,40 @@ impl Component for GitPanel {
             }
             GitPanelMsg::ProbeChild(pc) => match pc {
                 ProbeChild::Changes(m) => self.changes.emit(m),
+                ProbeChild::Tree(m) => self.ft.emit(m),
             },
+            GitPanelMsg::SetTreeState { expanded, closed } => {
+                // gitview half lands NOW: `closed` replays from fill()'s
+                // expand pass on every later changes-mode fill, and gitview's
+                // own SetRoot (queued before this, FIFO) has already cleared
+                // its stale set
+                self.changes.emit(GitViewMsg::SetClosed(closed));
+                // filetree half must NOT forward directly, as belt for the
+                // re-root-with-entry-text case: set_root's
+                // entry.set_text("") is a NO-OP on the boot's empty entry
+                // (identical text emits nothing), so no wipe is queued
+                // today — but any future path that re-roots a panel whose
+                // entry holds text would queue EntryChanged("") → ft
+                // Search("") → populate_root (clears store+open) ~150ms
+                // later (search-delay), AFTER an idle direct forward, and
+                // erase it. The deferred idle keeps the restore past any
+                // such wipe (the same sequencing filetree's own search-clear
+                // restore uses).
+                let snd = sender.clone();
+                glib::idle_add_local_once(move || {
+                    // close law: the idle can outlive the runtime (guarded)
+                    if snd.input_sender().send(GitPanelMsg::RestoreTree(expanded)).is_err() {
+                        // runtime gone — restore dies with the session, fine
+                    }
+                });
+            }
+            GitPanelMsg::RestoreTree(expanded) => {
+                // the wipe has drained by now; RestoreTree reexpands
+                // parents-first with lazy load_children (filetree's own tool)
+                if let Some(root) = self.root.clone() {
+                    self.ft.emit(FileTreeMsg::RestoreTree(root, expanded, 0.0));
+                }
+            }
             // probe-only: typing through the real entry — its delayed
             // search-changed fires the same EntryChanged route a user's
             // keystroke does
@@ -407,6 +478,13 @@ impl Component for GitPanel {
 // ---- git status plumbing ---------------------------------------------------
 
 impl GitPanel {
+    /// Both trees' expansion state as save-time data — filetree's open set
+    /// (abs paths) + gitview's closed set (rel paths). The workbench save
+    /// reads this; model access follows the panes.model().live_pids() law.
+    pub fn tree_state(&self) -> (Vec<String>, Vec<String>) {
+        (self.ft.model().open_dirs(), self.changes.model().closed_dirs())
+    }
+
     /// set_root, step for step.
     fn set_root(&mut self, root: PathBuf, sender: &ComponentSender<Self>) {
         if let Some(m) = self.head_mon.take() {
@@ -511,7 +589,10 @@ impl GitPanel {
                 let snd = sender.clone();
                 // g is closure-baked from this call — the gen IS the token
                 glib::timeout_add_local(Duration::from_millis(2000), move || {
-                    snd.input(GitPanelMsg::PulseFired(g));
+                    // dead-runtime send PANICS via input() — same close law
+                    if snd.input_sender().send(GitPanelMsg::PulseFired(g)).is_err() {
+                        return glib::ControlFlow::Break;
+                    }
                     glib::ControlFlow::Break
                 });
             }
@@ -553,7 +634,6 @@ impl GitPanel {
         let is_git = branch.is_some();
         self.branch.emit(BranchMenuMsg::Update(branch.map(str::to_string)));
         self.dot.set_visible(is_git);
-        self.spin.set_visible(is_git);
         self.git_label.set_visible(is_git);
         self.spin.set_visible(false); // idle state: the dot, never the spinner
         self.ch_btn.set_visible(is_git);

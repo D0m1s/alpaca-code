@@ -185,17 +185,22 @@ pub enum FileState {
 pub struct EditorSnapshot {
     pub open_tabs: Vec<String>,
     pub active_tab: i64,
-    pub has_dirty: bool,
 }
 
 #[derive(Debug)]
 pub enum EditorMsg {
-    Restore(PathBuf, Vec<String>, i64),   // set_root + open still-existing tabs (the only set path)
+    /// set_root + open still-existing tabs (the only set path); the 4th arg
+    /// is the saved active file's scroll (rel, frac) — workbench restore
+    Restore(PathBuf, Vec<String>, i64, Option<(String, f64)>),
     OpenFile(PathBuf),
     SaveActive,
     /// PROBE-ONLY (ALPACA_PROBE_S3) — tab allocation trace (taballoc line);
     /// production never sends it (no S3 chain)
     ProbeTrace(String),
+    /// PROBE-ONLY (ALPACA_PROBE_WB_SAVE) — scroll the active page's vadj to
+    /// frac·(upper−page_size) — a REAL nonzero scroll for the save-run probe;
+    /// production never sends it
+    ProbeScroll(f64),
     /// commit flow flushes dirty buffers among the named abs paths
     SaveOpen(Vec<PathBuf>),
     /// CHANGES row click → side-by-side diff page
@@ -362,7 +367,10 @@ impl Component for Editor {
 
         let snd = sender.clone();
         nb.connect_switch_page(move |_, _, _| {
-            snd.input(EditorMsg::Switched);
+            // close law: Notebook dispose reselects a page → input() would
+            // panic on the dropped runtime (measured live: S4 close-probe
+            // abort inside drop_glue — EnsureCurrent(Some(0)))
+            let _ = snd.input_sender().send(EditorMsg::Switched);
         });
 
         // Ctrl+S saves the active page
@@ -392,9 +400,10 @@ impl Component for Editor {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
-            EditorMsg::Restore(root, tabs, active) => {
-                self.restore(&root, tabs, active, &sender);
+            EditorMsg::Restore(root, tabs, active, scroll) => {
+                self.restore(&root, tabs, active, scroll, &sender);
             }
+            EditorMsg::ProbeScroll(frac) => self.probe_scroll(frac),
             EditorMsg::OpenFile(path) => {
                 self.open_file(&path, &sender);
             }
@@ -422,17 +431,25 @@ impl Component for Editor {
             }
             EditorMsg::SaveOpen(paths) => {
                 // commit flow flush: dirty buffers among the named abs paths go
-                // to disk BEFORE the commit runs. Write errors are swallowed
-                // and Flushed ALWAYS fires — rust must not strand T7's
-                // pending-commit chain on an I/O error (eager-busy gate).
+                // to disk BEFORE the commit runs. Flushed ALWAYS fires — the
+                // chain must not strand on an I/O error (eager-busy gate);
+                // a failed write still pops the error dialog so the commit
+                // never lands stale disk content silently.
                 for idx in 0..self.pages.len() {
                     let flush = self.pages[idx]
                         .path
                         .as_ref()
                         .is_some_and(|p| paths.contains(p))
                         && self.pages[idx].buf.is_modified();
-                    if flush {
-                        let _ = self.write_page(idx);
+                    if flush
+                        && let Err(e) = self.write_page(idx)
+                    {
+                        let name = self.pages[idx]
+                            .path
+                            .as_ref()
+                            .map(|p| basename(p))
+                            .unwrap_or_default();
+                        self.error("Couldn't flush", &format!("{name}: {e}"));
                     }
                 }
                 let _ = sender.output(EditorOutput::Flushed);
@@ -623,7 +640,10 @@ impl Component for Editor {
                         glib::timeout_add_local(
                             std::time::Duration::from_millis(500),
                             move || {
-                                snd.input(EditorMsg::ProbeDiffScroll);
+                                // close law: input() panics on a dropped runtime
+                                if snd.input_sender().send(EditorMsg::ProbeDiffScroll).is_err() {
+                                    return glib::ControlFlow::Break;
+                                }
                                 glib::ControlFlow::Break
                             },
                         );
@@ -682,6 +702,18 @@ impl Editor {
         self.nb.current_page().map(|c| c as usize)
     }
 
+    /// The active file's (rel path, top-scroll fraction) for the workbench
+    /// save — live read, no mirror. Diff pages carry None from snapshot()'s
+    /// filter, so an active diff page saves nothing (tabs skip diffs too).
+    pub fn scroll_state(&self) -> Option<(String, f64)> {
+        let idx = self.active()?;
+        let pg = self.pages.get(idx)?;
+        let p = pg.path.as_ref()?;
+        let root = self.root.as_ref()?;
+        let rel = relpath(p, root);
+        Some((rel, frac_of(&pg.sw)))
+    }
+
     /// the toplevel window (dialogs are transient for it)
     fn window_widget(&self) -> Option<gtk::Window> {
         self.nb.root().and_downcast::<gtk::Window>()
@@ -727,7 +759,14 @@ impl Editor {
 
     /// set_root + open still-existing tabs + clamp by
     /// min(tab, n-1) (a saved index past the end re-clamps) + refresh.
-    fn restore(&mut self, root: &Path, tabs: Vec<String>, active: i64, sender: &ComponentSender<Self>) {
+    fn restore(
+        &mut self,
+        root: &Path,
+        tabs: Vec<String>,
+        active: i64,
+        scroll: Option<(String, f64)>,
+        sender: &ComponentSender<Self>,
+    ) {
         self.set_root(root.to_path_buf());
         for rel in tabs {
             let p = root.join(rel);
@@ -740,8 +779,31 @@ impl Editor {
         // GTK ignores a negative set_current_page; u32::try_from(None-maps it)
         self.nb
             .set_current_page(u32::try_from(active.min((n - 1).max(0))).ok());
+        // the scroll rides ONLY the file it was captured for: a clamped active
+        // index (saved tab vanished) drifted to a different page and the frac
+        // must drop, not spray onto an unrelated file
+        if let Some((rel, frac)) = scroll
+            && let Some(idx) = self.nb.current_page().map(|c| c as usize)
+            && let Some(pg) = self.pages.get(idx)
+            && let Some(p) = pg.path.as_ref()
+            && relpath(p, root) == rel
+        {
+            restore_frac(&pg.sw, frac); // the measured reload-path tool
+        }
         self.refresh_restamps(sender);
         let _ = sender.output(EditorOutput::StateChanged(self.snapshot()));
+    }
+
+    /// PROBE-ONLY (ALPACA_PROBE_WB_SAVE): park the active page's vadj at
+    /// frac·(upper−page_size) — no-op without a real file page.
+    fn probe_scroll(&mut self, frac: f64) {
+        if let Some(idx) = self.active()
+            && let Some(pg) = self.pages.get(idx)
+        {
+            let adj = pg.sw.vadjustment();
+            let span = (adj.upper() - adj.page_size()).max(0.0);
+            adj.set_value(frac * span);
+        }
     }
 
     fn close_all(&mut self) {
@@ -1530,7 +1592,11 @@ impl Editor {
         // without cancelling.
         let snd = sender.clone();
         glib::timeout_add(std::time::Duration::from_millis(120), move || {
-            snd.input(EditorMsg::FsSettled(path.clone()));
+            // close law: input() panics on a dropped runtime — send()
+            // reports; a dead send retires the timer
+            if snd.input_sender().send(EditorMsg::FsSettled(path.clone())).is_err() {
+                return glib::ControlFlow::Break;
+            }
             glib::ControlFlow::Break
         });
     }
@@ -1686,8 +1752,7 @@ impl Editor {
             .collect();
         // index, not a path; restore re-clamps via min(saved, n-1)
         let active_tab = self.nb.current_page().map(i64::from).unwrap_or(0);
-        let has_dirty = self.pages.iter().any(|pg| pg.buf.is_modified());
-        EditorSnapshot { open_tabs, active_tab, has_dirty }
+        EditorSnapshot { open_tabs, active_tab }
     }
 
 }

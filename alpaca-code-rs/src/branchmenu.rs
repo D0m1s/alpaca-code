@@ -76,6 +76,8 @@ pub struct BranchMenu {
     root: Option<PathBuf>,
     gate: bool,
     flight: bool,
+    /// Pick armed this: when the switch lands OK, chain a pull flight
+    chain_pull: bool,
     open_gen: u64,
     close_gen: u64,
     open_armed: bool,
@@ -249,7 +251,11 @@ impl Component for BranchMenu {
         let snd = sender.clone();
         root.connect_clicked(move |_| snd.input(BranchMenuMsg::OpenMenu));
         let snd = sender.clone();
-        pop.connect_closed(move |_| snd.input(BranchMenuMsg::Closed));
+        pop.connect_closed(move |_| {
+            // close law: a tear-down popover can emit closed into a dead
+            // runtime — input() panics, send() reports
+            let _ = snd.input_sender().send(BranchMenuMsg::Closed);
+        });
         let snd = sender.clone();
         let e2 = entry.clone();
         entry.connect_activate(move |_e| {
@@ -272,6 +278,7 @@ impl Component for BranchMenu {
             root: None,
             gate: true,
             flight: false,
+            chain_pull: false,
             open_gen: 0,
             close_gen: 0,
             open_armed: false,
@@ -303,6 +310,8 @@ impl Component for BranchMenu {
             }
             BranchMenuMsg::Gate(g) => self.gate = g,
             BranchMenuMsg::Pick(name) => {
+                // switch, then pull the branch we landed on
+                self.chain_pull = true;
                 self.start(gitstatus::switch, name, "Switching…", "Switched ✓", &sender)
             }
             BranchMenuMsg::Create(name) => {
@@ -356,7 +365,11 @@ impl Component for BranchMenu {
                 let g = self.open_gen;
                 let snd = sender.clone();
                 glib::timeout_add(Duration::from_millis(80), move || {
-                    snd.input(BranchMenuMsg::SubOpen(g));
+                    // close law: input() panics on a dropped runtime — send()
+                    // reports; a dead send retires the timer
+                    if snd.input_sender().send(BranchMenuMsg::SubOpen(g)).is_err() {
+                        return glib::ControlFlow::Break;
+                    }
                     glib::ControlFlow::Break
                 });
             }
@@ -381,6 +394,22 @@ impl Component for BranchMenu {
         match message {
             BranchCommand::Landed { ok, text, okmsg } => {
                 self.flight = false;
+                // armed Pick: switch succeeded → immediately pull the new HEAD.
+                // (Create doesn't arm — a fresh `-b` branch has no upstream;
+                // git's own no-tracking error would only be noise.)
+                if self.chain_pull {
+                    self.chain_pull = false;
+                    if ok {
+                        self.start(
+                            gitstatus::pull,
+                            String::new(),
+                            "Pulling…",
+                            "Pulled ✓",
+                            &sender,
+                        );
+                        return;
+                    }
+                }
                 let _ = sender.output(BranchMenuOutput::Status(
                     if ok { GitStatusKind::Ok } else { GitStatusKind::Err },
                     if ok { okmsg } else { text },
@@ -407,7 +436,11 @@ impl BranchMenu {
         let g = self.close_gen;
         let snd = sender.clone();
         glib::timeout_add(Duration::from_millis(250), move || {
-            snd.input(BranchMenuMsg::SubClose(g));
+            // close law: input() panics on a dropped runtime — send()
+            // reports; a dead send retires the timer
+            if snd.input_sender().send(BranchMenuMsg::SubClose(g)).is_err() {
+                return glib::ControlFlow::Break;
+            }
             glib::ControlFlow::Break
         });
     }
