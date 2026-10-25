@@ -57,6 +57,7 @@ while [ "$i" -lt "${#queue[@]}" ]; do
                 for rp in ${rps[@]+"${rps[@]}"}; do
                     [ -e "$rp/$base" ] && { src="$rp/$base"; break; }
                 done
+                if [ -z "$src" ] && [ -e "$BREW/lib/$base" ]; then src="$BREW/lib/$base"; fi
                 [ -n "$src" ] || { echo "UNRESOLVED @rpath dep $base (in $f)" >&2; exit 1; } ;;
             /*) src="$dep" ;;
             *) continue ;;
