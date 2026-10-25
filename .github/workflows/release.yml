@@ -51,10 +51,10 @@ jobs:
           boot_shot() {
               local shot="$1"; shift
               dbus-run-session -- env XDG_CONFIG_HOME="$PWD/boot-state" \
-                  ./target/release/alpaca-code-rs "$@" >/dev/null 2>&1 &
+                  ./target/release/alpaca-code-rs "$@" >"boots/$shot.log" 2>&1 &
               sleep 6
               pgrep -x alpaca-code-rs >/dev/null \
-                  || { echo "app died before shot: $shot"; exit 1; }
+                  || { echo "app died before shot: $shot"; cat "boots/$shot.log"; exit 1; }
               import -display :99 -window root "boots/$shot.png"
               killall alpaca-code-rs 2>/dev/null || true
               sleep 2
@@ -79,6 +79,7 @@ jobs:
           cp target/release/alpaca-code-rs AppDir/usr/bin/
           cp packaging/io.alpaca.rs.desktop AppDir/io.alpaca.rs.desktop
           cp packaging/io.alpaca.rs.desktop AppDir/usr/share/applications/
+          cp packaging/linux/AppRun AppDir/apprun.sh
           cp assets/icons/io.alpaca.rs-256.png AppDir/io.alpaca.rs.png
           cp AppDir/io.alpaca.rs.png AppDir/.DirIcon
           for s in 16 32 48 64 128 256; do
@@ -95,6 +96,7 @@ jobs:
           export VERSION="$VER"
           ./linuxdeploy-x86_64.AppImage --appdir AppDir \
             -d AppDir/io.alpaca.rs.desktop -i AppDir/io.alpaca.rs.png \
+            --custom-apprun AppDir/apprun.sh \
             --output appimage
           mkdir -p dist
           mv alpaca-code*.AppImage "dist/alpaca-code-$VER-linux-x86_64.AppImage"
@@ -102,14 +104,25 @@ jobs:
       - name: AppImage boots on its own bundled stack
         run: |
           set -euo pipefail
+          export DISPLAY=:99
+          pgrep -x Xvfb >/dev/null || { Xvfb :99 -screen 0 1600x900x24 -nolisten tcp & sleep 2; }
           appimg=$(ls dist/alpaca-code-*-linux-x86_64.AppImage)
           chmod +x "$appimg"
+          pgrep -x alpaca-code-rs >/dev/null && killall alpaca-code-rs
           dbus-run-session -- env XDG_CONFIG_HOME="$PWD/boot-state" \
-            APPIMAGE_EXTRACT_AND_RUN=1 "$appimg" >/dev/null 2>&1 &
+            APPIMAGE_EXTRACT_AND_RUN=1 "$appimg" >boots/appimage-boot.log 2>&1 &
           sleep 12
-          pgrep -x alpaca-code-rs >/dev/null || { echo "appimage boot died"; exit 1; }
+          pgrep -x alpaca-code-rs >/dev/null \
+            || { echo "appimage boot died"; cat boots/appimage-boot.log; exit 1; }
           import -display :99 -window root boots/linux-appimage.png
           killall alpaca-code-rs 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boots-appimage
+          path: |
+            boots/linux-appimage.png
+            boots/appimage-boot.log
 
       - name: tarball (bare binary + launcher wiring for GTK ≥ 4.22 distros)
         run: |
