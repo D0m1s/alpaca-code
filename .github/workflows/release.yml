@@ -66,7 +66,7 @@ jobs:
             && echo hello > a.txt && git add a.txt && git commit -qm w )
           boot_shot linux-editor /tmp/wsA
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: boots-linux
           path: boots/*
@@ -117,7 +117,7 @@ jobs:
           import -display :99 -window root boots/linux-appimage.png
           killall alpaca-code-rs 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: boots-appimage
           path: |
@@ -137,7 +137,7 @@ jobs:
           done
           tar -czf "dist/$d.tar.gz" "$d"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-linux
           path: dist/*
@@ -186,7 +186,7 @@ jobs:
           screencapture -x boots/macos-editor.png
           killall alpaca-code-rs 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: boots-macos
           path: boots/*
@@ -198,7 +198,7 @@ jobs:
           mkdir -p dist
           mv "alpaca-code-$ALPACA_VERSION-macos-arm64.zip" dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-macos
           path: dist/*
